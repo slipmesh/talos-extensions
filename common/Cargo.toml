@@ -1,0 +1,21 @@
+[package]
+name = "common"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Netlink helpers (rtnetlink + amneziawg genl) and small utilities shared by talos-extensions services - no Kubernetes dependency"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+futures.workspace = true
+genetlink.workspace = true
+netlink-packet-amnezia-wireguard.workspace = true
+netlink-packet-core.workspace = true
+netlink-packet-generic.workspace = true
+rtnetlink.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "fs", "macros", "sync"] }
+tracing.workspace = true

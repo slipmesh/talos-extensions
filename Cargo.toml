@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["common", "awg"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Evgeniy Slizevich <evgeniy@slizevich.net>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/slipmesh/talos-extensions"
+
+[workspace.dependencies]
+common = { path = "common" }
+
+anyhow = "1.0.104"
+base64 = "0.23.1"
+futures = "0.3.33"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_yaml = "0.9.34"
+tokio = { version = "1.53.1" }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+genetlink = "0.2.7"
+# Pinned to a specific rev, not crates.io's 0.1.2: the amneziawg kernel module we build against
+# (see ../talos-awg-extension/versions.env's AWG_REF, currently the latest upstream commit) speaks
+# genl family version 3 ("AmneziaWG 3.0"), which changed WGDEVICE_A_H1..H4 from a NUL-terminated
+# decimal string to a packed u64 (confirmed directly against the kernel module's own
+# src/netlink.c nla_policy table - .type = NLA_U64). crates.io's 0.1.2 still only emits/parses the
+# old string form for those four attributes, which the current kernel module's nla_policy rejects
+# outright with "attribute type 14 has an invalid length" (confirmed on a real node) - and would
+# likely also break parsing GetDevice responses, since the kernel echoes H1 back as raw u64 bytes
+# that are not valid UTF-8. This exact fix (H1Range/H2Range/H3Range/H4Range as packed u64) landed
+# upstream the day before the kernel commit we're pinned to, but was never published to crates.io -
+# see push_obfuscation_attrs in netlink/awg.rs for the call site.
+netlink-packet-amnezia-wireguard = { git = "https://github.com/frkn-dev/netlink-packet-amnezia-wireguard", rev = "1b1220dd739cc5c68707f98534f714ef70359d04" }
+netlink-packet-core = "0.8.2"
+netlink-packet-generic = "0.4.0"
+rtnetlink = "0.21.0"
+# Deliberately no direct `netlink-packet-route` dependency: rtnetlink re-exports its own pinned
+# version as `rtnetlink::packet_route`, and importing route/link types through that path (not a
+# separate top-level `netlink_packet_route` dependency) avoids two possibly-mismatched copies of
+# the same types ending up in the dependency graph.
