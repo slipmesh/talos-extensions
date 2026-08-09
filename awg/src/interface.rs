@@ -284,20 +284,16 @@ pub async fn ensure_interface(
     let (index, _created) = rt.ensure_link(&iface.name, "amneziawg").await?;
     rt.ensure_addresses(index, &iface.addresses).await?;
 
-    // Without this, a statically assigned address (in particular an IPv6 link-local used for an
-    // OSPFv3-style underlay) is dropped every time the interface cycles down/up (e.g. a brief
-    // reconnect) - neighbor adjacencies over it would silently stop reforming until the next full
-    // reconcile reassigns it. Cheap and harmless to set even for an interface with no IPv6 address
-    // at all.
-    if !iface.addresses.is_empty()
-        && let Err(e) = common::sysctl::write(
-            &format!("/proc/sys/net/ipv6/conf/{}/keep_addr_on_down", iface.name),
-            "1",
-        )
-        .await
-    {
-        tracing::warn!(iface = iface.name, error = %e, "failed to set keep_addr_on_down - an address may be lost on interface flap");
-    }
+    // A statically assigned address (in particular an IPv6 link-local used for an OSPFv3-style
+    // underlay) would otherwise be dropped every time the interface cycles down/up (e.g. a brief
+    // reconnect). Not handled here: writing `net.ipv6.conf.<iface>.keep_addr_on_down` from inside
+    // this process failed on a real node (container lacked permission to write /proc/sys, and the
+    // interface doesn't exist yet at boot for Talos's own `machine.sysctls` to apply it directly
+    // either). Instead, set `net.ipv6.conf.default.keep_addr_on_down: "1"` once in the node's
+    // `machine.sysctls` - the kernel copies `ipv6_devconf_dflt` into every interface's devconf at
+    // creation time (confirmed against net/ipv6/addrconf.c), so it applies to `mesh-*`/etc.
+    // interfaces this daemon creates later, with no code here needed at all. See
+    // talos-awg-extension/docs/extension-services.md.
 
     rt.set_up(index).await?;
     set_identity(awg, iface).await?;

@@ -1,7 +1,6 @@
 pub mod keys;
 pub mod netlink;
 pub mod obfuscation;
-pub mod sysctl;
 
 pub use obfuscation::Obfuscation;
 

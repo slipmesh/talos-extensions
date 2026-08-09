@@ -17,5 +17,5 @@ netlink-packet-core.workspace = true
 netlink-packet-generic.workspace = true
 rtnetlink.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "fs", "macros", "sync"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 tracing.workspace = true
