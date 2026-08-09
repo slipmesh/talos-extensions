@@ -19,11 +19,23 @@ use netlink_packet_amnezia_wireguard::{
     AmneziaWireguardAddressFamily, AmneziaWireguardAllowedIp, AmneziaWireguardAllowedIpAttr,
     AmneziaWireguardAttribute, AmneziaWireguardPeer, AmneziaWireguardPeerAttribute,
 };
+use netlink_packet_core::DefaultNla;
 use std::net::{IpAddr, SocketAddr};
 
 /// See amneziawg-linux-kernel-module's uapi/wireguard.h `enum wg_peer_flag`.
 const WGPEER_F_REMOVE_ME: u32 = 1 << 0;
 const WGPEER_F_REPLACE_ALLOWEDIPS: u32 = 1 << 1;
+/// Signals "this update explicitly sets AdvancedSecurity" (as opposed to leaving it untouched) -
+/// distinct from the `WGPEER_A_ADVANCED_SECURITY` attribute below, which signals the *value*.
+/// amneziawg-tools' own `ipc-linux.h` always sets this bit whenever its config file mentions
+/// `AdvancedSecurity` at all, true or false - our config always has a definite value (`#[serde
+/// (default)]`), so we always set this bit too, every peer sync.
+const WGPEER_F_HAS_ADVANCED_SECURITY: u32 = 1 << 3;
+/// `wgpeer_attribute` has no crate support (as of the pinned rev) for this one - confirmed absent
+/// from `netlink-packet-amnezia-wireguard`'s `peer.rs`, unlike everything else in this file, which
+/// does have a typed variant. Built manually via `Other(DefaultNla::new(...))`. `NLA_FLAG`: an
+/// empty payload means "present" (true); the attribute is simply omitted for "false".
+const WGPEER_A_ADVANCED_SECURITY: u16 = 11;
 const PERSISTENT_KEEPALIVE_SECS: u32 = 25;
 
 fn full_tunnel_allowed_ips() -> Vec<String> {
@@ -39,6 +51,13 @@ pub struct Peer {
     pub public_key: String,
     pub allowed_ips: Vec<String>,
     pub endpoint: Option<String>,
+    /// See `PeerEntry::advanced_security`'s doc comment - the kernel never reports this back in a
+    /// `GetDevice` dump (confirmed against `netlink.c`'s `get_peer`), so `current_peers()` can
+    /// never populate this truthfully; it always reads back `false` there regardless of the real
+    /// state. That's fine for the diff this feeds: it just means a peer configured `true` gets
+    /// re-sent on every single process start, not only when it actually changed - harmless, since
+    /// re-sending is idempotent.
+    pub advanced_security: bool,
 }
 
 async fn resolve_peer(entry: &PeerEntry) -> Result<Peer> {
@@ -54,6 +73,7 @@ async fn resolve_peer(entry: &PeerEntry) -> Result<Peer> {
         public_key: entry.public_key.clone(),
         allowed_ips,
         endpoint,
+        advanced_security: entry.advanced_security,
     })
 }
 
@@ -128,6 +148,8 @@ pub async fn current_peers(awg: &mut AwgClient, iface: &str) -> Result<Vec<Peer>
                     public_key,
                     allowed_ips,
                     endpoint,
+                    // Always false - see the `advanced_security` field's own doc comment.
+                    advanced_security: false,
                 });
             }
         }
@@ -159,7 +181,9 @@ fn diff_peers(previous: &[Peer], desired: &[Peer]) -> Vec<(String, Option<Peer>)
     let mut ops = Vec::new();
     for (key, peer) in &desired_map {
         let unchanged = prev_map.get(key).is_some_and(|prev| {
-            as_set(&prev.allowed_ips) == as_set(&peer.allowed_ips) && prev.endpoint == peer.endpoint
+            as_set(&prev.allowed_ips) == as_set(&peer.allowed_ips)
+                && prev.endpoint == peer.endpoint
+                && prev.advanced_security == peer.advanced_security
         });
         if !unchanged {
             ops.push((key.to_string(), Some((*peer).clone())));
@@ -214,11 +238,18 @@ async fn sync_peers(
                 if skip {
                     continue;
                 }
+                let flags = WGPEER_F_REPLACE_ALLOWEDIPS | WGPEER_F_HAS_ADVANCED_SECURITY;
                 let mut attrs = vec![
                     AmneziaWireguardPeerAttribute::PublicKey(decoded),
-                    AmneziaWireguardPeerAttribute::Flags(WGPEER_F_REPLACE_ALLOWEDIPS),
+                    AmneziaWireguardPeerAttribute::Flags(flags),
                     AmneziaWireguardPeerAttribute::AllowedIps(allowed_ips),
                 ];
+                if peer.advanced_security {
+                    attrs.push(AmneziaWireguardPeerAttribute::Other(DefaultNla::new(
+                        WGPEER_A_ADVANCED_SECURITY,
+                        Vec::new(),
+                    )));
+                }
                 if let Some(endpoint) = &peer.endpoint {
                     match endpoint.parse::<SocketAddr>() {
                         Ok(addr) => {
@@ -268,7 +299,7 @@ async fn set_identity(awg: &mut AwgClient, iface: &InterfaceEntry) -> Result<()>
         AmneziaWireguardAttribute::PrivateKey(decode_key(&iface.private_key)?),
         AmneziaWireguardAttribute::ListenPort(iface.listen_port),
     ];
-    push_obfuscation_attrs(&mut device_attrs, &iface.obfuscation);
+    push_obfuscation_attrs(&mut device_attrs, &iface.obfuscation)?;
     awg.set_device(device_attrs)
         .await
         .context("SetDevice (identity) failed")
@@ -318,6 +349,7 @@ mod tests {
             public_key: public_key.to_string(),
             allowed_ips: allowed_ips.iter().map(|s| s.to_string()).collect(),
             endpoint: endpoint.map(str::to_string),
+            advanced_security: false,
         }
     }
 
@@ -400,6 +432,18 @@ mod tests {
                 ))
             )]
         );
+    }
+
+    #[test]
+    fn advanced_security_alone_yields_replace_op() {
+        // The kernel never reports this back (see `Peer::advanced_security`'s doc comment), so
+        // `previous` always carries `false` here regardless of the real state - a peer configured
+        // `true` must still show up as changed, every single time, not just once.
+        let previous = vec![peer("k1", &["10.0.0.1/32"], None)];
+        let mut desired = peer("k1", &["10.0.0.1/32"], None);
+        desired.advanced_security = true;
+        let ops = diff_peers(&previous, &[desired.clone()]);
+        assert_eq!(ops, vec![("k1".to_string(), Some(desired))]);
     }
 
     #[test]

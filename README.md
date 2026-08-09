@@ -62,13 +62,40 @@ interfaces:
     peers:
       - public_key: "...client's base64 public key..."
         allowed_ips: ["10.99.0.5/32"]   # tracked: handshake polled, route installed while fresh
+        advanced_security: true         # requires header_protection_key below, same on both ends
+    obfuscation:
+      jc: 4
+      jmin: 40
+      jmax: 70
+      s1: 50
+      s2: 100
+      h1: 1
+      h2: 2
+      h3: 3
+      h4: 4
+      s3: 60                           # junk size, cookie-reply packets
+      s4: 90                           # junk size, transport (data) packets
+      i1: "5-10"                       # decoy/cover packet header spec
+      header_protection_key: "...base64, same wire format as private_key..."
+      content_padding_addition: 128
+      rekey_after_time: 120
+      max_handshake_attempts: 90
 ```
 
 **Private keys always come from the config - this binary never generates or persists one.**
 Whoever renders the machine config is responsible for giving a node its own per-interface key, or
 placing the same key in every node's config when a single shared identity is needed (e.g. so a
 roaming client sees one consistent server identity no matter which node it's currently connected
-to). This is a config-authoring concern, not something `awg` decides.
+to). This is a config-authoring concern, not something `awg` decides. The same applies to
+`header_protection_key`.
+
+**Every AmneziaWG 3.0 obfuscation parameter is exposed**, not just the original nine
+(jc/jmin/jmax/s1/s2/h1-h4) - confirmed field-by-field against the current kernel module's
+`src/netlink.c` and amneziawg-tools' own config parser (`src/config.c`), since the kernel module's
+own README only documents the original set. See `common::Obfuscation`'s doc comment for the full
+field list and what each one does. `header_protection_key` + a peer's `advanced_security: true` are
+a matched pair - the key alone does nothing without the flag, and both ends of a peering need the
+same key.
 
 ## Ownership: the whole `amneziawg` netlink kind, no naming convention
 

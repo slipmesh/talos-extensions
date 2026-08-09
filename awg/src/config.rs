@@ -57,6 +57,13 @@ pub struct PeerEntry {
     /// both kinds.
     #[serde(default)]
     pub allowed_ips: Option<Vec<String>>,
+    /// Enables AmneziaWG's "header protection" for this peer - encrypts the WireGuard packet
+    /// header's own type/reserved fields with the interface's `obfuscation.header_protection_key`.
+    /// Both ends must agree: the peer's own config needs the matching key and
+    /// `AdvancedSecurity: true` too. Setting `header_protection_key` alone, without this, does
+    /// nothing (confirmed against amneziawg-tools' `src/config.c`).
+    #[serde(default)]
+    pub advanced_security: bool,
 }
 
 pub const DEFAULT_HANDSHAKE_STALE_SECS: u64 = 180;
@@ -131,9 +138,18 @@ interfaces:
     listen_port: 51900
     addresses: ["10.99.0.1/24", "fd00:99::1/64"]
     private_key: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC="
+    obfuscation:
+      s3: 60
+      s4: 90
+      i1: "5-10"
+      header_protection_key: "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE="
+      content_padding_addition: 128
+      rekey_after_time: 120
+      max_handshake_attempts: 90
     peers:
       - public_key: "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD="
         allowed_ips: ["10.99.0.5/32"]
+        advanced_security: true
 "#;
         let cfg: AwgConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.interfaces.len(), 2);
@@ -141,6 +157,21 @@ interfaces:
         assert_eq!(
             cfg.interfaces[1].peers[0].allowed_ips,
             Some(vec!["10.99.0.5/32".to_string()])
+        );
+        assert!(cfg.interfaces[1].peers[0].advanced_security);
+        assert_eq!(cfg.interfaces[1].obfuscation.s3, Some(60));
+        assert_eq!(cfg.interfaces[1].obfuscation.i1, Some("5-10".to_string()));
+        assert_eq!(
+            cfg.interfaces[1].obfuscation.header_protection_key,
+            Some("EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE=".to_string())
+        );
+        assert_eq!(
+            cfg.interfaces[1].obfuscation.content_padding_addition,
+            Some(128)
+        );
+        assert_eq!(
+            cfg.interfaces[1].obfuscation.max_handshake_attempts,
+            Some(90)
         );
         validate(&cfg).unwrap();
     }
@@ -178,6 +209,7 @@ interfaces:
             public_key: "k".to_string(),
             endpoint: None,
             allowed_ips: Some(vec!["not-a-cidr".to_string()]),
+            advanced_security: false,
         });
         let cfg = AwgConfig {
             interfaces: vec![a],

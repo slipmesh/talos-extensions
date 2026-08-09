@@ -25,6 +25,7 @@ dependencies = [
  "base64",
  "common",
  "netlink-packet-amnezia-wireguard",
+ "netlink-packet-core",
  "rtnetlink",
  "serde",
  "serde_yaml",
