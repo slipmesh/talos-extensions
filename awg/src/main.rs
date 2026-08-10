@@ -1,7 +1,4 @@
-mod config;
-mod gc;
-mod handshake;
-mod interface;
+use awg::{config, gc, handshake, interface};
 
 use anyhow::{Context, Result};
 use common::netlink::awg::AwgClient;

@@ -1,8 +1,4 @@
-mod bird;
-mod birdc;
-mod cidr;
-mod config;
-mod resolver;
+use router::{bird, config, resolver};
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;

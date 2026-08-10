@@ -1,6 +1,6 @@
-mod config;
-mod nftables;
-mod template;
+use nftables::config;
+use nftables::ruleset;
+use nftables::template;
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
@@ -74,7 +74,7 @@ async fn run() -> Result<()> {
     }
 
     let rendered = template::substitute(&cfg.ruleset, &values);
-    nftables::apply(&rendered).await?;
+    ruleset::apply(&rendered).await?;
 
     watchdog(rendered).await
 }
@@ -105,12 +105,12 @@ where
 }
 
 /// Watches for our own tables disappearing and reapplies `rendered` when they do - see
-/// `nftables.rs`'s own doc comment for *why* this exists (a real, confirmed-on-a-real-node boot
+/// `ruleset.rs`'s own doc comment for *why* this exists (a real, confirmed-on-a-real-node boot
 /// race with something else's first nftables/iptables-nft bootstrap, not a hypothetical). Runs
 /// forever: `nft monitor` streams every nftables event on the node (table/chain/rule/set changes,
 /// regardless of who made them - there's no way to subscribe to just "our tables" at the netlink
 /// level), and each line is treated as nothing more than a wake-up signal to re-check our own
-/// state via `nftables::all_present` - not parsed for which specific table changed, since
+/// state via `ruleset::all_present` - not parsed for which specific table changed, since
 /// `monitor`'s exact text format isn't a contract this binary should depend on (see that
 /// function's doc comment).
 ///
@@ -121,7 +121,7 @@ where
 /// that restart is redundant work, not a reset of any state that needs it).
 async fn watchdog(rendered: String) -> Result<()> {
     loop {
-        let mut monitor = match Command::new(nftables::NFT_BIN)
+        let mut monitor = match Command::new(ruleset::NFT_BIN)
             .arg("monitor")
             .stdout(Stdio::piped())
             .spawn()
@@ -141,14 +141,14 @@ async fn watchdog(rendered: String) -> Result<()> {
 
         loop {
             match lines.next_line().await {
-                Ok(Some(_line)) => match nftables::all_present(&rendered).await {
+                Ok(Some(_line)) => match ruleset::all_present(&rendered).await {
                     Ok(true) => {}
                     Ok(false) => {
                         tracing::warn!(
                             "our nftables tables are missing (something else on this node reset \
                              the ruleset) - reapplying"
                         );
-                        if let Err(e) = nftables::apply(&rendered).await {
+                        if let Err(e) = ruleset::apply(&rendered).await {
                             tracing::warn!(error = %e, "reapply after table loss failed");
                         }
                     }

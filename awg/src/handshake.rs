@@ -48,14 +48,12 @@ fn now_unix() -> u64 {
 
 /// public_key (base64) -> latest handshake, unix seconds (0 if the kernel never reported one).
 ///
-/// `pub(crate)`, not just used internally by `reconcile_pass`: `main.rs` also calls this once at
-/// startup, for every peer on every interface (not just tracked ones), purely to log a diagnostic
-/// handshake summary - full-tunnel peers get no route tracking, but their connection health is
-/// still worth a log line, and this is the only place that already knows how to read it back.
-pub(crate) async fn dump_handshakes(
-    awg: &mut AwgClient,
-    iface: &str,
-) -> Result<HashMap<String, u64>> {
+/// `pub`, not just used internally by `reconcile_pass`: the `awg` binary's own `main.rs` (a
+/// separate crate from this lib target - see `lib.rs`) also calls this once at startup, for every
+/// peer on every interface (not just tracked ones), purely to log a diagnostic handshake summary -
+/// full-tunnel peers get no route tracking, but their connection health is still worth a log line,
+/// and this is the only place that already knows how to read it back.
+pub async fn dump_handshakes(awg: &mut AwgClient, iface: &str) -> Result<HashMap<String, u64>> {
     use base64::Engine;
 
     let attrs = awg.get_device(iface).await?;

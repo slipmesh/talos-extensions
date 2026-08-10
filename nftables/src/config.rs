@@ -10,7 +10,7 @@ use serde::Deserialize;
 pub struct NftablesConfig {
     /// Raw nftables-syntax ruleset text, fed to `nft -f` almost verbatim - the only transformation
     /// applied is `{{ name }}` placeholder substitution (see `template.rs`). This binary
-    /// deliberately doesn't know or care what rules are inside; see `nftables::apply` for the only
+    /// deliberately doesn't know or care what rules are inside; see `ruleset::apply` for the only
     /// thing it does inspect (which `table <family> <name>` are declared, to remove them before
     /// reapplying).
     pub ruleset: String,
