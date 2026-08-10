@@ -97,6 +97,17 @@ pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
                 iface.name,
                 peer.public_key
             );
+            // `advanced_security` alone does nothing without the interface's own
+            // `header_protection_key` (see `PeerEntry::advanced_security`'s own doc comment,
+            // confirmed against amneziawg-tools' src/config.c) - catching this here means a
+            // typo'd/missing key fails the config outright instead of silently negotiating
+            // without header protection, discoverable only by traffic analysis.
+            anyhow::ensure!(
+                !peer.advanced_security || iface.obfuscation.header_protection_key.is_some(),
+                "interface {:?}, peer {:?}: advanced_security is set but obfuscation.header_protection_key is not",
+                iface.name,
+                peer.public_key
+            );
             if let Some(allowed_ips) = &peer.allowed_ips {
                 for cidr in allowed_ips {
                     parse_cidr(cidr).map_err(|e| {
@@ -243,6 +254,39 @@ interfaces:
             interfaces: vec![a],
         };
         assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn rejects_advanced_security_peer_without_header_protection_key() {
+        let mut a = iface("a");
+        a.peers.push(PeerEntry {
+            public_key: "k".to_string(),
+            endpoint: None,
+            allowed_ips: None,
+            advanced_security: true,
+        });
+        // a.obfuscation.header_protection_key is left at its default: None.
+        let cfg = AwgConfig {
+            interfaces: vec![a],
+        };
+        assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn accepts_advanced_security_peer_with_header_protection_key() {
+        let mut a = iface("a");
+        a.obfuscation.header_protection_key =
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
+        a.peers.push(PeerEntry {
+            public_key: "k".to_string(),
+            endpoint: None,
+            allowed_ips: None,
+            advanced_security: true,
+        });
+        let cfg = AwgConfig {
+            interfaces: vec![a],
+        };
+        assert!(validate(&cfg).is_ok());
     }
 
     #[test]

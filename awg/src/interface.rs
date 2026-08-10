@@ -21,6 +21,15 @@ use netlink_packet_amnezia_wireguard::{
 };
 use netlink_packet_core::DefaultNla;
 use std::net::{IpAddr, SocketAddr};
+use std::time::Duration;
+
+/// Matches `router/src/resolver.rs`'s own `NETWORK_TIMEOUT` for DNS lookups - same "unreachable
+/// resolver, not NXDOMAIN" failure mode, same order-of-magnitude answer for how long to wait
+/// before giving up. Without this, a hung `tokio::net::lookup_host` used to block
+/// `converge_interface` for that interface forever - and since `main.rs::run()` converges
+/// interfaces one at a time, every interface *after* it in the config never converges either, and
+/// the process never exits for `restart: always` to get a chance to retry it.
+const ENDPOINT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// See amneziawg-linux-kernel-module's uapi/wireguard.h `enum wg_peer_flag`.
 const WGPEER_F_REMOVE_ME: u32 = 1 << 0;
@@ -78,9 +87,16 @@ async fn resolve_peer(entry: &PeerEntry) -> Result<Peer> {
 }
 
 async fn resolve_endpoint(host_port: &str) -> Result<String> {
-    let addr: SocketAddr = tokio::net::lookup_host(host_port)
-        .await
-        .with_context(|| format!("failed to resolve endpoint {host_port:?}"))?
+    let mut addrs = tokio::time::timeout(
+        ENDPOINT_RESOLVE_TIMEOUT,
+        tokio::net::lookup_host(host_port),
+    )
+    .await
+    .with_context(|| {
+        format!("resolving endpoint {host_port:?} exceeded its {ENDPOINT_RESOLVE_TIMEOUT:?} budget")
+    })?
+    .with_context(|| format!("failed to resolve endpoint {host_port:?}"))?;
+    let addr: SocketAddr = addrs
         .next()
         .with_context(|| format!("no addresses found for endpoint {host_port:?}"))?;
     Ok(addr.to_string())
