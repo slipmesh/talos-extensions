@@ -126,11 +126,39 @@ before doing anything else - not from an empty set, which would leak routes acro
 loop never returns under normal operation), not a one-shot job, so any exit - success or failure -
 is grounds for a restart.
 
+## `router`: BIRD-based OSPF/iBGP routing, also driven by a static config file
+
+A second binary, `router`, ported from `operators/router`'s BIRD-config rendering/reload logic the
+same way `awg` was ported from `operators/mesh`/`operators/roadwarriors` - no Kubernetes CRDs, one
+static file (`/etc/talos-extensions/router.yaml`), read once at startup. It bundles `bird`/`birdc`
+directly (spawned and supervised as a child process, staged into the same
+`rootfs/usr/local/lib/containers/router/` directory as the `router` binary itself) rather than
+running BIRD as a separate sidecar container the way `operators/router` does - Talos extension
+services have no sidecar concept, a service is always one `container.entrypoint`.
+
+Unlike `operators/router`, there's no CRD-derived topology to read: `router.yaml` declares
+`node.loopback_addresses` (this node's own IPv4+IPv6 loopback identity), `bgp_peers` (every other
+mesh node's name + IPv6 loopback - can't be discovered, must be static), `ospf_interfaces` (a list
+of exact interface names, shell-glob patterns like `"mesh-*"`, or CIDRs matching an interface's
+address - fed straight into BIRD's own `interface` clause, so no code here needs to know `ext-awg`'s
+actual interface names), `learn` (IPv4 CIDR *ranges*, not exact per-peer `/32`s, re-announced over
+iBGP whenever a kernel route falls inside one), `announce` (static routes to redistribute), and an
+optional `bypass` block (RIPEstat/DNS-resolved blackhole routes, refreshed on an interval - this
+part stays "live", unlike everything else in this workspace, since resolving ASN/geoip/DNS sources
+is the whole point of the feature). See `router/src/config.rs`'s doc comments for the full schema
+and `router/src/bird.rs` for how each field becomes BIRD config.
+
+One behavioral change worth calling out: `operators/router`'s automatic "never blackhole any
+cluster node's own endpoint" exclusion isn't ported (there's no cluster-wide node list a static,
+per-node config file could read) - whoever authors `router.yaml`'s `bypass.exclude` is responsible
+for excluding this node's own (and any peer's) public endpoint themselves, the same
+config-authoring-is-a-human-responsibility pattern already documented above for `awg`'s private
+keys.
+
 ## Not yet built
 
-`router` and `nftables` are reserved future members of this workspace, mirroring
-`operators/router`/`operators/nftables` - out of scope for the current `awg` daemon, which is AWG
-interfaces only.
+`nftables` is a reserved future member of this workspace, mirroring `operators/nftables` - out of
+scope for `awg`/`router`.
 
 A live handshake-polling *watcher* independent of route installation (i.e. something readable via
 `talosctl` beyond "does a route exist") was deliberately deferred - if it's ever wanted, the hook

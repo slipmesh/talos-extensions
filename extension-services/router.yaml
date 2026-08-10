@@ -1,0 +1,14 @@
+name: router
+container:
+  entrypoint: ./router
+  security:
+    writeableRootfs: false
+    writeableSysfs: false
+depends:
+  - configuration: true
+# Perpetual daemon, not one-shot: it never intentionally exits (main.rs's run() only returns once
+# the bundled `bird` child process exits, which is always treated as fatal - see main.rs's own
+# doc comment). `always` restarts the whole container - both `router` and `bird` fresh - regardless
+# of exit reason, matching ext-awg's `restart: always`.
+restart: always
+logToConsole: true
