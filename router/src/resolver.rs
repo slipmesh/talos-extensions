@@ -17,7 +17,7 @@
 
 use crate::cidr::{self, Cidr};
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -26,31 +26,31 @@ use tokio::sync::Semaphore;
 /// One bypass-prefix source, resolved into concrete CIDRs by `collect_source`: `asn` via
 /// RIPEstat's announced-prefixes API, `literal` verbatim, `geoip` via RIPEstat's
 /// country-resource-list, `dns` via a live A-record lookup.
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct BypassSourceEntry {
     /// "asn" | "literal" | "geoip" | "dns" - validated in `collect_source`/`config::validate`,
     /// not by the deserializer (a tagged enum would fit, but this mirrors the CRD original's
     /// four-way, mostly-optional-fields shape closely enough that keeping it a plain string keeps
     /// the two implementations easy to diff against each other).
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asns: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefixes: Option<Vec<LabeledPrefix>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub country: Option<String>,
     /// "dns" only - resolved via a live A-record lookup at resolve time, on the same
     /// startup/refresh-interval schedule as everything else. Whole list shares `label`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hostnames: Option<Vec<String>>,
 }
 
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub struct LabeledPrefix {
     pub net: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
 }
 

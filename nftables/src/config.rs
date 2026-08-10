@@ -4,9 +4,9 @@
 
 use crate::template;
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct NftablesConfig {
     /// Raw nftables-syntax ruleset text, fed to `nft -f` almost verbatim - the only transformation
     /// applied is `{{ name }}` placeholder substitution (see `template.rs`). This binary

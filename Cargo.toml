@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["common", "awg", "router", "nftables"]
+members = ["common", "awg", "router", "nftables", "patches"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,8 +11,12 @@ repository = "https://github.com/slipmesh/talos-extensions"
 
 [workspace.dependencies]
 common = { path = "common" }
+awg = { path = "awg" }
+router = { path = "router" }
+nftables = { path = "nftables" }
 
 anyhow = "1.0.104"
+clap = { version = "4.5.51", features = ["derive"] }
 askama = { version = "0.16.0", default-features = false, features = ["derive", "alloc"] }
 base64 = "0.23.1"
 futures = "0.3.33"

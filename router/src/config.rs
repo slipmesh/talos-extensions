@@ -7,11 +7,11 @@
 use crate::resolver::BypassSourceEntry;
 use anyhow::Result;
 use common::netlink::rt::parse_cidr as parse_dual_family_cidr;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct RouterConfig {
     pub node: NodeIdentity,
     pub bgp_as: u32,
@@ -30,11 +30,11 @@ pub struct RouterConfig {
     pub learn: Vec<String>,
     #[serde(default)]
     pub announce: Vec<AnnounceEntry>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bypass: Option<BypassConfig>,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct NodeIdentity {
     /// CIDR strings, exactly one IPv4 and exactly one IPv6 entry (see `validate`) - both are used
     /// simultaneously for different roles (v4: BIRD router id / `krt_prefsrc` / OSPFv3 stub
@@ -44,7 +44,7 @@ pub struct NodeIdentity {
     pub loopback_addresses: Vec<String>,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct BgpPeerEntry {
     pub name: String,
     /// A single bare IPv6 address (no prefix length - this isn't a network). Not a list: a
@@ -56,14 +56,14 @@ pub struct BgpPeerEntry {
     pub address: String,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct AnnounceEntry {
     pub net: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct BypassConfig {
     #[serde(default = "default_bypass_refresh_interval_secs")]
     pub refresh_interval_secs: u64,

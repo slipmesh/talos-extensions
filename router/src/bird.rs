@@ -340,7 +340,14 @@ pub async fn force_reconfigure() -> Result<()> {
 /// (that concept doesn't exist here; `router.yaml` gives each node's loopbacks directly, see
 /// `RouterIdentity`'s doc comment), just reusing the same digits already unique to this node by
 /// construction (they're a real, config-supplied loopback address).
-fn link_local_from_loopback(ipv6_loopback: Ipv6Addr) -> Ipv6Addr {
+///
+/// `pub`, not just used internally by `ensure_loopback`: the `patches` crate (a separate crate
+/// from this lib target, generating the `ipv6_loopback` this daemon reads rather than reading it)
+/// calls this too, for its mesh-interface link-locals - it computes an `ipv6_loopback`-shaped
+/// value from a node's `node_id` first (see `patches::addressing::ipv6_loopback`), whose low 32
+/// bits are `node_id`'s bits by construction, so this same function derives the identical
+/// `fe80::<hex node_id>` the old k8s system computed directly from `node_id`.
+pub fn link_local_from_loopback(ipv6_loopback: Ipv6Addr) -> Ipv6Addr {
     let bits = u128::from(ipv6_loopback) as u32;
     let mut segments = [0u16; 8];
     segments[0] = 0xfe80;

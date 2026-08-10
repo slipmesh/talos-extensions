@@ -6,16 +6,16 @@
 
 use common::Obfuscation;
 use common::netlink::rt::parse_cidr;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-#[derive(Deserialize, Debug, Default, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Default, PartialEq)]
 pub struct AwgConfig {
     #[serde(default)]
     pub interfaces: Vec<InterfaceEntry>,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct InterfaceEntry {
     /// Valid Linux interface name (`IFNAMSIZ` is 16 bytes including the NUL terminator, so 15
     /// usable bytes) - no other naming convention required. GC doesn't rely on a name prefix; see
@@ -35,16 +35,16 @@ pub struct InterfaceEntry {
     pub obfuscation: Obfuscation,
     /// Only meaningful for peers that have an explicit `allowed_ips` (see `PeerEntry`) - ignored
     /// entirely for full-tunnel peers, which are never handshake-tracked. Defaults to 180s if unset.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handshake_stale_secs: Option<u64>,
     #[serde(default)]
     pub peers: Vec<PeerEntry>,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct PeerEntry {
     pub public_key: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
     /// `None` => this peer gets the full-tunnel default (`0.0.0.0/0` + `::/0`) as its AllowedIPs,
     /// its handshake is never polled, and no kernel route is ever installed for it - this is what
@@ -55,7 +55,7 @@ pub struct PeerEntry {
     /// at 1Hz, and a kernel route is installed per CIDR while the handshake stays fresh - this is
     /// what used to be a dedicated "roadwarriors" interface. An interface can freely mix peers of
     /// both kinds.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_ips: Option<Vec<String>>,
     /// Enables AmneziaWG's "header protection" for this peer - encrypts the WireGuard packet
     /// header's own type/reserved fields with the interface's `obfuscation.header_protection_key`.

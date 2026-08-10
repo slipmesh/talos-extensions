@@ -1,0 +1,27 @@
+[package]
+name = "patches"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Offline generator for Talos machine-config patches (awg mesh/roadwarriors, router BGP/OSPF, nftables) from a single mesh.yaml topology file - never touches a live node"
+
+[[bin]]
+name = "patches"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+awg.workspace = true
+base64.workspace = true
+clap.workspace = true
+common.workspace = true
+nftables.workspace = true
+router.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true
+sha2 = "0.10.9"
+similar = "2.7.0"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
+rand = "0.8.5"
