@@ -252,6 +252,17 @@ async fn reconcile(ctx: &RouterState, bypass_routes: &[bird::BypassRoute]) -> Re
     .await
 }
 
+/// Bounded retry budget for a resolve failure with *nothing cached yet* - only relevant the very
+/// first time this is ever called (startup), since any later failure already has a last-known-good
+/// cache to fall back on immediately (see below). RIPEstat/DNS being unreachable in the first few
+/// seconds after this container starts is a real, already-anticipated race elsewhere in this
+/// workspace (see `nftables`'s `retry_default_iface`) - without this, a startup failure here used
+/// to wait for `bypass_refresh_loop`'s next tick to retry, which is a full `refresh_interval_secs`
+/// away (default 24h), leaving bypass routes silently missing for up to a day over what's often
+/// just a few seconds of network not-quite-up-yet.
+const BYPASS_STARTUP_RETRIES: u32 = 5;
+const BYPASS_STARTUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Resolves `ctx.bypass_cfg` (if any) into concrete blackhole routes. A resolve failure keeps
 /// serving the last-known-good cached result rather than blanking the bypass out over a
 /// transient RIPEstat/DNS outage - same reasoning as the k8s original's `current_bypass_routes`,
@@ -261,29 +272,36 @@ async fn current_bypass_routes(ctx: &RouterState) -> Vec<bird::BypassRoute> {
     let Some(bypass_cfg) = &ctx.bypass_cfg else {
         return Vec::new();
     };
-    match resolver::resolve(&bypass_cfg.include, &bypass_cfg.exclude).await {
-        Ok(resolved) => {
-            let routes: Vec<bird::BypassRoute> = resolved
-                .into_iter()
-                .map(|(net, label)| bird::BypassRoute { net, label })
-                .collect();
-            *ctx.bypass_cache.lock().await = Some(routes.clone());
-            routes
-        }
-        Err(e) => {
-            let cached = ctx.bypass_cache.lock().await.clone();
-            match cached {
-                Some(routes) => {
-                    tracing::warn!(error = %e, "bypass resolution failed, keeping last-known-good routes");
-                    routes
-                }
-                None => {
-                    tracing::warn!(error = %e, "bypass resolution failed with nothing cached yet - serving no bypass routes this pass");
-                    Vec::new()
+    for attempt in 1..=BYPASS_STARTUP_RETRIES {
+        match resolver::resolve(&bypass_cfg.include, &bypass_cfg.exclude).await {
+            Ok(resolved) => {
+                let routes: Vec<bird::BypassRoute> = resolved
+                    .into_iter()
+                    .map(|(net, label)| bird::BypassRoute { net, label })
+                    .collect();
+                *ctx.bypass_cache.lock().await = Some(routes.clone());
+                return routes;
+            }
+            Err(e) => {
+                let cached = ctx.bypass_cache.lock().await.clone();
+                match cached {
+                    Some(routes) => {
+                        tracing::warn!(error = %e, "bypass resolution failed, keeping last-known-good routes");
+                        return routes;
+                    }
+                    None if attempt < BYPASS_STARTUP_RETRIES => {
+                        tracing::warn!(error = %e, attempt, "bypass resolution failed with nothing cached yet, retrying shortly");
+                        tokio::time::sleep(BYPASS_STARTUP_RETRY_INTERVAL).await;
+                    }
+                    None => {
+                        tracing::warn!(error = %e, attempt, "bypass resolution failed with nothing cached yet - serving no bypass routes this pass");
+                        return Vec::new();
+                    }
                 }
             }
         }
     }
+    unreachable!("loop above always returns on its final iteration")
 }
 
 /// Runs forever as its own background task - only spawned when `ctx.bypass_cfg` is `Some` (see
@@ -307,22 +325,49 @@ async fn bypass_refresh_loop(ctx: Arc<RouterState>) -> ! {
     }
 }
 
+/// Consecutive unhealthy detections (each `BIRD_HEALTH_CHECK_INTERVAL` apart) after which
+/// `bird_health_watchdog` stops treating this as "still settling" and escalates to an `error`-level
+/// log - a config typo (e.g. an `ospf_interfaces` entry naming an interface that will never exist)
+/// produces exactly the same `Ok(false)` as a transient interface-notification race
+/// `force_reconfigure`'s own doc comment describes, and this watchdog has no way to tell the two
+/// apart from a single check. This many consecutive failures is well past what any real
+/// notification race takes to settle, and worth surfacing loudly instead of an indefinite silent
+/// `warn` every tick - other sessions/peers on this same `router` instance may still be healthy, so
+/// this deliberately doesn't exit the process over one bad interface (that would tear down
+/// everything, not just the unhealthy part).
+const BIRD_HEALTH_ESCALATE_AFTER: u32 = 8;
+
 /// Runs forever as its own background task, independent of `bypass_refresh_loop` - see
 /// `bird::protocols_healthy`'s and `bird::force_reconfigure`'s doc comments for what this
 /// recovers from and why a config-diff-gated reconcile alone can never catch it.
 async fn bird_health_watchdog(ctx: Arc<RouterState>) -> ! {
     let exact_ifaces = bird::exact_iface_names(&ctx.ospf_interfaces);
     let mut tick = tokio::time::interval(BIRD_HEALTH_CHECK_INTERVAL);
+    let mut consecutive_unhealthy: u32 = 0;
     loop {
         tick.tick().await;
         let _guard = ctx.render_lock.lock().await;
         match bird::protocols_healthy(&exact_ifaces).await {
-            Ok(true) => {}
+            Ok(true) => {
+                consecutive_unhealthy = 0;
+            }
             Ok(false) => {
-                tracing::warn!(
-                    ospf_interfaces = ?ctx.ospf_interfaces,
-                    "BIRD hasn't converged to the last-rendered OSPF interfaces/BGP peers, re-nudging"
-                );
+                consecutive_unhealthy += 1;
+                if consecutive_unhealthy >= BIRD_HEALTH_ESCALATE_AFTER {
+                    tracing::error!(
+                        ospf_interfaces = ?ctx.ospf_interfaces,
+                        consecutive_unhealthy,
+                        "BIRD still hasn't converged to the last-rendered OSPF interfaces/BGP \
+                         peers after repeated re-nudges - likely a permanent misconfiguration \
+                         (check ospf_interfaces/bgp_peers for a name that will never exist), not \
+                         a transient race"
+                    );
+                } else {
+                    tracing::warn!(
+                        ospf_interfaces = ?ctx.ospf_interfaces,
+                        "BIRD hasn't converged to the last-rendered OSPF interfaces/BGP peers, re-nudging"
+                    );
+                }
                 if let Err(e) = bird::force_reconfigure().await {
                     tracing::warn!(error = %e, "BIRD health-watchdog re-configure nudge failed");
                 }

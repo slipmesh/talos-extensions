@@ -152,6 +152,13 @@ pub fn validate(cfg: &RouterConfig) -> Result<()> {
     }
 
     if let Some(bypass) = &cfg.bypass {
+        // `bypass_refresh_loop` builds `tokio::time::interval(Duration::from_secs(refresh_interval_secs))`
+        // - a zero period panics there per tokio's own documented contract, taking the whole
+        // process down instead of failing here with a clear message.
+        anyhow::ensure!(
+            bypass.refresh_interval_secs > 0,
+            "bypass.refresh_interval_secs must be greater than 0"
+        );
         for entry in bypass.include.iter().chain(bypass.exclude.iter()) {
             validate_bypass_entry(entry)?;
         }
@@ -338,6 +345,17 @@ bypass:
                 country: None,
                 hostnames: None,
             }],
+            exclude: vec![],
+        });
+        assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn rejects_zero_bypass_refresh_interval() {
+        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        cfg.bypass = Some(BypassConfig {
+            refresh_interval_secs: 0,
+            include: vec![],
             exclude: vec![],
         });
         assert!(validate(&cfg).is_err());

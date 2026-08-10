@@ -30,8 +30,18 @@
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+
+/// BIRD is a local Unix socket that normally replies in milliseconds - this is a ceiling against
+/// a genuinely wedged control socket (BIRD deadlocked/resource-exhausted, not just slow), not a
+/// budget for a legitimately slow reply. Matters beyond just this one call hanging:
+/// `bird_health_watchdog` (main.rs) holds `render_lock` for the duration of a `command` call via
+/// `protocols_healthy` -> `birdc_show`, and `bypass_refresh_loop` needs that same lock - an
+/// unbounded read here would silently and permanently stop bypass-route refreshes too, not just
+/// the health check that triggered it.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A fully-parsed reply: the final line's numeric code, plus the concatenated text of every line
 /// (code prefixes stripped, newlines kept) - equivalent to what `birdc <command>` would print,
@@ -84,8 +94,18 @@ fn strip_code_prefix(line: &str) -> &str {
 }
 
 /// Sends `command` over a fresh connection to BIRD's control socket at `socket_path` and returns
-/// the parsed [`Reply`].
+/// the parsed [`Reply`] - bounded by `COMMAND_TIMEOUT` overall (connect + greeting + reply), see
+/// that constant's own doc comment for why an unbounded wait here is worse than just this call
+/// failing.
 pub async fn command(socket_path: &Path, command: &str) -> Result<Reply> {
+    tokio::time::timeout(COMMAND_TIMEOUT, command_inner(socket_path, command))
+        .await
+        .with_context(|| {
+            format!("command {command:?} to BIRD exceeded its {COMMAND_TIMEOUT:?} budget")
+        })?
+}
+
+async fn command_inner(socket_path: &Path, command: &str) -> Result<Reply> {
     let stream = UnixStream::connect(socket_path).await.with_context(|| {
         format!(
             "failed to connect to {} for command {command:?}",
