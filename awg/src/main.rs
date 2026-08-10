@@ -105,6 +105,15 @@ async fn log_handshake_summary(awg: &mut AwgClient, cfg: &config::AwgConfig) {
 /// kernel route management - only peers whose config entry had an explicit `allowed_ips`. Runs
 /// after every interface has already converged, so `RtClient::link_index` is expected to succeed
 /// for every interface named in the config.
+///
+/// Every interface from `cfg` is included here, even ones with an empty `peers` map (no peer
+/// currently has an explicit `allowed_ips`) - `reconcile_pass`/`run` in `handshake.rs` treat "no
+/// entries stayed fresh this pass" and "there were never any tracked peers" identically, removing
+/// every previously-installed `ROUTE_PROTOCOL` route for the interface either way. Skipping an
+/// empty-peers interface here used to drop it from `tracked` entirely, which meant a route
+/// installed while it *did* have a tracked peer was never seen again by either the startup route
+/// seeding or the reconcile loop - `gc.rs` only ever removes whole links, not individual routes -
+/// leaking it in the kernel indefinitely across every future restart.
 async fn build_tracked_interfaces(
     rt: &RtClient,
     cfg: &config::AwgConfig,
@@ -116,9 +125,6 @@ async fn build_tracked_interfaces(
             if let Some(allowed_ips) = &peer.allowed_ips {
                 peers.insert(peer.public_key.clone(), allowed_ips.clone());
             }
-        }
-        if peers.is_empty() {
-            continue;
         }
         let index = rt
             .link_index(&iface.name)

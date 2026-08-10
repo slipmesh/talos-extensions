@@ -332,7 +332,28 @@ pub async fn ensure_interface(
     let previous = current_peers(awg, &iface.name).await?;
     let mut desired = Vec::with_capacity(iface.peers.len());
     for peer in &iface.peers {
-        desired.push(resolve_peer(peer).await?);
+        // One peer's transient DNS failure must not block every other peer on this interface -
+        // the same guarantee `sync_peers` itself documents for its own per-peer apply loop, which
+        // a bare `?` here used to defeat before `sync_peers` was ever reached. Falling back to
+        // this peer's already-live state (if any) rather than dropping it from `desired` matters:
+        // dropping it would make `diff_peers` see a "removed" peer and tear down its live session
+        // over what might be a one-off resolver hiccup, not an actual config change.
+        match resolve_peer(peer).await {
+            Ok(resolved) => desired.push(resolved),
+            Err(e) => match previous.iter().find(|p| p.public_key == peer.public_key) {
+                Some(existing) => {
+                    tracing::warn!(
+                        interface = %iface.name, peer = %peer.public_key, error = %e,
+                        "failed to resolve peer, keeping its last-known-good state this pass"
+                    );
+                    desired.push(existing.clone());
+                }
+                None => tracing::warn!(
+                    interface = %iface.name, peer = %peer.public_key, error = %e,
+                    "failed to resolve new peer with no previous state, skipping it this pass"
+                ),
+            },
+        }
     }
     desired.sort();
 

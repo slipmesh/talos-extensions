@@ -89,7 +89,14 @@ pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
                 anyhow::anyhow!("interface {:?}: invalid address {cidr:?}: {e}", iface.name)
             })?;
         }
+        let mut seen_peer_keys = HashSet::new();
         for peer in &iface.peers {
+            anyhow::ensure!(
+                seen_peer_keys.insert(peer.public_key.as_str()),
+                "interface {:?}: duplicate peer public_key {:?}",
+                iface.name,
+                peer.public_key
+            );
             if let Some(allowed_ips) = &peer.allowed_ips {
                 for cidr in allowed_ips {
                     parse_cidr(cidr).map_err(|e| {
@@ -209,6 +216,27 @@ interfaces:
             public_key: "k".to_string(),
             endpoint: None,
             allowed_ips: Some(vec!["not-a-cidr".to_string()]),
+            advanced_security: false,
+        });
+        let cfg = AwgConfig {
+            interfaces: vec![a],
+        };
+        assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn rejects_duplicate_peer_public_key_within_one_interface() {
+        let mut a = iface("a");
+        a.peers.push(PeerEntry {
+            public_key: "k".to_string(),
+            endpoint: None,
+            allowed_ips: Some(vec!["10.0.0.1/32".to_string()]),
+            advanced_security: false,
+        });
+        a.peers.push(PeerEntry {
+            public_key: "k".to_string(),
+            endpoint: None,
+            allowed_ips: Some(vec!["10.0.0.2/32".to_string()]),
             advanced_security: false,
         });
         let cfg = AwgConfig {
