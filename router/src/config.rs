@@ -98,6 +98,12 @@ pub fn parse_loopback_address(s: &str) -> Result<(IpAddr, u8)> {
 /// eagerly, since that's a local check - `asn`/`geoip`/`dns` still only get validated at resolve
 /// time in `resolver.rs`, since that's genuinely network-dependent).
 pub fn validate(cfg: &RouterConfig) -> Result<()> {
+    // AS 0 is reserved and explicitly invalid per RFC 7607 ("Codification of AS 0 Processing") -
+    // BIRD would only surface this once it tries to actually start an iBGP session, well past
+    // where this config's own fail-fast validation should have caught it. Not checking against
+    // the private-use ranges (64512-65534/4200000000-4294967294): this project's own test nodes
+    // use 64512, a legitimate and common choice for an internal-only network like this one.
+    anyhow::ensure!(cfg.bgp_as != 0, "bgp_as must not be 0 (reserved, RFC 7607)");
     let mut v4_count = 0;
     let mut v6_count = 0;
     for addr in &cfg.node.loopback_addresses {
@@ -347,6 +353,13 @@ bypass:
             }],
             exclude: vec![],
         });
+        assert!(validate(&cfg).is_err());
+    }
+
+    #[test]
+    fn rejects_as0() {
+        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        cfg.bgp_as = 0;
         assert!(validate(&cfg).is_err());
     }
 
