@@ -155,10 +155,51 @@ for excluding this node's own (and any peer's) public endpoint themselves, the s
 config-authoring-is-a-human-responsibility pattern already documented above for `awg`'s private
 keys.
 
-## Not yet built
+## `nftables`: ruleset loader with a table-loss watchdog
 
-`nftables` is a reserved future member of this workspace, mirroring `operators/nftables` - out of
-scope for `awg`/`router`.
+A third binary, `nftables`, ported from `operators/nftables`'s MSS-clamp/NAT ruleset text and its
+"identify our own tables by name, delete-then-recreate" idiom. Applies
+`/etc/talos-extensions/nftables.yaml`'s `ruleset:` once at startup, same as `awg`/`router` converge
+their own state once at startup - but unlike a true oneshot, it doesn't exit afterward.
+
+**Why it stays resident**: confirmed directly on a real node - something else's first
+`iptables`/`ip6tables` invocation transitioning into iptables-nft mode (timed around kubelet/
+kube-proxy's own first sync on a freshly booted node) can do a one-time broad nftables reset that
+catches tables it doesn't recognize, including ours, *if* our own apply happens to run before that
+reset. Observed both outcomes on the same node across reboots depending on scheduling alone - not a
+perpetual conflict, but an unpredictable one-time boot race that a bare "apply once and exit"
+can't be reliable against. `extension-services/nftables.yaml`'s `restart: always` plus a
+`nft monitor`-driven watchdog loop in `main.rs` (every nftables event on the node wakes it to
+re-check its own tables via `nftables::all_present` and reapply if any are missing) is the same
+strategy Talos's own `network.NfTablesChainController` uses to keep *its* table present - see that
+controller's source (`internal/app/machined/pkg/controllers/network/nftables_chain.go`) for the
+same event-driven reconcile pattern, and `nftables.rs`'s own doc comment for the full story.
+
+The config is not a set of structured fields this binary renders into rules - `ruleset:` is the
+actual nftables syntax, verbatim, fed to a vendored static `nft -f` almost unmodified. This binary
+only does two things to it:
+
+1. **`{{ name }}` placeholder substitution** (`template.rs`) for values that can't be known when
+   the ruleset text is written - currently `defaultroute_interface_ipv4`/
+   `defaultroute_interface_ipv6`, resolved via `common::netlink::rt::RtClient::
+   default_iface_v4`/`default_iface_v6`. Only placeholders the ruleset actually references get
+   resolved (and retried, bounded, if no default route exists yet) - a v4-only node applying a
+   ruleset that never mentions `defaultroute_interface_ipv6` doesn't need one to exist.
+2. **Own-table identification by scanning, not hardcoding** (`nftables.rs`): before applying, it
+   finds every `table <family> <name>` the (substituted) ruleset declares and issues `nft delete
+   table <family> <name>` for each (errors ignored - the table not existing yet is normal on the
+   first run). This is deliberately *not* `flush ruleset` - kube-proxy, Talos's own ingress
+   firewall, or anything else on the same node may have nftables tables of its own that must
+   survive. Unlike `operators/nftables`, which hardcodes its table names in Rust, the names live in
+   whoever authors `ruleset:` - if a table gets renamed between two config versions, the old name
+   is orphaned rather than cleaned up automatically, the same class of limitation the original
+   hardcoded-name approach already had, just relocated.
+
+Rules content (MSS clamp on `forward`, NAT of RFC1918/private ranges on egress via the default
+route interface) is not baked into this binary at all - it's just the first real `ruleset:` deployed
+through it. See `../talos-nftables-extension/`'s README for the packaging side (why `nft` is a
+statically-linked binary built from source rather than the dynamically-linked package
+`siderolabs/pkgs` already ships) and an example `ruleset:` value.
 
 A live handshake-polling *watcher* independent of route installation (i.e. something readable via
 `talosctl` beyond "does a route exist") was deliberately deferred - if it's ever wanted, the hook

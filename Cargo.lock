@@ -844,6 +844,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nftables"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "common",
+ "serde",
+ "serde_yaml",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "nix"
 version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

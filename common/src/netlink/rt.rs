@@ -475,6 +475,55 @@ impl RtClient {
         );
         Ok(out)
     }
+
+    /// Shared by `default_iface_v4`/`default_iface_v6`: finds the first route in `routes` whose
+    /// destination prefix length is 0 (the default route for whichever family `routes` was built
+    /// for) and resolves its outgoing interface name. `Ok(None)` if no default route exists for
+    /// that family - a real, common case (many nodes are v4-only or v6-only), not an error.
+    async fn default_iface_of(&self, routes: rtnetlink::RouteGetRequest) -> Result<Option<String>> {
+        use rtnetlink::packet_route::route::RouteAttribute;
+
+        let mut default_oif = None;
+        let mut stream = routes.execute();
+        while let Some(route) = stream.try_next().await.context("failed to list routes")? {
+            if route.header.destination_prefix_length != 0 {
+                continue;
+            }
+            if let Some(oif) = route.attributes.iter().find_map(|a| match a {
+                RouteAttribute::Oif(index) => Some(*index),
+                _ => None,
+            }) {
+                default_oif = Some(oif);
+                break;
+            }
+        }
+        let Some(oif) = default_oif else {
+            return Ok(None);
+        };
+
+        let links = self.list_links_inner().await?;
+        Ok(links
+            .into_iter()
+            .find(|(_, index, _)| *index == oif)
+            .map(|(name, _, _)| name))
+    }
+
+    /// Name of the interface the IPv4 default route (0.0.0.0/0) points at - equivalent to
+    /// `ip -4 route show default` followed by resolving the `dev` name. `Ok(None)` if none exists.
+    pub async fn default_iface_v4(&self) -> Result<Option<String>> {
+        let _guard = self.netlink_lock.lock().await;
+        let msg = RouteMessageBuilder::<Ipv4Addr>::new().build();
+        self.default_iface_of(self.handle.route().get(msg)).await
+    }
+
+    /// Name of the interface the IPv6 default route (::/0) points at - same as `default_iface_v4`,
+    /// just the other family (a dual-stack node's v4/v6 default routes aren't guaranteed to share
+    /// an interface, so this is a genuinely separate lookup, not a v4 result reused).
+    pub async fn default_iface_v6(&self) -> Result<Option<String>> {
+        let _guard = self.netlink_lock.lock().await;
+        let msg = RouteMessageBuilder::<Ipv6Addr>::new().build();
+        self.default_iface_of(self.handle.route().get(msg)).await
+    }
 }
 
 /// Extracts `(destination, prefix_len)` from a route message, either address family.
