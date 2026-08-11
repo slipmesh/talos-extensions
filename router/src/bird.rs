@@ -129,14 +129,15 @@ impl SanitizedRoute {
     }
 }
 
-/// Renders one `ospf_interfaces` entry as BIRD would need it written in an `interface` clause:
-/// a bare (unquoted) CIDR literal if it parses as one - BIRD's interface-pattern grammar takes a
-/// prefix as its own token type, not a quoted string - or a quoted, sanitized name/glob pattern
-/// otherwise. **This split needs verifying against the pinned BIRD version's real grammar before
-/// relying on it** (see `config.rs`'s `ospf_interfaces` doc comment) - if CIDR-by-address matching
-/// turns out not to work the way this assumes, falling back to name/glob-only entries doesn't
-/// change anything else in this module.
-fn render_ospf_iface(entry: &str) -> String {
+/// Renders one interface-matching entry (`ospf_interfaces` or `direct_interfaces`) as BIRD would
+/// need it written in an `interface` clause: a bare (unquoted) CIDR literal if it parses as one -
+/// BIRD's interface-pattern grammar takes a prefix as its own token type, not a quoted string - or
+/// a quoted, sanitized name/glob pattern otherwise. Shared by both config fields - same grammar,
+/// same `protocol { interface ...; }` clause shape either way. **This split needs verifying against
+/// the pinned BIRD version's real grammar before relying on it** (see `config.rs`'s
+/// `ospf_interfaces` doc comment) - if CIDR-by-address matching turns out not to work the way this
+/// assumes, falling back to name/glob-only entries doesn't change anything else in this module.
+fn render_iface_pattern(entry: &str) -> String {
     if common::netlink::rt::parse_cidr(entry).is_ok() {
         entry.to_string()
     } else {
@@ -192,6 +193,13 @@ pub struct RenderInputs<'a> {
     pub bypass: &'a [BypassRoute],
     pub announce: &'a [AnnounceRoute],
     pub learn: &'a [String],
+    /// Extra interfaces (exact name, glob, or CIDR - same grammar as `ospf_interfaces`) to treat
+    /// as `protocol direct` sources, each exported over iBGP by the existing `RTS_DEVICE` clause
+    /// (the same one that already carries `router-lo`'s own loopback) - no separate wiring needed
+    /// per entry. Not specific to any one purpose: a pod-network bridge (`cni0`, written by a
+    /// separate component - see `slipmesh/cni-config`) is the motivating case, but this field
+    /// doesn't know or care what the interface is for.
+    pub direct_interfaces: &'a [String],
 }
 
 /// Rendered via `templates/bird.conf` (askama) - `escape = "none"` since this is plain BIRD
@@ -206,6 +214,14 @@ pub fn render(identity: RouterIdentity, as_number: u32, inputs: &RenderInputs) -
         })
         .collect();
     let learn_patterns: Vec<String> = inputs.learn.iter().map(|cidr| format!("{cidr}+")).collect();
+    let direct_interfaces: Vec<RenderedDirectIface> = inputs
+        .direct_interfaces
+        .iter()
+        .map(|s| RenderedDirectIface {
+            protocol_id: sanitize_protocol_id(s),
+            pattern: render_iface_pattern(s),
+        })
+        .collect();
 
     BirdConfigTemplate {
         loopback: identity.loopback,
@@ -215,12 +231,13 @@ pub fn render(identity: RouterIdentity, as_number: u32, inputs: &RenderInputs) -
         ospf_interfaces: inputs
             .ospf_interfaces
             .iter()
-            .map(|s| render_ospf_iface(s))
+            .map(|s| render_iface_pattern(s))
             .collect(),
         bgp_peers: rendered_peers,
         bypass: SanitizedRoute::from_routes(inputs.bypass),
         announce: SanitizedRoute::from_routes(inputs.announce),
         learn: learn_patterns,
+        direct_interfaces,
     }
     .render()
     .context("failed to render bird.conf")
@@ -229,6 +246,11 @@ pub fn render(identity: RouterIdentity, as_number: u32, inputs: &RenderInputs) -
 struct RenderedBgpPeer {
     protocol_id: String,
     address: Ipv6Addr,
+}
+
+struct RenderedDirectIface {
+    protocol_id: String,
+    pattern: String,
 }
 
 #[derive(askama::Template)]
@@ -243,6 +265,7 @@ struct BirdConfigTemplate {
     bypass: Vec<SanitizedRoute>,
     announce: Vec<SanitizedRoute>,
     learn: Vec<String>,
+    direct_interfaces: Vec<RenderedDirectIface>,
 }
 
 /// Name of this daemon's rendered OSPFv3 protocol block - see `render()`.
@@ -420,12 +443,25 @@ mod tests {
         announce: &'a [AnnounceRoute],
         learn: &'a [String],
     ) -> RenderInputs<'a> {
+        inputs_with_direct(ospf_interfaces, bgp_peers, bypass, announce, learn, &[])
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn inputs_with_direct<'a>(
+        ospf_interfaces: &'a [String],
+        bgp_peers: &'a [BgpPeer],
+        bypass: &'a [BypassRoute],
+        announce: &'a [AnnounceRoute],
+        learn: &'a [String],
+        direct_interfaces: &'a [String],
+    ) -> RenderInputs<'a> {
         RenderInputs {
             ospf_interfaces,
             bgp_peers,
             bypass,
             announce,
             learn,
+            direct_interfaces,
         }
     }
 
@@ -436,6 +472,47 @@ mod tests {
         assert!(out.contains("interface \"mesh-*\" { type ptp; };"));
         assert!(out.contains("interface 10.99.0.0/24 { type ptp; };"));
         assert!(out.contains("interface \"router-lo\" { stub yes; };"));
+    }
+
+    #[test]
+    fn render_direct_interfaces_is_empty_by_default() {
+        let out = render(identity(), 64512, &inputs(&[], &[], &[], &[], &[])).unwrap();
+        assert!(out.contains("protocol direct direct1 {"));
+        assert!(!out.contains("protocol direct direct_"));
+    }
+
+    #[test]
+    fn render_includes_a_protocol_direct_block_per_direct_interface() {
+        let direct_interfaces = ["cni0".to_string()];
+        let out = render(
+            identity(),
+            64512,
+            &inputs_with_direct(&[], &[], &[], &[], &[], &direct_interfaces),
+        )
+        .unwrap();
+        let block = out
+            .split("protocol direct direct_cni0 {")
+            .nth(1)
+            .expect("a protocol direct block named after the interface must be present")
+            .split("\n}\n")
+            .next()
+            .unwrap();
+        assert!(block.contains("interface \"cni0\";"));
+        assert!(block.contains("ipv4 { import all; };"));
+    }
+
+    #[test]
+    fn render_direct_interfaces_get_distinct_sanitized_protocol_ids() {
+        let direct_interfaces = ["cni0".to_string(), "my-bridge".to_string()];
+        let out = render(
+            identity(),
+            64512,
+            &inputs_with_direct(&[], &[], &[], &[], &[], &direct_interfaces),
+        )
+        .unwrap();
+        assert!(out.contains("protocol direct direct_cni0 {"));
+        assert!(out.contains("protocol direct direct_my_bridge {"));
+        assert!(out.contains("interface \"my-bridge\";"));
     }
 
     #[test]

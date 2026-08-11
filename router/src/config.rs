@@ -23,6 +23,13 @@ pub struct RouterConfig {
     /// entry gets rendered (quoted name/pattern vs. bare CIDR literal).
     #[serde(default)]
     pub ospf_interfaces: Vec<String>,
+    /// Extra interfaces (same grammar as `ospf_interfaces`: exact name, glob, or CIDR) to treat as
+    /// `protocol direct` sources - each one's connected route gets exported over iBGP by the
+    /// existing `RTS_DEVICE` clause, same as `router-lo`'s own loopback already is. Not tied to any
+    /// one purpose (a pod-network bridge is the motivating case - see `bird.rs`'s `RenderInputs`
+    /// doc comment) - whoever authors `router.yaml` decides what belongs here.
+    #[serde(default)]
+    pub direct_interfaces: Vec<String>,
     /// IPv4 CIDR ranges (not exact per-peer `/32`s) - any kernel-learned route inside one of these
     /// ranges is re-announced over iBGP. See `bird.rs`'s module doc comment for why this stays
     /// IPv4-only.

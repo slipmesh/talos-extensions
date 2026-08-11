@@ -62,6 +62,7 @@ struct RouterState {
     identity_ipv6_loopback: Ipv6Addr,
     as_number: u32,
     ospf_interfaces: Vec<String>,
+    direct_interfaces: Vec<String>,
     bgp_peers: Vec<bird::BgpPeer>,
     announce: Vec<bird::AnnounceRoute>,
     learn: Vec<String>,
@@ -124,6 +125,7 @@ async fn run() -> Result<()> {
         identity_ipv6_loopback: ipv6_loopback,
         as_number: cfg.bgp_as,
         ospf_interfaces: cfg.ospf_interfaces,
+        direct_interfaces: cfg.direct_interfaces,
         bgp_peers,
         announce,
         learn: cfg.learn,
@@ -198,6 +200,7 @@ fn render_inputs<'a>(
         bypass: bypass_routes,
         announce: &ctx.announce,
         learn: &ctx.learn,
+        direct_interfaces: &ctx.direct_interfaces,
     }
 }
 

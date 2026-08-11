@@ -272,6 +272,10 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         bgp_as: mesh.cluster.bgp_as,
         bgp_peers: bgp_peers_for(mesh, node_name)?,
         ospf_interfaces: OSPF_INTERFACES.iter().map(|s| s.to_string()).collect(),
+        // Not wired up from mesh.yaml yet - the pod-bridge/CNI generator (slipmesh/cni-config) is
+        // a separate, not-yet-integrated piece; leaving this empty here changes nothing about
+        // today's rendered router.yaml.
+        direct_interfaces: vec![],
         learn: vec![],
         announce: vec![],
         bypass: bypass_for(mesh, node_name),
