@@ -25,7 +25,7 @@ use anyhow::{Context, Result};
 use awg::config::{AwgConfig, InterfaceEntry, PeerEntry};
 use common::Obfuscation;
 use nftables::config::NftablesConfig;
-use router::config::{BgpPeerEntry, BypassConfig, NodeIdentity, RouterConfig};
+use router::config::{AnnounceEntry, BgpPeerEntry, BypassConfig, NodeIdentity, RouterConfig};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -286,6 +286,23 @@ fn direct_interfaces_for(mesh: &MeshConfig, node_name: &str) -> Result<Vec<Strin
         .unwrap_or_else(|| mesh.cluster.direct_interfaces.clone()))
 }
 
+/// This cluster's `announce` routes - currently just the Kubernetes service CIDR, if configured
+/// (see `ClusterConfig::service_subnet`'s doc comment for why it's static here rather than
+/// live-discovered the way the old k8s-CRD `router` did it). Same on every node, matching
+/// `direct_interfaces_for`'s reasoning for `cni*`: this isn't a per-node concern.
+fn announce_for(mesh: &MeshConfig) -> Vec<AnnounceEntry> {
+    mesh.cluster
+        .service_subnet
+        .as_ref()
+        .map(|net| {
+            vec![AnnounceEntry {
+                net: net.clone(),
+                label: Some("k8s-services".to_string()),
+            }]
+        })
+        .unwrap_or_default()
+}
+
 pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<RouterConfig> {
     let (v4, v6) = node_loopbacks(mesh, node_name)?;
     Ok(RouterConfig {
@@ -297,7 +314,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         ospf_interfaces: OSPF_INTERFACES.iter().map(|s| s.to_string()).collect(),
         direct_interfaces: direct_interfaces_for(mesh, node_name)?,
         learn: vec![],
-        announce: vec![],
+        announce: announce_for(mesh),
         bypass: bypass_for(mesh, node_name),
     })
 }
@@ -706,6 +723,26 @@ bypass:
         assert_eq!(cfg_a.direct_interfaces, vec!["home".to_string()]);
         // Untouched node still gets the global default.
         assert_eq!(cfg_b.direct_interfaces, vec!["cni*".to_string()]);
+    }
+
+    #[test]
+    fn render_router_config_announce_is_empty_by_default() {
+        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let cfg = render_router_config(&mesh, "a").unwrap();
+        assert!(cfg.announce.is_empty());
+    }
+
+    #[test]
+    fn render_router_config_announces_the_configured_service_subnet_on_every_node() {
+        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        mesh.cluster.service_subnet = Some("10.60.0.0/16".to_string());
+        let cfg_a = render_router_config(&mesh, "a").unwrap();
+        let cfg_b = render_router_config(&mesh, "b").unwrap();
+        for cfg in [&cfg_a, &cfg_b] {
+            assert_eq!(cfg.announce.len(), 1);
+            assert_eq!(cfg.announce[0].net, "10.60.0.0/16");
+            assert_eq!(cfg.announce[0].label.as_deref(), Some("k8s-services"));
+        }
     }
 
     #[test]

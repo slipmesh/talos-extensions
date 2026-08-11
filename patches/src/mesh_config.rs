@@ -49,6 +49,17 @@ pub struct ClusterConfig {
     /// rather than empty, so this works out of the box without `mesh.yaml` having to know about it.
     #[serde(default = "default_direct_interfaces")]
     pub direct_interfaces: Vec<String>,
+    /// Kubernetes' ClusterIP range (Talos's own `cluster.network.serviceSubnets`, stated here too
+    /// since `router.yaml` has no live Kubernetes API access to discover it - see this crate's own
+    /// `AGENTS.md`/workspace principle). Ported from the old k8s-CRD system's `router`, which read
+    /// this live from a `ServiceCIDR` object and re-announced it over iBGP as `AnnounceRoute{label:
+    /// "k8s-services"}` (`slipmesh/operators/router/src/main.rs`) - here it's a static value instead
+    /// (unlike podCIDR, the service range is fixed at cluster-bootstrap time, not dynamically
+    /// allocated per node, so there's no live-discovery requirement to begin with). `None` by
+    /// default (unlike `direct_interfaces`'s `cni*`) - there's no universally-sensible default
+    /// service CIDR the way there's a de-facto-standard CNI bridge naming convention.
+    #[serde(default)]
+    pub service_subnet: Option<String>,
 }
 
 fn default_direct_interfaces() -> Vec<String> {
