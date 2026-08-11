@@ -1,6 +1,18 @@
 name: router
 container:
   entrypoint: ./router
+  # This extension's rootfs (variant: scratch) ships with no CA trust store of its own - the
+  # RIPEstat bypass resolver (reqwest) needs one to make any HTTPS request. Bind-mounting the
+  # host's own store (Talos itself maintains this for containerd/kubelet, confirmed directly
+  # present on a real node) means it's always current with whatever Talos ships, no separate
+  # bundle for this repo to fetch/pin/update - same pattern siderolabs/extensions' own
+  # tailscale.yaml uses for the same problem.
+  mounts:
+    - source: /etc/ssl/certs
+      destination: /etc/ssl/certs
+      type: bind
+      options:
+        - rbind
   security:
     writeableRootfs: false
     writeableSysfs: false

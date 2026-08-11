@@ -63,40 +63,21 @@ const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 /// this whole call).
 pub const RESOLVE_TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Mozilla's CA bundle (curl's own dated re-publication of it, `make hashes`-style pin - see
-/// `../certs/mozilla-ca-bundle.pem`'s own header for the exact snapshot date), embedded at compile
-/// time rather than read from the extension's rootfs at startup: this `router` extension ships as
-/// `variant: scratch` (see `../talos-router-extension/patches/extensions/router/pkg.yaml`) with no
-/// package manager and no CA store anywhere in the base image (confirmed directly, every
-/// conventional `/etc/ssl`-family path came up empty) - and even a rootfs-shipped bundle at the one
-/// conventional path that *would* work at runtime (`/etc/ssl/certs/ca-certificates.crt`) turned out
-/// to be rejected outright by `extensions-validator` ("not allowed in extensions", confirmed
-/// directly against a real build). Baking it into the binary sidesteps both problems at once - no
-/// rootfs file, no path for a validator to reject, no runtime dependency on the extension's mount
-/// layout at all.
-static CA_BUNDLE: &[u8] = include_bytes!("../certs/mozilla-ca-bundle.pem");
-
 /// One shared client for every RIPEstat call - connection/TLS reuse across the lookups a single
 /// resolve makes, instead of a fresh connection pool and TLS handshake per request.
 ///
-/// Fallible rather than `.expect()`-built: building the TLS backend can fail on its own (parsing
-/// `CA_BUNDLE` or assembling the rustls root store from it are both real failure modes, however
-/// unlikely for a bundle this crate itself ships and pins), and a `LazyLock` initializer panicking
-/// on first access would take down this whole process rather than just this bypass resolution
-/// attempt - exactly what `current_bypass_routes`'s retry/last-known-good-cache handling above
-/// exists to avoid.
-///
-/// `.tls_certs_only(...)` rather than `.add_root_certificate(...)`: the latter only *adds to*
-/// whatever `rustls-platform-verifier` finds via the OS's own certificate store, which on this
-/// scratch rootfs is nothing - and `rustls-platform-verifier` failing to even probe that empty
-/// store is exactly the original crash this whole doc comment is about. `.tls_certs_only()` skips
-/// consulting the platform store entirely and trusts only what's explicitly passed in.
+/// Fallible rather than `.expect()`-built: building the TLS backend can fail on its own (confirmed
+/// directly - this used to be an unconditional `.expect()` that panicked the whole process the
+/// moment this extension's rootfs had nowhere for `rustls-platform-verifier` to find a CA store; see
+/// `../../extension-services/router.yaml`'s `mounts:`, which bind-mounts the Talos host's own
+/// `/etc/ssl/certs` into the container to fix that at the packaging level rather than here), and a
+/// `LazyLock` initializer panicking on first access would take down this whole process rather than
+/// just this bypass resolution attempt - exactly what `current_bypass_routes`'s retry/
+/// last-known-good-cache handling above exists to avoid.
 static RIPESTAT_CLIENT: LazyLock<reqwest::Result<reqwest::Client>> = LazyLock::new(|| {
-    let certs = reqwest::Certificate::from_pem_bundle(CA_BUNDLE)?;
     reqwest::Client::builder()
         .timeout(NETWORK_TIMEOUT)
         .user_agent("talos-extensions-router")
-        .tls_certs_only(certs)
         .build()
 });
 
