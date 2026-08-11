@@ -39,6 +39,20 @@ pub struct ClusterConfig {
     pub loopback_networks: LoopbackNetworks,
     #[serde(default)]
     pub bypass_refresh_interval_secs: Option<u64>,
+    /// Extra interfaces every node's `router.yaml` should treat as `protocol direct` sources (see
+    /// `router::config::RouterConfig::direct_interfaces`'s own doc comment) - global, not per-node:
+    /// the mechanism this exists for (`slipmesh/cni-config`'s pod-bridge) is the same interface
+    /// naming on every node by construction, not something that varies node to node. Harmless to
+    /// include on a node that never runs `cni-config` - `protocol direct` is inert until a matching
+    /// interface actually appears. Defaults to `cni*` (a glob, not the exact `cni0` - matches
+    /// whatever the CNI bridge plugin actually names it without needing to hardcode the number)
+    /// rather than empty, so this works out of the box without `mesh.yaml` having to know about it.
+    #[serde(default = "default_direct_interfaces")]
+    pub direct_interfaces: Vec<String>,
+}
+
+fn default_direct_interfaces() -> Vec<String> {
+    vec!["cni*".to_string()]
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq)]

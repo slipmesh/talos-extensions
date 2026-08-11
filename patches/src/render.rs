@@ -272,10 +272,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         bgp_as: mesh.cluster.bgp_as,
         bgp_peers: bgp_peers_for(mesh, node_name)?,
         ospf_interfaces: OSPF_INTERFACES.iter().map(|s| s.to_string()).collect(),
-        // Not wired up from mesh.yaml yet - the pod-bridge/CNI generator (slipmesh/cni-config) is
-        // a separate, not-yet-integrated piece; leaving this empty here changes nothing about
-        // today's rendered router.yaml.
-        direct_interfaces: vec![],
+        direct_interfaces: mesh.cluster.direct_interfaces.clone(),
         learn: vec![],
         announce: vec![],
         bypass: bypass_for(mesh, node_name),
@@ -630,6 +627,27 @@ bypass:
             vec!["mesh-*".to_string(), "router-lo".to_string()]
         );
         assert!(cfg.bypass.is_some());
+    }
+
+    #[test]
+    fn render_router_config_direct_interfaces_defaults_to_cni_glob() {
+        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let cfg_a = render_router_config(&mesh, "a").unwrap();
+        let cfg_b = render_router_config(&mesh, "b").unwrap();
+        // Same value on every node - global, not per-node.
+        assert_eq!(cfg_a.direct_interfaces, vec!["cni*".to_string()]);
+        assert_eq!(cfg_b.direct_interfaces, vec!["cni*".to_string()]);
+    }
+
+    #[test]
+    fn render_router_config_uses_explicit_cluster_direct_interfaces() {
+        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        mesh.cluster.direct_interfaces = vec!["cni0".to_string(), "extra0".to_string()];
+        let cfg = render_router_config(&mesh, "a").unwrap();
+        assert_eq!(
+            cfg.direct_interfaces,
+            vec!["cni0".to_string(), "extra0".to_string()]
+        );
     }
 
     #[test]
