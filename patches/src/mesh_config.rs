@@ -107,6 +107,14 @@ pub struct MeshLink {
     pub port: u16,
     #[serde(default)]
     pub obfuscation: Obfuscation,
+    /// This link is plain WireGuard, no AmneziaWG obfuscation at all - for a peer that can't do
+    /// AmneziaWG's extensions (e.g. RouterOS, which only speaks stock WireGuard). Skips obfuscation
+    /// generation/resolution entirely rather than resolving to an all-fields-`None` `Obfuscation`
+    /// that then gets silently overwritten by a *future* run's random generation the moment nothing
+    /// else fills a field in - `render.rs`'s `resolve_secrets` checks this before even calling
+    /// `resolve_obfuscation`, so a plain link never round-trips through generation at all.
+    #[serde(default)]
+    pub plain: bool,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -366,6 +374,7 @@ nodes:
             pair: ["a".to_string(), "ghost".to_string()],
             port: 51820,
             obfuscation: Obfuscation::default(),
+            plain: false,
         });
         assert!(validate(&cfg).is_err());
     }
@@ -377,6 +386,7 @@ nodes:
             pair: ["a".to_string(), "a".to_string()],
             port: 51820,
             obfuscation: Obfuscation::default(),
+            plain: false,
         });
         assert!(validate(&cfg).is_err());
     }
@@ -395,11 +405,13 @@ nodes:
             pair: ["a".to_string(), "b".to_string()],
             port: 51820,
             obfuscation: Obfuscation::default(),
+            plain: false,
         });
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "c".to_string()],
             port: 51821,
             obfuscation: Obfuscation::default(),
+            plain: false,
         });
         validate(&cfg).unwrap();
     }
@@ -418,11 +430,13 @@ nodes:
             pair: ["a".to_string(), "b".to_string()],
             port: 51820,
             obfuscation: Obfuscation::default(),
+            plain: false,
         });
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "c".to_string()],
             port: 51820,
             obfuscation: Obfuscation::default(),
+            plain: false,
         });
         assert!(validate(&cfg).is_err());
     }
@@ -512,6 +526,7 @@ nodes:
             pair: ["a".to_string(), "b".to_string()],
             port: 51820,
             obfuscation: Obfuscation::default(),
+            plain: false,
         });
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),

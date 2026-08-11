@@ -126,11 +126,19 @@ pub fn resolve_secrets(mesh: &MeshConfig, existing: &impl ExistingState) -> Reso
 
     let mut mesh_link_obfuscation = HashMap::new();
     for link in &mesh.mesh.links {
-        let resolved = resolve_obfuscation(
-            &link.obfuscation,
-            &mesh.obfuscation,
-            existing.mesh_link_obfuscation(&link.pair).as_ref(),
-        );
+        // `plain` links (e.g. a RouterOS peer that can't speak AmneziaWG's extensions at all) skip
+        // resolution entirely - `resolve_obfuscation` always fills every still-unset field from a
+        // fresh random generation, which would silently turn a "no obfuscation" link back into an
+        // obfuscated one.
+        let resolved = if link.plain {
+            Obfuscation::default()
+        } else {
+            resolve_obfuscation(
+                &link.obfuscation,
+                &mesh.obfuscation,
+                existing.mesh_link_obfuscation(&link.pair).as_ref(),
+            )
+        };
         mesh_link_obfuscation.insert(link_key(&link.pair), resolved);
     }
 
@@ -553,6 +561,29 @@ mesh:
         let resolved = resolve_secrets(&mesh, &existing);
         // Only one entry per link, keyed order-independently - not one per node.
         assert_eq!(resolved.mesh_link_obfuscation.len(), 1);
+    }
+
+    #[test]
+    fn resolve_secrets_plain_link_skips_obfuscation_generation_entirely() {
+        let mut mesh: MeshConfig = serde_yaml::from_str(minimal_mesh_yaml()).unwrap();
+        mesh.mesh.links[0].plain = true;
+        let existing = FakeExisting {
+            mesh_keys: HashMap::new(),
+        };
+        let resolved = resolve_secrets(&mesh, &existing);
+        let obfuscation = &resolved.mesh_link_obfuscation[&link_key(&mesh.mesh.links[0].pair)];
+        assert_eq!(obfuscation, &Obfuscation::default());
+    }
+
+    #[test]
+    fn resolve_secrets_non_plain_link_still_generates_obfuscation() {
+        let mesh: MeshConfig = serde_yaml::from_str(minimal_mesh_yaml()).unwrap();
+        let existing = FakeExisting {
+            mesh_keys: HashMap::new(),
+        };
+        let resolved = resolve_secrets(&mesh, &existing);
+        let obfuscation = &resolved.mesh_link_obfuscation[&link_key(&mesh.mesh.links[0].pair)];
+        assert_ne!(obfuscation, &Obfuscation::default());
     }
 
     fn three_node_mesh_yaml() -> &'static str {
