@@ -65,12 +65,17 @@ pub const RESOLVE_TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// One shared client for every RIPEstat call - connection/TLS reuse across the lookups a single
 /// resolve makes, instead of a fresh connection pool and TLS handshake per request.
-static RIPESTAT_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+///
+/// Fallible rather than `.expect()`-built: building the TLS backend can fail on its own (e.g. an
+/// empty/missing system CA trust store - confirmed directly on a deployed node whose extension
+/// rootfs shipped no `/etc/ssl/certs`), and a `LazyLock` initializer panicking on first access
+/// would take down this whole process rather than just this bypass resolution attempt - exactly
+/// what `current_bypass_routes`'s retry/last-known-good-cache handling above exists to avoid.
+static RIPESTAT_CLIENT: LazyLock<reqwest::Result<reqwest::Client>> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(NETWORK_TIMEOUT)
         .user_agent("talos-extensions-router")
         .build()
-        .expect("reqwest client with only a timeout/user-agent set always builds")
 });
 
 fn parse_cidr(s: &str) -> Option<Cidr> {
@@ -91,11 +96,14 @@ static RIPESTAT_CONCURRENCY: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::n
 const RIPESTAT_SOURCEAPP: &str = "talos-extensions-router";
 
 async fn ripestat_get(url: &str) -> Result<serde_json::Value> {
+    let client = RIPESTAT_CLIENT
+        .as_ref()
+        .map_err(|e| anyhow::anyhow!("failed to build RIPEstat HTTP client: {e}"))?;
     let _permit = RIPESTAT_CONCURRENCY
         .acquire()
         .await
         .expect("RIPESTAT_CONCURRENCY semaphore is never closed");
-    RIPESTAT_CLIENT
+    client
         .get(format!("{url}&sourceapp={RIPESTAT_SOURCEAPP}"))
         .send()
         .await

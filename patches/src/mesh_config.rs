@@ -82,6 +82,12 @@ pub struct NodeEntry {
     /// public key). See `render.rs`'s idempotency handling for when this is left unset.
     #[serde(default)]
     pub mesh_private_key: Option<String>,
+    /// Overrides (replaces, does not merge with) `cluster.direct_interfaces` for this node only -
+    /// for a node whose physically-connected interfaces don't follow the fleet-wide CNI-bridge
+    /// convention the global default is for (e.g. a non-Talos mesh peer with its own LAN-facing
+    /// interface name). `None` means "use the global default", not "announce nothing".
+    #[serde(default)]
+    pub direct_interfaces: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq)]
@@ -383,6 +389,7 @@ nodes:
             node_id: "10.62.0.3".to_string(),
             endpoint: None,
             mesh_private_key: None,
+            direct_interfaces: None,
         });
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "b".to_string()],
@@ -405,6 +412,7 @@ nodes:
             node_id: "10.62.0.3".to_string(),
             endpoint: None,
             mesh_private_key: None,
+            direct_interfaces: None,
         });
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "b".to_string()],

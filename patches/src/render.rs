@@ -263,6 +263,21 @@ pub fn bypass_for(mesh: &MeshConfig, node_name: &str) -> Option<BypassConfig> {
 /// user-configurable in this first version).
 pub const OSPF_INTERFACES: [&str; 2] = ["mesh-*", "router-lo"];
 
+/// This node's `direct_interfaces`: its own override if set, else `cluster.direct_interfaces` - an
+/// override *replaces* the global default rather than extending it (a node opting out of the
+/// fleet-wide CNI-bridge convention need not also list `"cni*"` itself).
+fn direct_interfaces_for(mesh: &MeshConfig, node_name: &str) -> Result<Vec<String>> {
+    let node = mesh
+        .nodes
+        .iter()
+        .find(|n| n.name == node_name)
+        .with_context(|| format!("unknown node {node_name:?}"))?;
+    Ok(node
+        .direct_interfaces
+        .clone()
+        .unwrap_or_else(|| mesh.cluster.direct_interfaces.clone()))
+}
+
 pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<RouterConfig> {
     let (v4, v6) = node_loopbacks(mesh, node_name)?;
     Ok(RouterConfig {
@@ -272,7 +287,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         bgp_as: mesh.cluster.bgp_as,
         bgp_peers: bgp_peers_for(mesh, node_name)?,
         ospf_interfaces: OSPF_INTERFACES.iter().map(|s| s.to_string()).collect(),
-        direct_interfaces: mesh.cluster.direct_interfaces.clone(),
+        direct_interfaces: direct_interfaces_for(mesh, node_name)?,
         learn: vec![],
         announce: vec![],
         bypass: bypass_for(mesh, node_name),
@@ -634,7 +649,7 @@ bypass:
         let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
-        // Same value on every node - global, not per-node.
+        // Same value on every node with no per-node override - the global default.
         assert_eq!(cfg_a.direct_interfaces, vec!["cni*".to_string()]);
         assert_eq!(cfg_b.direct_interfaces, vec!["cni*".to_string()]);
     }
@@ -648,6 +663,18 @@ bypass:
             cfg.direct_interfaces,
             vec!["cni0".to_string(), "extra0".to_string()]
         );
+    }
+
+    #[test]
+    fn render_router_config_per_node_direct_interfaces_overrides_not_merges_the_global_default() {
+        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        mesh.nodes[0].direct_interfaces = Some(vec!["home".to_string()]);
+        let cfg_a = render_router_config(&mesh, "a").unwrap();
+        let cfg_b = render_router_config(&mesh, "b").unwrap();
+        // Overridden node gets exactly its own list - "cni*" is not also present.
+        assert_eq!(cfg_a.direct_interfaces, vec!["home".to_string()]);
+        // Untouched node still gets the global default.
+        assert_eq!(cfg_b.direct_interfaces, vec!["cni*".to_string()]);
     }
 
     #[test]
