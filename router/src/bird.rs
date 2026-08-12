@@ -178,6 +178,28 @@ pub fn exact_iface_names(ospf_interfaces: &[String]) -> Vec<String> {
 /// whatever address its normal route-selection picks, and a reply sent with that source gets
 /// dropped by the peer as a bogon.
 ///
+/// The `ANNOUNCE` protocol instance (not `BYPASS`) additionally gets its own `if proto =
+/// "ANNOUNCE" then { krt_prefsrc = ...; accept; }` clause, by name rather than by `source =
+/// RTS_STATIC` (which would catch `BYPASS` too - deliberately not done, see below). Confirmed
+/// directly this matters, not just for symmetry: there's no overlay here, mesh links carry no
+/// encapsulation, so a host-network process's *own* connection to a Service ClusterIP (e.g.
+/// `10.60.234.252`, inside the cluster.service_subnet `ANNOUNCE`s) picks its source address at
+/// socket-connect time, in a route lookup against the *pre*-DNAT destination - a separate, earlier
+/// step than kube-proxy's own DNAT rewrite. Without a specific local route to the whole service
+/// subnet, that lookup falls through to the node's real default route (its public WAN interface),
+/// so the connection leaves with the node's public IP as source regardless of how correctly
+/// kube-proxy rewrites the destination afterwards. Safe to install locally precisely because
+/// `cluster.service_subnet` is never a real Internet destination - nothing else could ever
+/// legitimately compete for it.
+///
+/// `BYPASS` is deliberately excluded from this - unlike the service subnet, `bypass.include`
+/// resolves to *real* Internet prefixes (GitHub, Google, Yandex, ...), and this same node also
+/// makes its own genuine outbound connections to some of them (image pulls, DNS, etc.). Installing
+/// `BYPASS`'s `blackhole`/relay routes into this node's *own* kernel table would hijack that
+/// traffic too, not just what's meant to be relayed for peers - a real regression, not a fix. Only
+/// the export to iBGP peers matters for `BYPASS` (already unconditional on `source = RTS_STATIC`
+/// there, unaffected by this filter), not local kernel installation.
+///
 /// `learn` entries get a trailing `+` in the rendered prefix-set pattern (`net ~ [ 10.99.0.0/24+
 /// ]`) - "this network and everything more specific inside it", not an exact-match list of every
 /// individual road-warrior `/32` (the k8s original's shape). Empty `learn` means `learn` stays off
@@ -463,6 +485,45 @@ mod tests {
             learn,
             direct_interfaces,
         }
+    }
+
+    #[test]
+    fn render_kernel_export_filter_installs_announce_locally_but_not_bypass() {
+        let bypass = vec![BypassRoute {
+            net: "203.0.113.0/24".to_string(),
+            label: "some vendor".to_string(),
+        }];
+        let announce = vec![AnnounceRoute {
+            net: "10.60.0.0/16".to_string(),
+            label: "k8s-services".to_string(),
+        }];
+        let out = render(
+            identity(),
+            64512,
+            &inputs(&[], &[], &bypass, &announce, &[]),
+        )
+        .unwrap();
+        let kernel_block = out
+            .split("protocol kernel {")
+            .nth(1)
+            .expect("an ipv4 protocol kernel block must be present")
+            .split("ipv6 {")
+            .next()
+            .unwrap();
+        // ANNOUNCE is named explicitly, gets krt_prefsrc, gets installed locally.
+        let announce_clause = kernel_block
+            .split("if proto = \"ANNOUNCE\" then {")
+            .nth(1)
+            .expect("kernel export filter must single out proto = \"ANNOUNCE\"")
+            .split('}')
+            .next()
+            .unwrap();
+        assert!(announce_clause.contains("krt_prefsrc = 10.62.0.1;"));
+        assert!(announce_clause.contains("accept;"));
+        // Nothing in the kernel export filter references BYPASS or the generic RTS_STATIC that
+        // would also catch it - only ANNOUNCE gets singled out by name.
+        assert!(!kernel_block.contains("BYPASS"));
+        assert!(!kernel_block.contains("RTS_STATIC"));
     }
 
     #[test]
