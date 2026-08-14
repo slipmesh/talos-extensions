@@ -32,14 +32,6 @@ pub fn ipv6_loopback(network: Ipv6Addr, prefix_len: u8, node_id: Ipv4Addr) -> Ip
     Ipv6Addr::from((u128::from(network) & mask) | (host & !mask))
 }
 
-/// Short, IFNAMSIZ-safe hex form of `node_id` - builds `mesh-<short_id>` interface names, named
-/// after the *peer's* node_id (this node's mesh interface to peer M is named after M, not itself -
-/// see `render.rs`), matching what the mesh interface was actually named on the wire in the old
-/// system too.
-pub fn short_id(node_id: Ipv4Addr) -> String {
-    format!("{:x}", node_id_bits(node_id))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,18 +69,5 @@ mod tests {
             ipv6_loopback(network, 16, node_id).to_string(),
             "fd00::a00:1"
         );
-    }
-
-    #[test]
-    fn short_id_matches_link_local_hex() {
-        assert_eq!(short_id(Ipv4Addr::new(0, 0, 0, 5)), "5");
-        assert_eq!(short_id(Ipv4Addr::new(0, 0, 1, 0)), "100");
-        assert_eq!(short_id(Ipv4Addr::new(10, 0, 0, 1)), "a000001");
-    }
-
-    #[test]
-    fn short_id_fits_ifnamsiz_when_prefixed_with_mesh_dash() {
-        let name = format!("mesh-{}", short_id(Ipv4Addr::new(255, 255, 255, 255)));
-        assert!(name.len() <= 15, "{name:?} exceeds IFNAMSIZ");
     }
 }

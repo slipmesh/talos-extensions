@@ -60,6 +60,21 @@ pub struct ClusterConfig {
     /// service CIDR the way there's a de-facto-standard CNI bridge naming convention.
     #[serde(default)]
     pub service_subnet: Option<String>,
+    /// A second `node_id`-derived address pair, distinct from `loopback_networks`, hung on every
+    /// `mesh-*`/awg tunnel interface (not just `router-lo`). The IPv4 half is the confirmed fix this
+    /// exists for: `mesh-*` interfaces otherwise carry no IPv4 address at all, so NAT/MASQUERADE has
+    /// nothing valid to pick as a source when service-subnet traffic egresses via one. The IPv6 half
+    /// is deliberately ALSO link-local-scoped (`mesh.yaml`'s value lives inside `fe80::/10`, same as
+    /// the interface's existing OSPFv3-driving link-local) rather than a globally-scoped address -
+    /// there's no live IPv6 masquerade need in this cluster (`service_subnet` is IPv4-only). Being
+    /// link-local lets it *replace* rather than duplicate the loopback-derived link-local `render.rs`
+    /// would otherwise put on every `mesh-*` interface (see `mesh_interfaces_for`) - one scope-link
+    /// address doing double duty (tunnel identity + OSPFv3 Hello/LSA source) instead of two competing
+    /// ones on the same interface, which would leave it ambiguous which one BIRD actually uses.
+    /// `None` (unlike `loopback_networks`, which is always present) preserves today's link-local-only
+    /// behavior for any `mesh.yaml` that hasn't opted in yet.
+    #[serde(default)]
+    pub tunnel_networks: Option<TunnelNetworks>,
 }
 
 fn default_direct_interfaces() -> Vec<String> {
@@ -68,6 +83,16 @@ fn default_direct_interfaces() -> Vec<String> {
 
 #[derive(Deserialize, Debug, Default, PartialEq)]
 pub struct LoopbackNetworks {
+    #[serde(default)]
+    pub ipv4: String,
+    #[serde(default)]
+    pub ipv6: String,
+}
+
+/// Same shape as `LoopbackNetworks` - see `ClusterConfig::tunnel_networks`'s doc comment for what
+/// this is for.
+#[derive(Deserialize, Debug, Default, PartialEq)]
+pub struct TunnelNetworks {
     #[serde(default)]
     pub ipv4: String,
     #[serde(default)]
@@ -345,6 +370,31 @@ nodes:
         assert_eq!(cfg.nodes.len(), 2);
         assert_eq!(cfg.cluster.bgp_as, 64512);
         validate(&cfg).unwrap();
+    }
+
+    #[test]
+    fn tunnel_networks_is_none_when_not_configured() {
+        let cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        assert!(cfg.cluster.tunnel_networks.is_none());
+    }
+
+    #[test]
+    fn parses_an_explicit_tunnel_networks_block() {
+        let yaml = r#"
+cluster:
+  bgp_as: 64512
+  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  tunnel_networks: {ipv4: "10.62.1.0/24", ipv6: "fd00:63::/120"}
+nodes:
+  - name: a
+    node_id: "10.62.0.1"
+  - name: b
+    node_id: "10.62.0.2"
+"#;
+        let cfg: MeshConfig = serde_yaml::from_str(yaml).unwrap();
+        let tunnel = cfg.cluster.tunnel_networks.unwrap();
+        assert_eq!(tunnel.ipv4, "10.62.1.0/24");
+        assert_eq!(tunnel.ipv6, "fd00:63::/120");
     }
 
     #[test]

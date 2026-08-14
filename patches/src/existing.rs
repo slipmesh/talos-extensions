@@ -4,13 +4,11 @@
 //! segments are never read back: both are fully deterministic from `mesh.yaml` alone, no secrets,
 //! no idempotency needed.
 
-use crate::addressing;
 use crate::mesh_config::MeshConfig;
 use crate::render::ExistingState;
 use crate::segments;
 use common::Obfuscation;
 use serde::Deserialize;
-use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
@@ -47,13 +45,7 @@ impl ExistingState for FileExistingState<'_> {
 
     fn mesh_link_obfuscation(&self, pair: &[String; 2]) -> Option<Obfuscation> {
         for (this, other) in [(&pair[0], &pair[1]), (&pair[1], &pair[0])] {
-            let Some(other_node) = self.mesh.nodes.iter().find(|n| &n.name == other) else {
-                continue;
-            };
-            let Ok(other_id) = other_node.node_id.parse::<Ipv4Addr>() else {
-                continue;
-            };
-            let name = format!("mesh-{}", addressing::short_id(other_id));
+            let name = format!("mesh-{other}");
             let Some(cfg) = load_existing_awg_config(&self.patches_dir, this) else {
                 continue;
             };
@@ -148,14 +140,10 @@ roadwarriors:
     #[test]
     fn mesh_private_key_reads_back_from_a_mesh_interface() {
         let dir = temp_dir();
-        let peer_id: Ipv4Addr = "10.62.0.2".parse().unwrap();
         write_awg_patch(
             &dir,
             "a",
-            &format!(
-                "interfaces:\n  - name: mesh-{}\n    listen_port: 51820\n    private_key: \"existing-a-key\"\n    peers: []\n",
-                addressing::short_id(peer_id)
-            ),
+            "interfaces:\n  - name: mesh-b\n    listen_port: 51820\n    private_key: \"existing-a-key\"\n    peers: []\n",
         );
         let mesh = mesh_with_link();
         let state = FileExistingState {
@@ -182,14 +170,10 @@ roadwarriors:
     #[test]
     fn mesh_link_obfuscation_reads_back_from_either_end() {
         let dir = temp_dir();
-        let peer_id: Ipv4Addr = "10.62.0.1".parse().unwrap();
         write_awg_patch(
             &dir,
             "b",
-            &format!(
-                "interfaces:\n  - name: mesh-{}\n    listen_port: 51820\n    private_key: \"existing-b-key\"\n    obfuscation: {{h1: 111}}\n    peers: []\n",
-                addressing::short_id(peer_id)
-            ),
+            "interfaces:\n  - name: mesh-a\n    listen_port: 51820\n    private_key: \"existing-b-key\"\n    obfuscation: {h1: 111}\n    peers: []\n",
         );
         let mesh = mesh_with_link();
         let state = FileExistingState {

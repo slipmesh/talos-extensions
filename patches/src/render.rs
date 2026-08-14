@@ -184,6 +184,23 @@ fn parse_loopback_networks(mesh: &MeshConfig) -> Result<(Ipv4Addr, u8, Ipv6Addr,
     Ok((v4, v4_prefix, v6, v6_prefix))
 }
 
+fn parse_tunnel_networks(mesh: &MeshConfig) -> Result<Option<(Ipv4Addr, u8, Ipv6Addr, u8)>> {
+    let Some(tn) = &mesh.cluster.tunnel_networks else {
+        return Ok(None);
+    };
+    let (v4_addr, v4_prefix) =
+        common::netlink::rt::parse_cidr(&tn.ipv4).context("cluster.tunnel_networks.ipv4")?;
+    let IpAddr::V4(v4) = v4_addr else {
+        anyhow::bail!("cluster.tunnel_networks.ipv4 must be an IPv4 CIDR");
+    };
+    let (v6_addr, v6_prefix) =
+        common::netlink::rt::parse_cidr(&tn.ipv6).context("cluster.tunnel_networks.ipv6")?;
+    let IpAddr::V6(v6) = v6_addr else {
+        anyhow::bail!("cluster.tunnel_networks.ipv6 must be an IPv6 CIDR");
+    };
+    Ok(Some((v4, v4_prefix, v6, v6_prefix)))
+}
+
 fn node_id_of(mesh: &MeshConfig, node_name: &str) -> Result<Ipv4Addr> {
     let node = mesh
         .nodes
@@ -204,6 +221,23 @@ pub fn node_loopbacks(mesh: &MeshConfig, node_name: &str) -> Result<(Ipv4Addr, I
         addressing::ipv4_loopback(v4_net, v4_prefix, node_id),
         addressing::ipv6_loopback(v6_net, v6_prefix, node_id),
     ))
+}
+
+/// This node's (v4, v6) tunnel identity, same derivation as `node_loopbacks` but from
+/// `cluster.tunnel_networks` - `None` when that section isn't configured (see
+/// `ClusterConfig::tunnel_networks`'s doc comment).
+pub fn node_tunnel_addresses(
+    mesh: &MeshConfig,
+    node_name: &str,
+) -> Result<Option<(Ipv4Addr, Ipv6Addr)>> {
+    let Some((v4_net, v4_prefix, v6_net, v6_prefix)) = parse_tunnel_networks(mesh)? else {
+        return Ok(None);
+    };
+    let node_id = node_id_of(mesh, node_name)?;
+    Ok(Some((
+        addressing::ipv4_loopback(v4_net, v4_prefix, node_id),
+        addressing::ipv6_loopback(v6_net, v6_prefix, node_id),
+    )))
 }
 
 /// Full mesh minus self: every other node in `mesh.yaml`'s `nodes`, addressed by its IPv6
@@ -305,6 +339,22 @@ fn announce_for(mesh: &MeshConfig) -> Vec<AnnounceEntry> {
 
 pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<RouterConfig> {
     let (v4, v6) = node_loopbacks(mesh, node_name)?;
+    let mut direct_interfaces = direct_interfaces_for(mesh, node_name)?;
+    // OSPF here is `ospf v3` (IPv6-only - see `bird.conf`'s `protocol ospf v3 mesh6`): it never sees,
+    // let alone redistributes, an IPv4 address on a `mesh-*` interface at all (BIRD's own
+    // `ospf_get_af` filters out addresses of the "wrong" family before stub-network advertisement
+    // even runs). So the tunnel IPv4 address `mesh_interfaces_for` puts on every `mesh-*` interface
+    // (see `node_tunnel_addresses`) would otherwise exist purely locally - reachable on no other
+    // node, meaning replies masqueraded through it can never route back. `protocol direct` doesn't
+    // have this family restriction (that's exactly how `router-lo`'s own IPv4 loopback already
+    // reaches the rest of the mesh, via the `direct1` block `bird.conf` always renders) - so once
+    // `tunnel_networks` is configured, `mesh-*` needs the same `protocol direct` treatment
+    // `direct_interfaces` already gives `cni*`/other node-local interfaces.
+    if node_tunnel_addresses(mesh, node_name)?.is_some()
+        && !direct_interfaces.iter().any(|s| s == "mesh-*")
+    {
+        direct_interfaces.push("mesh-*".to_string());
+    }
     Ok(RouterConfig {
         node: NodeIdentity {
             loopback_addresses: vec![format!("{v4}/32"), format!("{v6}/128")],
@@ -312,7 +362,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         bgp_as: mesh.cluster.bgp_as,
         bgp_peers: bgp_peers_for(mesh, node_name)?,
         ospf_interfaces: OSPF_INTERFACES.iter().map(|s| s.to_string()).collect(),
-        direct_interfaces: direct_interfaces_for(mesh, node_name)?,
+        direct_interfaces,
         learn: vec![],
         announce: announce_for(mesh),
         bypass: bypass_for(mesh, node_name),
@@ -320,9 +370,12 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
 }
 
 /// This node's mesh-link interfaces: one full-tunnel `InterfaceEntry` per `mesh.links` entry it's
-/// party to, named after the *peer's* `short_id` (matching what the interface was actually named
-/// on the wire in the old system too - see `addressing::short_id`'s doc comment), all sharing this
-/// node's own deterministic link-local address.
+/// party to, named after the *peer's own node name* (`mesh-<peer_name>`) - purely a local, kernel-
+/// side label, never exchanged over the wire (AmneziaWG/WireGuard identify peers by public key, not
+/// interface name), so there's no interop reason to keep it opaque/hex like the old system's
+/// `short_id`-based naming did. `awg::config::validate`'s `IFNAMSIZ` check (name.len() <= 15) still
+/// applies - `mesh-` (5 bytes) plus a node name over 10 bytes fails generation loudly rather than
+/// silently truncating; every current `mesh.yaml` node name fits comfortably.
 fn mesh_interfaces_for(
     mesh: &MeshConfig,
     node_name: &str,
@@ -330,6 +383,17 @@ fn mesh_interfaces_for(
 ) -> Result<Vec<InterfaceEntry>> {
     let (_, own_loopback) = node_loopbacks(mesh, node_name)?;
     let own_link_local = router::bird::link_local_from_loopback(own_loopback);
+    let own_tunnel = node_tunnel_addresses(mesh, node_name)?;
+    // When `tunnel_networks` is configured, its IPv6 half does double duty as the interface's sole
+    // scope-link address, replacing the loopback-derived one - both are equally valid SCOPE_LINK
+    // candidates for OSPFv3 (`ospf_ifa_notify3` only cares about scope, not which address), and
+    // carrying two at once leaves it ambiguous which one BIRD actually sources Hello/LSA packets
+    // from. Falls back to the loopback-derived link-local when `tunnel_networks` isn't set, so OSPF
+    // keeps working unchanged for any `mesh.yaml` that hasn't opted into the new scheme.
+    let (interface_link_local, tunnel_v4) = match own_tunnel {
+        Some((v4, v6)) => (v6, Some(v4)),
+        None => (own_link_local, None),
+    };
     let own_private_key = resolved
         .mesh_private_keys
         .get(node_name)
@@ -359,10 +423,15 @@ fn mesh_interfaces_for(
             .cloned()
             .unwrap_or_default();
 
+        let mut addresses = vec![format!("{interface_link_local}/64")];
+        if let Some(tunnel_v4) = tunnel_v4 {
+            addresses.push(format!("{tunnel_v4}/32"));
+        }
+
         out.push(InterfaceEntry {
-            name: format!("mesh-{}", addressing::short_id(peer_node.node_id.parse()?)),
+            name: format!("mesh-{peer_name}"),
             listen_port: link.port,
-            addresses: vec![format!("{own_link_local}/64")],
+            addresses,
             private_key: own_private_key.clone(),
             obfuscation,
             handshake_stale_secs: None,
@@ -703,6 +772,14 @@ bypass:
     }
 
     #[test]
+    fn render_router_config_omits_mesh_glob_from_direct_interfaces_when_tunnel_networks_not_configured()
+     {
+        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let cfg = render_router_config(&mesh, "a").unwrap();
+        assert!(!cfg.direct_interfaces.iter().any(|s| s == "mesh-*"));
+    }
+
+    #[test]
     fn render_router_config_uses_explicit_cluster_direct_interfaces() {
         let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.direct_interfaces = vec!["cni0".to_string(), "extra0".to_string()];
@@ -787,18 +864,12 @@ nftables:
     }
 
     #[test]
-    fn mesh_interfaces_for_names_the_interface_after_the_peers_short_id() {
+    fn mesh_interfaces_for_names_the_interface_after_the_peers_node_name() {
         let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         assert_eq!(ifaces.len(), 1);
-        assert_eq!(
-            ifaces[0].name,
-            format!(
-                "mesh-{}",
-                addressing::short_id("10.62.0.2".parse().unwrap())
-            )
-        );
+        assert_eq!(ifaces[0].name, "mesh-b");
         assert_eq!(ifaces[0].listen_port, 51820);
     }
 
@@ -833,6 +904,85 @@ nftables:
         let expected_public =
             keys::public_key_from_private(&resolved.mesh_private_keys["b"]).unwrap();
         assert_eq!(ifaces[0].peers[0].public_key, expected_public);
+    }
+
+    fn mesh_and_roadwarriors_with_tunnel_networks_yaml() -> &'static str {
+        r#"
+cluster:
+  bgp_as: 64512
+  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  tunnel_networks: {ipv4: "10.62.1.0/24", ipv6: "fd00:63::/120"}
+nodes:
+  - {name: a, node_id: "10.62.0.1"}
+  - {name: b, node_id: "10.62.0.2", endpoint: "b.example.com"}
+mesh:
+  links:
+    - {pair: [a, b], port: 51820}
+"#
+    }
+
+    #[test]
+    fn node_tunnel_addresses_is_none_when_not_configured() {
+        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        assert!(node_tunnel_addresses(&mesh, "a").unwrap().is_none());
+    }
+
+    #[test]
+    fn node_tunnel_addresses_ors_node_id_onto_cluster_networks() {
+        let mesh: MeshConfig =
+            serde_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+        let (v4, v6) = node_tunnel_addresses(&mesh, "a").unwrap().unwrap();
+        assert_eq!(v4.to_string(), "10.62.1.1");
+        assert_eq!(v6.to_string(), "fd00:63::1");
+    }
+
+    #[test]
+    fn mesh_interfaces_for_uses_tunnel_ipv6_as_the_sole_link_local_when_configured() {
+        let mesh: MeshConfig =
+            serde_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+        let resolved = resolved_for(&mesh);
+        let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
+        // The tunnel IPv6 address (also link-local) replaces the loopback-derived link-local
+        // entirely - never both at once on the same interface.
+        assert_eq!(
+            ifaces[0].addresses,
+            vec!["fd00:63::1/64".to_string(), "10.62.1.1/32".to_string()]
+        );
+    }
+
+    #[test]
+    fn mesh_interfaces_for_uses_the_loopback_derived_link_local_when_not_configured() {
+        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let resolved = resolved_for(&mesh);
+        let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
+        assert_eq!(ifaces[0].addresses, vec!["fe80::a3e:1/64".to_string()]);
+    }
+
+    #[test]
+    fn render_router_config_adds_mesh_glob_to_direct_interfaces_when_tunnel_networks_configured() {
+        // Without this, the tunnel IPv4 address `mesh_interfaces_for` assigns is never
+        // redistributed anywhere - OSPF here is IPv6-only (`ospf v3`) and silently ignores IPv4
+        // addresses entirely, so `protocol direct` on `mesh-*` is the only thing that can get it
+        // into BGP, same as `direct1` already does for `router-lo`'s own IPv4 loopback.
+        let mesh: MeshConfig =
+            serde_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+        let cfg = render_router_config(&mesh, "a").unwrap();
+        assert!(cfg.direct_interfaces.iter().any(|s| s == "mesh-*"));
+    }
+
+    #[test]
+    fn render_router_config_does_not_duplicate_mesh_glob_if_already_present() {
+        let mut mesh: MeshConfig =
+            serde_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+        mesh.cluster.direct_interfaces = vec!["mesh-*".to_string()];
+        let cfg = render_router_config(&mesh, "a").unwrap();
+        assert_eq!(
+            cfg.direct_interfaces
+                .iter()
+                .filter(|s| *s == "mesh-*")
+                .count(),
+            1
+        );
     }
 
     #[test]
