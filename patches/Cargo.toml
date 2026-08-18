@@ -8,7 +8,7 @@ repository.workspace = true
 description = "Offline generator for Talos machine-config patches (awg mesh/roadwarriors, router BGP/OSPF, nftables) from a single mesh.yaml topology file - never touches a live node"
 
 [[bin]]
-name = "patches"
+name = "slipmesh-patches"
 path = "src/main.rs"
 
 [dependencies]
