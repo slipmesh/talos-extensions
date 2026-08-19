@@ -152,11 +152,15 @@ pub fn resolve_secrets(mesh: &MeshConfig, existing: &impl ExistingState) -> Reso
         );
         roadwarrior_private_keys.insert(pool.name.clone(), key);
 
-        let obfuscation = resolve_obfuscation(
-            &pool.obfuscation,
-            &mesh.obfuscation,
-            existing.roadwarrior_obfuscation(&pool.name).as_ref(),
-        );
+        let obfuscation = if pool.plain {
+            Obfuscation::default()
+        } else {
+            resolve_obfuscation(
+                &pool.obfuscation,
+                &mesh.obfuscation,
+                existing.roadwarrior_obfuscation(&pool.name).as_ref(),
+            )
+        };
         roadwarrior_obfuscation.insert(pool.name.clone(), obfuscation);
     }
 
@@ -463,7 +467,7 @@ fn roadwarrior_interfaces_for(
             let mut addresses = vec![pool.address.clone()];
             addresses.extend(pool.address6.clone());
             InterfaceEntry {
-                name: pool.iface.clone(),
+                name: format!("rw-{}", pool.name),
                 listen_port: pool.listen_port,
                 addresses,
                 private_key: resolved
@@ -672,6 +676,23 @@ mesh:
         assert_ne!(obfuscation, &Obfuscation::default());
     }
 
+    #[test]
+    fn resolve_secrets_plain_roadwarrior_pool_skips_obfuscation_generation_entirely() {
+        let mut mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        mesh.roadwarriors[0].plain = true;
+        let resolved = resolved_for(&mesh);
+        let obfuscation = &resolved.roadwarrior_obfuscation[&mesh.roadwarriors[0].name];
+        assert_eq!(obfuscation, &Obfuscation::default());
+    }
+
+    #[test]
+    fn resolve_secrets_non_plain_roadwarrior_pool_still_generates_obfuscation() {
+        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let resolved = resolved_for(&mesh);
+        let obfuscation = &resolved.roadwarrior_obfuscation[&mesh.roadwarriors[0].name];
+        assert_ne!(obfuscation, &Obfuscation::default());
+    }
+
     fn three_node_mesh_yaml() -> &'static str {
         r#"
 cluster:
@@ -844,7 +865,6 @@ mesh:
 roadwarriors:
   - name: eu
     node_hostnames: [a]
-    iface: rw-eu
     address: "10.99.0.1/24"
     listen_port: 51900
     clients:

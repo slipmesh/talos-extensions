@@ -66,7 +66,7 @@ impl ExistingState for FileExistingState<'_> {
             load_existing_awg_config(&self.patches_dir, host)?
                 .interfaces
                 .into_iter()
-                .find(|i| i.name == pool.iface)
+                .find(|i| i.name == format!("rw-{}", pool.name))
                 .map(|i| i.private_key)
         })
     }
@@ -81,7 +81,7 @@ impl ExistingState for FileExistingState<'_> {
             load_existing_awg_config(&self.patches_dir, host)?
                 .interfaces
                 .into_iter()
-                .find(|i| i.name == pool.iface)
+                .find(|i| i.name == format!("rw-{}", pool.name))
                 .map(|i| i.obfuscation)
         })
     }

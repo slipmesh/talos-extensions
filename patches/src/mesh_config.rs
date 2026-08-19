@@ -159,9 +159,6 @@ pub struct RoadwarriorPool {
     /// Which nodes terminate connections for this pool - each gets its own `InterfaceEntry` for
     /// it, see `render.rs`.
     pub node_hostnames: Vec<String>,
-    /// AWG interface name this pool renders as - <=15 bytes, checked by `awg::config::validate`
-    /// on the rendered output, not re-checked here.
-    pub iface: String,
     pub address: String,
     #[serde(default)]
     pub address6: Option<String>,
@@ -172,6 +169,11 @@ pub struct RoadwarriorPool {
     /// single roadwarriors device key, not per-node.
     #[serde(default)]
     pub private_key: Option<String>,
+    /// This pool is plain WireGuard, no AmneziaWG obfuscation at all - for clients that can't do
+    /// AmneziaWG's extensions (a phone/laptop running a stock WireGuard app, not the AmneziaWG
+    /// app). Same precedent and same reason as `MeshLink::plain`.
+    #[serde(default)]
+    pub plain: bool,
     #[serde(default)]
     pub obfuscation: Obfuscation,
     #[serde(default)]
@@ -508,12 +510,12 @@ nodes:
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),
             node_hostnames: vec!["ghost".to_string()],
-            iface: "rw-eu".to_string(),
             address: "10.62.253.1/24".to_string(),
             address6: None,
             listen_port: 51820,
             handshake_stale_secs: None,
             private_key: None,
+            plain: false,
             obfuscation: Obfuscation::default(),
             clients: vec![],
         });
@@ -526,12 +528,12 @@ nodes:
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),
             node_hostnames: vec![],
-            iface: "rw-eu".to_string(),
             address: "10.62.253.1/24".to_string(),
             address6: None,
             listen_port: 51820,
             handshake_stale_secs: None,
             private_key: None,
+            plain: false,
             obfuscation: Obfuscation::default(),
             clients: vec![],
         });
@@ -544,12 +546,12 @@ nodes:
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),
             node_hostnames: vec!["a".to_string()],
-            iface: "rw-eu".to_string(),
             address: "10.62.253.1/24".to_string(),
             address6: None,
             listen_port: 51820,
             handshake_stale_secs: None,
             private_key: None,
+            plain: false,
             obfuscation: Obfuscation::default(),
             clients: vec![
                 RoadwarriorClient {
@@ -592,12 +594,12 @@ nodes:
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),
             node_hostnames: vec!["a".to_string()],
-            iface: "rw-eu".to_string(),
             address: "10.62.253.1/24".to_string(),
             address6: None,
             listen_port: 51821,
             handshake_stale_secs: None,
             private_key: None,
+            plain: false,
             obfuscation: Obfuscation::default(),
             clients: vec![],
         });
