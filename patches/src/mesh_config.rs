@@ -176,6 +176,13 @@ pub struct RoadwarriorPool {
     pub plain: bool,
     #[serde(default)]
     pub obfuscation: Obfuscation,
+    /// Client-side `DNS =` for this pool's exported configs - a client-local resolver setting,
+    /// never rendered into the server's own `awg` interface config (`render.rs` never reads this
+    /// field). `None` falls back to the cluster's own CoreDNS ClusterIP, derived from
+    /// `cluster.service_subnet` (the well-known `.10` convention kubeadm/most distros use) - see
+    /// `roadwarrior::resolve_dns`.
+    #[serde(default)]
+    pub dns: Option<String>,
     #[serde(default)]
     pub clients: Vec<RoadwarriorClient>,
 }
@@ -517,6 +524,7 @@ nodes:
             private_key: None,
             plain: false,
             obfuscation: Obfuscation::default(),
+            dns: None,
             clients: vec![],
         });
         assert!(validate(&cfg).is_err());
@@ -535,6 +543,7 @@ nodes:
             private_key: None,
             plain: false,
             obfuscation: Obfuscation::default(),
+            dns: None,
             clients: vec![],
         });
         assert!(validate(&cfg).is_err());
@@ -553,6 +562,7 @@ nodes:
             private_key: None,
             plain: false,
             obfuscation: Obfuscation::default(),
+            dns: None,
             clients: vec![
                 RoadwarriorClient {
                     name: "alice".to_string(),
@@ -601,6 +611,7 @@ nodes:
             private_key: None,
             plain: false,
             obfuscation: Obfuscation::default(),
+            dns: None,
             clients: vec![],
         });
         validate(&cfg).unwrap();

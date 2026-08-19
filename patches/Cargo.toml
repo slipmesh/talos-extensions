@@ -25,3 +25,7 @@ sha2 = "0.10.9"
 similar = "2.7.0"
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 rand = "0.8.5"
+yamlpath.workspace = true
+yamlpatch.workspace = true
+yaml_serde.workspace = true
+qrcode.workspace = true

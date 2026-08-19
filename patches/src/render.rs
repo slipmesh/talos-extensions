@@ -54,7 +54,7 @@ fn link_key(pair: &[String; 2]) -> String {
     format!("{}|{}", sorted[0], sorted[1])
 }
 
-fn resolve_string(
+pub(crate) fn resolve_string(
     specific: Option<&str>,
     existing: Option<String>,
     generate: impl FnOnce() -> String,
@@ -69,7 +69,7 @@ fn resolve_string(
 /// default) field by field, then over `existing` (the previous patch's value), then generates
 /// fresh values for whatever's still unset - see `obfuscation_gen`'s own doc comment for why that
 /// only ever fills in the "original nine" fields.
-fn resolve_obfuscation(
+pub(crate) fn resolve_obfuscation(
     specific: &Obfuscation,
     global: &Obfuscation,
     existing: Option<&Obfuscation>,

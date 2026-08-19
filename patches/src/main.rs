@@ -14,6 +14,7 @@ mod keys;
 mod mesh_config;
 mod obfuscation_gen;
 mod render;
+mod roadwarrior;
 mod segments;
 
 use anyhow::{Context, Result};
@@ -50,6 +51,55 @@ enum Command {
         #[arg(long, default_value = "patches")]
         patches_dir: PathBuf,
     },
+    /// Add a client to a `roadwarriors:` pool in mesh.yaml.
+    RwAdd {
+        /// Which roadwarriors pool (mesh.yaml's `roadwarriors[].name`, e.g. `plain`).
+        #[arg(long = "if")]
+        if_: String,
+        /// Client name (must not already exist in the pool).
+        #[arg(long)]
+        name: String,
+        /// Comma-separated CIDRs (v4/v6 mixed OK). A bare address gets /32 (v4) or /128 (v6).
+        #[arg(long = "allowed-ips")]
+        allowed_ips: String,
+        /// Client already has its own keypair - only its public half is ever given to us.
+        #[arg(long = "public-key")]
+        public_key: Option<String>,
+        /// Print a ready-to-import client config to stdout.
+        #[arg(long)]
+        export: bool,
+        /// Print the client config as an in-terminal QR code too.
+        #[arg(long)]
+        qr: bool,
+        #[arg(long, default_value = "mesh.yaml")]
+        config: PathBuf,
+        #[arg(long, default_value = "patches")]
+        patches_dir: PathBuf,
+    },
+    /// Remove a client from a `roadwarriors:` pool in mesh.yaml.
+    RwDel {
+        #[arg(long = "if")]
+        if_: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "mesh.yaml")]
+        config: PathBuf,
+    },
+    /// Re-render an existing client's config/QR without changing mesh.yaml.
+    RwInspect {
+        #[arg(long = "if")]
+        if_: String,
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        export: bool,
+        #[arg(long)]
+        qr: bool,
+        #[arg(long, default_value = "mesh.yaml")]
+        config: PathBuf,
+        #[arg(long, default_value = "patches")]
+        patches_dir: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -62,7 +112,115 @@ fn main() -> Result<()> {
             config,
             patches_dir,
         } => generate(node.as_deref(), check, diff, &config, &patches_dir),
+        Command::RwAdd {
+            if_,
+            name,
+            allowed_ips,
+            public_key,
+            export,
+            qr,
+            config,
+            patches_dir,
+        } => rw_add(&if_, &name, &allowed_ips, public_key.as_deref(), export, qr, &config, &patches_dir),
+        Command::RwDel { if_, name, config } => rw_del(&if_, &name, &config),
+        Command::RwInspect {
+            if_,
+            name,
+            export,
+            qr,
+            config,
+            patches_dir,
+        } => rw_inspect(&if_, &name, export, qr, &config, &patches_dir),
     }
+}
+
+fn rw_add(
+    if_: &str,
+    name: &str,
+    allowed_ips: &str,
+    public_key: Option<&str>,
+    export: bool,
+    qr: bool,
+    config_path: &Path,
+    patches_dir: &Path,
+) -> Result<()> {
+    let raw_mesh =
+        std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
+    let mesh: mesh_config::MeshConfig =
+        serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
+    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
+
+    let (updated, client_config) = roadwarrior::add(
+        &mesh,
+        &raw_mesh,
+        patches_dir,
+        if_,
+        name,
+        allowed_ips,
+        public_key,
+        export,
+        qr,
+    )?;
+
+    std::fs::write(config_path, &updated)
+        .with_context(|| format!("writing {config_path:?}"))?;
+    println!("added {name:?} to roadwarriors pool {if_:?} in {}", config_path.display());
+
+    if let Some((_, text)) = client_config {
+        if export {
+            println!("\n{text}");
+        }
+        if qr {
+            println!("\n{}", roadwarrior::render_qr(&text)?);
+        }
+    }
+    Ok(())
+}
+
+fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
+    let raw_mesh =
+        std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
+    let mesh: mesh_config::MeshConfig =
+        serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
+    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
+
+    let (updated, public_key) = roadwarrior::del(&mesh, &raw_mesh, if_, name)?;
+
+    std::fs::write(config_path, &updated)
+        .with_context(|| format!("writing {config_path:?}"))?;
+    println!(
+        "removed {name:?} (public_key {public_key:?}) from roadwarriors pool {if_:?} in {}",
+        config_path.display()
+    );
+    Ok(())
+}
+
+fn rw_inspect(
+    if_: &str,
+    name: &str,
+    export: bool,
+    qr: bool,
+    config_path: &Path,
+    patches_dir: &Path,
+) -> Result<()> {
+    let raw_mesh =
+        std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
+    let mesh: mesh_config::MeshConfig =
+        serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
+    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
+
+    let text = roadwarrior::inspect(&mesh, patches_dir, if_, name)?;
+
+    // Inspecting is pointless with no output at all - default to --export if neither flag was
+    // given, unlike rw-add (where registering a client without ever displaying it is legitimate).
+    let export = export || !qr;
+    if export {
+        println!("{text}");
+    }
+    if qr {
+        println!("\n{}", roadwarrior::render_qr(&text)?);
+    }
+    Ok(())
 }
 
 /// Renders one owned `ExtensionServiceConfig` document: `name`/`mountPath` fixed by convention,
@@ -86,6 +244,7 @@ fn generate(
         std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
     let mesh: mesh_config::MeshConfig =
         serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
+    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
     mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
 
     if let Some(n) = node {

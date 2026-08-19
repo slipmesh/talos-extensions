@@ -28,6 +28,18 @@ tokio = { version = "1.53.1" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
+# Comment/format-preserving YAML patch operations - part of zizmor (github.com/zizmorcore/zizmor),
+# MIT. `patches`' rw-add/rw-del use this instead of a hand-rolled text scan to add/remove one
+# roadwarriors client entry in mesh.yaml without disturbing the rest of that hand-edited file
+# (comments, existing flow-style entries). Pinned to the latest stable (not the 1.30.0-rc1
+# prerelease) since the two crates version in lockstep with each other, not with zizmor itself.
+yamlpath = "1.29.0"
+yamlpatch = "1.29.0"
+yaml_serde = "0.10"
+# QR code encoder - de-facto standard for this in Rust (18M+ downloads). Used by `rw-add`/
+# `rw-inspect --qr` to print a scannable client config straight to the terminal.
+qrcode = "0.14.1"
+
 genetlink = "0.2.7"
 # Pinned to a specific rev, not crates.io's 0.1.2: the amneziawg kernel module we build against
 # (see ../talos-awg-extension/versions.env's AWG_REF, currently the latest upstream commit) speaks
