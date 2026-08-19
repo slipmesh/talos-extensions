@@ -41,6 +41,15 @@ async fn run() -> Result<()> {
     let rt = RtClient::connect().context("failed to open rtnetlink socket")?;
     let mut awg = AwgClient::connect().context("failed to open genetlink socket")?;
 
+    // GC runs first, not last: a renamed/removed interface (e.g. a roadwarrior pool split into
+    // two, reusing the old one's port) must be torn down before we try to create/update whatever
+    // replaces it, or the replacement can lose a socket-bind race against the interface it's
+    // superseding - see the port-collision crash-loop this fixed.
+    let desired_names: HashSet<&str> = cfg.interfaces.iter().map(|i| i.name.as_str()).collect();
+    gc::gc(&rt, &desired_names)
+        .await
+        .context("GC pass failed")?;
+
     let mut failed = Vec::new();
     for iface in &cfg.interfaces {
         if let Err(e) = interface::ensure_interface(&rt, &mut awg, iface).await {
@@ -48,11 +57,6 @@ async fn run() -> Result<()> {
             failed.push(iface.name.clone());
         }
     }
-
-    let desired_names: HashSet<&str> = cfg.interfaces.iter().map(|i| i.name.as_str()).collect();
-    gc::gc(&rt, &desired_names)
-        .await
-        .context("GC pass failed")?;
 
     if !failed.is_empty() {
         anyhow::bail!(
