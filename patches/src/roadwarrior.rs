@@ -122,9 +122,16 @@ fn resolve_pool_identity(
 }
 
 /// The pool's endpoint(s): every `node_hostnames` entry's `nodes[].endpoint` + `pool.listen_port`.
-/// First one is the config's primary `Endpoint`, the rest are noted as alternates.
-fn pool_endpoints(mesh: &MeshConfig, pool: &RoadwarriorPool) -> Result<Vec<String>> {
-    pool.node_hostnames
+/// First one is the config's primary `Endpoint`, the rest are noted as alternates - `primary`
+/// (`--endpoint`) picks which `node_hostnames` entry that is, instead of always the first one in
+/// mesh.yaml's own order; the rest keep their relative order behind it.
+fn pool_endpoints(
+    mesh: &MeshConfig,
+    pool: &RoadwarriorPool,
+    primary: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut endpoints: Vec<String> = pool
+        .node_hostnames
         .iter()
         .map(|host| {
             let node = mesh
@@ -142,7 +149,24 @@ fn pool_endpoints(mesh: &MeshConfig, pool: &RoadwarriorPool) -> Result<Vec<Strin
             })?;
             Ok(format!("{endpoint}:{}", pool.listen_port))
         })
-        .collect()
+        .collect::<Result<_>>()?;
+
+    if let Some(primary_host) = primary {
+        let idx = pool
+            .node_hostnames
+            .iter()
+            .position(|h| h == primary_host)
+            .with_context(|| {
+                format!(
+                    "--endpoint {primary_host:?} is not one of pool {:?}'s node_hostnames: {:?}",
+                    pool.name, pool.node_hostnames
+                )
+            })?;
+        let promoted = endpoints.remove(idx);
+        endpoints.insert(0, promoted);
+    }
+
+    Ok(endpoints)
 }
 
 /// The client-side `DNS =` value for this pool: `pool.dns` if set, else the cluster's own CoreDNS
@@ -166,25 +190,21 @@ pub(crate) fn resolve_dns(mesh: &MeshConfig, pool: &RoadwarriorPool) -> Option<S
 /// AmneziaWG `Jc..H4` lines are only emitted when `obfuscation` is non-default (a `plain` pool
 /// always resolves to `Obfuscation::default()`, see `resolve_pool_identity`).
 ///
-/// `hostnames`/`endpoints` are parallel (same order as the pool's own `node_hostnames`) - the
-/// first is the live `Endpoint`, any rest are commented-out `#Endpoint =` lines (not a single
-/// summary comment) so they're each individually ready to uncomment.
+/// `endpoints`' first entry is the live `Endpoint`; any rest are commented-out `#Endpoint =`
+/// lines (not a single summary comment) so they're each individually ready to uncomment. No
+/// `# Name`/similar leading comment - neither the official WireGuard app nor AmneziaWG's
+/// recognizes one on QR import (confirmed: no documented convention, generic "Server 1"-style
+/// naming instead), and the only place that idea exists is an open, third-party feature request
+/// for a different app entirely - not worth a line that no importer actually reads.
 pub(crate) fn render_client_config(
     private_key: &ClientPrivateKey,
     address: &[String],
     dns: Option<&str>,
     server_public_key: &str,
-    pool_name: &str,
-    hostnames: &[String],
-    listen_port: u16,
     endpoints: &[String],
     obfuscation: &Obfuscation,
 ) -> String {
     let mut out = String::new();
-    out.push_str(&format!(
-        "# Name: {pool_name}:{listen_port} {}\n",
-        hostnames.join(", ")
-    ));
     out.push_str("[Interface]\n");
     let key_line = match private_key {
         ClientPrivateKey::Known(k) => k.as_str(),
@@ -349,6 +369,7 @@ pub(crate) fn remove_client_from_yaml(
 /// `rw-add`: validates, resolves/generates the client's keypair, patches `mesh.yaml`, and
 /// (if `export`/`qr`) prints the client config/QR. Returns the updated `mesh.yaml` content for
 /// the caller to write - this module never touches the filesystem itself, see `main.rs`.
+#[allow(clippy::too_many_arguments)]
 pub fn add(
     mesh: &MeshConfig,
     source: &str,
@@ -357,6 +378,7 @@ pub fn add(
     name: &str,
     allowed_ips_raw: &str,
     public_key: Option<&str>,
+    endpoint: Option<&str>,
     export: bool,
     qr: bool,
 ) -> Result<(String, Option<(ClientPrivateKey, String)>)> {
@@ -391,15 +413,12 @@ pub fn add(
     let config = if export || qr {
         let (server_private_key, obfuscation) = resolve_pool_identity(mesh, pool, patches_dir);
         let server_public_key = keys::public_key_from_private(&server_private_key)?;
-        let endpoints = pool_endpoints(mesh, pool)?;
+        let endpoints = pool_endpoints(mesh, pool, endpoint)?;
         let text = render_client_config(
             &client_private_key,
             &allowed_ips,
             resolve_dns(mesh, pool).as_deref(),
             &server_public_key,
-            &pool.name,
-            &pool.node_hostnames,
-            pool.listen_port,
             &endpoints,
             &obfuscation,
         );
@@ -429,6 +448,8 @@ pub fn inspect(
     patches_dir: &Path,
     if_: &str,
     name: &str,
+    private_key: Option<&str>,
+    endpoint: Option<&str>,
 ) -> Result<String> {
     let (_, pool) = find_pool(mesh, if_)?;
     let client_index = find_client_index(pool, name)?;
@@ -436,15 +457,25 @@ pub fn inspect(
 
     let (server_private_key, obfuscation) = resolve_pool_identity(mesh, pool, patches_dir);
     let server_public_key = keys::public_key_from_private(&server_private_key)?;
-    let endpoints = pool_endpoints(mesh, pool)?;
+    let endpoints = pool_endpoints(mesh, pool, endpoint)?;
+    let client_private_key = match private_key {
+        Some(pk) => {
+            let derived = keys::public_key_from_private(pk).context("--private-key")?;
+            anyhow::ensure!(
+                derived == client.public_key,
+                "--private-key doesn't match {name:?}'s stored public_key in mesh.yaml \
+                 (derived {derived:?}, expected {:?}) - wrong key, or wrong client",
+                client.public_key
+            );
+            ClientPrivateKey::Known(pk.to_string())
+        }
+        None => ClientPrivateKey::Unknown,
+    };
     Ok(render_client_config(
-        &ClientPrivateKey::Unknown,
+        &client_private_key,
         &client.allowed_ips,
         resolve_dns(mesh, pool).as_deref(),
         &server_public_key,
-        &pool.name,
-        &pool.node_hostnames,
-        pool.listen_port,
         &endpoints,
         &obfuscation,
     ))
@@ -492,6 +523,70 @@ roadwarriors:
 
     fn mesh() -> MeshConfig {
         serde_yaml::from_str(fixture()).unwrap()
+    }
+
+    #[test]
+    fn pool_endpoints_defaults_to_node_hostnames_order() {
+        let m = mesh();
+        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let endpoints = pool_endpoints(&m, pool, None).unwrap();
+        assert_eq!(endpoints, vec!["192.0.2.10:51820", "192.0.2.11:51820"]);
+    }
+
+    #[test]
+    fn pool_endpoints_promotes_the_requested_endpoint_to_primary() {
+        let m = mesh();
+        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let endpoints = pool_endpoints(&m, pool, Some("b")).unwrap();
+        assert_eq!(endpoints, vec!["192.0.2.11:51820", "192.0.2.10:51820"]);
+    }
+
+    #[test]
+    fn pool_endpoints_errors_on_an_endpoint_not_in_node_hostnames() {
+        let m = mesh();
+        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let err = pool_endpoints(&m, pool, Some("ghost")).unwrap_err();
+        assert!(err.to_string().contains("ghost"), "error was: {err}");
+    }
+
+    #[test]
+    fn inspect_with_a_matching_private_key_fills_the_config_instead_of_a_placeholder() {
+        let alice_priv = keys::generate_private_key();
+        let alice_pub = keys::public_key_from_private(&alice_priv).unwrap();
+        let yaml = fixture().replace(
+            r#"{name: alice, public_key: "AAA=", allowed_ips: ["198.51.100.41/32"]}"#,
+            &format!(
+                r#"{{name: alice, public_key: "{alice_pub}", allowed_ips: ["198.51.100.41/32"]}}"#
+            ),
+        );
+        let m: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let cfg = inspect(
+            &m,
+            Path::new("/nonexistent"),
+            "plain",
+            "alice",
+            Some(&alice_priv),
+            None,
+        )
+        .unwrap();
+        assert!(cfg.contains(&format!("PrivateKey = {alice_priv}")));
+        assert!(!cfg.contains("<enter your private key here>"));
+    }
+
+    #[test]
+    fn inspect_rejects_a_private_key_that_does_not_match_the_stored_public_key() {
+        let m = mesh();
+        let wrong_priv = keys::generate_private_key();
+        let err = inspect(
+            &m,
+            Path::new("/nonexistent"),
+            "plain",
+            "alice",
+            Some(&wrong_priv),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("doesn't match"), "error was: {err}");
     }
 
     #[test]
@@ -657,15 +752,12 @@ roadwarriors:
         let (_, pool) = find_pool(&m, "obfuscation").unwrap();
         let (server_key, obf) = resolve_pool_identity(&m, pool, Path::new("/nonexistent"));
         let server_pub = keys::public_key_from_private(&server_key).unwrap();
-        let endpoints = pool_endpoints(&m, pool).unwrap();
+        let endpoints = pool_endpoints(&m, pool, None).unwrap();
         let cfg = render_client_config(
             &ClientPrivateKey::Unknown,
             &["203.0.113.22/32".to_string()],
             resolve_dns(&m, pool).as_deref(),
             &server_pub,
-            &pool.name,
-            &pool.node_hostnames,
-            pool.listen_port,
             &endpoints,
             &obf,
         );
@@ -673,7 +765,7 @@ roadwarriors:
         assert!(cfg.contains("H4 = 2070706730"));
         assert!(cfg.contains("<enter your private key here>"));
         assert!(cfg.contains("Endpoint = 192.0.2.10:51821"));
-        assert!(cfg.contains("# Name: obfuscation:51821 a"));
+        assert!(!cfg.contains("# Name"));
         assert!(cfg.contains("DNS = 100.64.0.10"));
         assert!(cfg.contains("PersistentKeepalive = 25"));
     }
@@ -685,15 +777,12 @@ roadwarriors:
         let (server_key, obf) = resolve_pool_identity(&m, pool, Path::new("/nonexistent"));
         assert_eq!(obf, Obfuscation::default());
         let server_pub = keys::public_key_from_private(&server_key).unwrap();
-        let endpoints = pool_endpoints(&m, pool).unwrap();
+        let endpoints = pool_endpoints(&m, pool, None).unwrap();
         let cfg = render_client_config(
             &ClientPrivateKey::Known("client-priv-key".to_string()),
             &["198.51.100.41/32".to_string()],
             resolve_dns(&m, pool).as_deref(),
             &server_pub,
-            &pool.name,
-            &pool.node_hostnames,
-            pool.listen_port,
             &endpoints,
             &obf,
         );
@@ -701,7 +790,7 @@ roadwarriors:
         assert!(cfg.contains("PrivateKey = client-priv-key"));
         assert!(cfg.contains("Endpoint = 192.0.2.10:51820"));
         assert!(cfg.contains("#Endpoint = 192.0.2.11:51820"));
-        assert!(cfg.contains("# Name: plain:51820 a, b"));
+        assert!(!cfg.contains("# Name"));
     }
 
     #[test]
@@ -714,6 +803,7 @@ roadwarriors:
             "plain",
             "dave",
             "198.51.100.99",
+            None,
             None,
             false,
             false,
@@ -733,6 +823,7 @@ roadwarriors:
             "dave",
             "198.51.100.99",
             Some("DDD="),
+            None,
             false,
             false,
         )
@@ -751,6 +842,7 @@ roadwarriors:
             "plain",
             "dave",
             "198.51.100.99",
+            None,
             None,
             true,
             false,
@@ -785,7 +877,7 @@ roadwarriors:
     #[test]
     fn inspect_renders_the_same_config_shape_as_add_with_a_placeholder_key() {
         let m = mesh();
-        let cfg = inspect(&m, Path::new("/nonexistent"), "obfuscation", "carol").unwrap();
+        let cfg = inspect(&m, Path::new("/nonexistent"), "obfuscation", "carol", None, None).unwrap();
         assert!(cfg.contains("<enter your private key here>"));
         assert!(cfg.contains("Address = 203.0.113.22/32"));
         assert!(cfg.contains("Jc = 4"));

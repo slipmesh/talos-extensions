@@ -65,6 +65,10 @@ enum Command {
         /// Client already has its own keypair - only its public half is ever given to us.
         #[arg(long = "public-key")]
         public_key: Option<String>,
+        /// Which of the pool's node_hostnames to put first as the live Endpoint (default: the
+        /// first one in mesh.yaml's own order) - the rest still appear as commented #Endpoint =.
+        #[arg(long)]
+        endpoint: Option<String>,
         /// Print a ready-to-import client config to stdout.
         #[arg(long)]
         export: bool,
@@ -91,6 +95,14 @@ enum Command {
         if_: String,
         #[arg(long)]
         name: String,
+        /// This client's private key, if you happen to have it (never persisted by rw-add, so
+        /// normally unknown) - fills in the config in full instead of a placeholder.
+        #[arg(long = "private-key")]
+        private_key: Option<String>,
+        /// Which of the pool's node_hostnames to put first as the live Endpoint (default: the
+        /// first one in mesh.yaml's own order) - the rest still appear as commented #Endpoint =.
+        #[arg(long)]
+        endpoint: Option<String>,
         #[arg(long)]
         export: bool,
         #[arg(long)]
@@ -117,28 +129,52 @@ fn main() -> Result<()> {
             name,
             allowed_ips,
             public_key,
+            endpoint,
             export,
             qr,
             config,
             patches_dir,
-        } => rw_add(&if_, &name, &allowed_ips, public_key.as_deref(), export, qr, &config, &patches_dir),
+        } => rw_add(
+            &if_,
+            &name,
+            &allowed_ips,
+            public_key.as_deref(),
+            endpoint.as_deref(),
+            export,
+            qr,
+            &config,
+            &patches_dir,
+        ),
         Command::RwDel { if_, name, config } => rw_del(&if_, &name, &config),
         Command::RwInspect {
             if_,
             name,
+            private_key,
+            endpoint,
             export,
             qr,
             config,
             patches_dir,
-        } => rw_inspect(&if_, &name, export, qr, &config, &patches_dir),
+        } => rw_inspect(
+            &if_,
+            &name,
+            private_key.as_deref(),
+            endpoint.as_deref(),
+            export,
+            qr,
+            &config,
+            &patches_dir,
+        ),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rw_add(
     if_: &str,
     name: &str,
     allowed_ips: &str,
     public_key: Option<&str>,
+    endpoint: Option<&str>,
     export: bool,
     qr: bool,
     config_path: &Path,
@@ -158,6 +194,7 @@ fn rw_add(
         name,
         allowed_ips,
         public_key,
+        endpoint,
         export,
         qr,
     )?;
@@ -195,9 +232,12 @@ fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rw_inspect(
     if_: &str,
     name: &str,
+    private_key: Option<&str>,
+    endpoint: Option<&str>,
     export: bool,
     qr: bool,
     config_path: &Path,
@@ -209,7 +249,7 @@ fn rw_inspect(
         serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
     mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
 
-    let text = roadwarrior::inspect(&mesh, patches_dir, if_, name)?;
+    let text = roadwarrior::inspect(&mesh, patches_dir, if_, name, private_key, endpoint)?;
 
     // Inspecting is pointless with no output at all - default to --export if neither flag was
     // given, unlike rw-add (where registering a client without ever displaying it is legitimate).
