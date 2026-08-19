@@ -75,6 +75,12 @@ enum Command {
         /// Print the client config as an in-terminal QR code too.
         #[arg(long)]
         qr: bool,
+        /// Swap dark/light QR modules. A dark-themed terminal renders "dark" modules as the
+        /// foreground text color and "light" ones as the background - visually the opposite of
+        /// standard (dark-on-light) QR polarity. Confirmed: the official WireGuard app's own
+        /// scanner rejects that, while AmneziaWG's and a plain camera don't care either way.
+        #[arg(long)]
+        invert: bool,
         #[arg(long, default_value = "mesh.yaml")]
         config: PathBuf,
         #[arg(long, default_value = "patches")]
@@ -107,6 +113,12 @@ enum Command {
         export: bool,
         #[arg(long)]
         qr: bool,
+        /// Swap dark/light QR modules. A dark-themed terminal renders "dark" modules as the
+        /// foreground text color and "light" ones as the background - visually the opposite of
+        /// standard (dark-on-light) QR polarity. Confirmed: the official WireGuard app's own
+        /// scanner rejects that, while AmneziaWG's and a plain camera don't care either way.
+        #[arg(long)]
+        invert: bool,
         #[arg(long, default_value = "mesh.yaml")]
         config: PathBuf,
         #[arg(long, default_value = "patches")]
@@ -132,6 +144,7 @@ fn main() -> Result<()> {
             endpoint,
             export,
             qr,
+            invert,
             config,
             patches_dir,
         } => rw_add(
@@ -142,6 +155,7 @@ fn main() -> Result<()> {
             endpoint.as_deref(),
             export,
             qr,
+            invert,
             &config,
             &patches_dir,
         ),
@@ -153,6 +167,7 @@ fn main() -> Result<()> {
             endpoint,
             export,
             qr,
+            invert,
             config,
             patches_dir,
         } => rw_inspect(
@@ -162,6 +177,7 @@ fn main() -> Result<()> {
             endpoint.as_deref(),
             export,
             qr,
+            invert,
             &config,
             &patches_dir,
         ),
@@ -177,6 +193,7 @@ fn rw_add(
     endpoint: Option<&str>,
     export: bool,
     qr: bool,
+    invert: bool,
     config_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
@@ -208,7 +225,7 @@ fn rw_add(
             println!("\n{text}");
         }
         if qr {
-            println!("\n{}", roadwarrior::render_qr(&text)?);
+            println!("\n{}", roadwarrior::render_qr(&text, invert)?);
         }
     }
     Ok(())
@@ -240,6 +257,7 @@ fn rw_inspect(
     endpoint: Option<&str>,
     export: bool,
     qr: bool,
+    invert: bool,
     config_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
@@ -258,7 +276,7 @@ fn rw_inspect(
         println!("{text}");
     }
     if qr {
-        println!("\n{}", roadwarrior::render_qr(&text)?);
+        println!("\n{}", roadwarrior::render_qr(&text, invert)?);
     }
     Ok(())
 }

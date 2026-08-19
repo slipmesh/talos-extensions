@@ -253,12 +253,23 @@ pub(crate) fn render_client_config(
 }
 
 /// Renders a client config as an in-terminal QR code (unicode block art) - scan straight off the
-/// screen instead of needing a file to hand off.
-pub(crate) fn render_qr(config_text: &str) -> Result<String> {
+/// screen instead of needing a file to hand off. `invert` swaps dark/light modules - a dark-
+/// themed terminal renders "dark" modules as the foreground color and "light" ones as the
+/// background, the visual opposite of standard (dark-on-light) QR polarity. Confirmed live: the
+/// official WireGuard app's own scanner rejects the un-inverted default there, while AmneziaWG's
+/// and a plain camera read either polarity fine.
+pub(crate) fn render_qr(config_text: &str, invert: bool) -> Result<String> {
     let code = qrcode::QrCode::new(config_text).context("encoding client config as a QR code")?;
-    Ok(code
-        .render::<qrcode::render::unicode::Dense1x2>()
-        .build())
+    let mut renderer = code.render::<qrcode::render::unicode::Dense1x2>();
+    if invert {
+        // Some phone camera/scanner UIs are pickier about polarity than others when reading a
+        // QR straight off a terminal (vs. a printed/rendered image) - swap dark/light modules to
+        // try the other way round.
+        renderer
+            .dark_color(qrcode::render::unicode::Dense1x2::Light)
+            .light_color(qrcode::render::unicode::Dense1x2::Dark);
+    }
+    Ok(renderer.build())
 }
 
 /// `yaml_serde::Value` for one flow-style client entry - name/public_key/allowed_ips, matching
@@ -870,8 +881,15 @@ roadwarriors:
 
     #[test]
     fn render_qr_produces_nonempty_output() {
-        let qr = render_qr("[Interface]\nPrivateKey = x\n").unwrap();
+        let qr = render_qr("[Interface]\nPrivateKey = x\n", false).unwrap();
         assert!(!qr.trim().is_empty());
+    }
+
+    #[test]
+    fn render_qr_invert_actually_swaps_dark_and_light() {
+        let normal = render_qr("[Interface]\nPrivateKey = x\n", false).unwrap();
+        let inverted = render_qr("[Interface]\nPrivateKey = x\n", true).unwrap();
+        assert_ne!(normal, inverted);
     }
 
     #[test]
