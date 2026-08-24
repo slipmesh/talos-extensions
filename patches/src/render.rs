@@ -310,8 +310,15 @@ pub fn bypass_for(mesh: &MeshConfig, node_name: &str) -> Option<BypassConfig> {
 pub const OSPF_INTERFACES: [&str; 2] = ["mesh-*", "router-lo"];
 
 /// This node's `direct_interfaces`: its own override if set, else `cluster.direct_interfaces` - an
-/// override *replaces* the global default rather than extending it (a node opting out of the
-/// fleet-wide CNI-bridge convention need not also list `"cni*"` itself).
+/// override *replaces* the global value rather than extending it.
+///
+/// Whatever `mesh.yaml` says is the whole list: this generator adds nothing of its own. It used to
+/// add two things implicitly - a `"cni*"` serde default and a `"mesh-*"` appended whenever
+/// `tunnel_networks` was set - and both were removed deliberately. `"cni*"` named an interface
+/// owned by whichever CNI plugin happened to be installed, which stopped existing the moment that
+/// choice changed; `"mesh-*"` was correct but invisible, so a reader of `mesh.yaml` could not tell
+/// what a node would actually announce without reading this file too. An operator-visible list
+/// that is wrong gets noticed; an implicit one that is wrong does not.
 fn direct_interfaces_for(mesh: &MeshConfig, node_name: &str) -> Result<Vec<String>> {
     let node = mesh
         .nodes
@@ -341,23 +348,47 @@ fn announce_for(mesh: &MeshConfig) -> Vec<AnnounceEntry> {
         .unwrap_or_default()
 }
 
+/// This cluster's kernel-`learn` scope - the pod range, if configured. See
+/// `ClusterConfig::pod_subnet`'s doc comment for why the node's own podCIDR arrives this way
+/// rather than through `direct_interfaces`. Same on every node, for the same reason
+/// `announce_for` is.
+///
+/// Non-empty `learn` is also what switches on `bird.conf`'s `if source = RTS_INHERIT then accept`
+/// in the iBGP export filter - the two are one mechanism, not two, so there's deliberately no way
+/// to configure a `learn` scope that gets imported but never re-announced.
+fn learn_for(mesh: &MeshConfig) -> Vec<String> {
+    mesh.cluster
+        .pod_subnet
+        .as_ref()
+        .map(|net| vec![net.clone()])
+        .unwrap_or_default()
+}
+
 pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<RouterConfig> {
     let (v4, v6) = node_loopbacks(mesh, node_name)?;
-    let mut direct_interfaces = direct_interfaces_for(mesh, node_name)?;
-    // OSPF here is `ospf v3` (IPv6-only - see `bird.conf`'s `protocol ospf v3 mesh6`): it never sees,
-    // let alone redistributes, an IPv4 address on a `mesh-*` interface at all (BIRD's own
-    // `ospf_get_af` filters out addresses of the "wrong" family before stub-network advertisement
-    // even runs). So the tunnel IPv4 address `mesh_interfaces_for` puts on every `mesh-*` interface
-    // (see `node_tunnel_addresses`) would otherwise exist purely locally - reachable on no other
-    // node, meaning replies masqueraded through it can never route back. `protocol direct` doesn't
-    // have this family restriction (that's exactly how `router-lo`'s own IPv4 loopback already
-    // reaches the rest of the mesh, via the `direct1` block `bird.conf` always renders) - so once
-    // `tunnel_networks` is configured, `mesh-*` needs the same `protocol direct` treatment
-    // `direct_interfaces` already gives `cni*`/other node-local interfaces.
+    let direct_interfaces = direct_interfaces_for(mesh, node_name)?;
+    // Checked, not silently fixed up. OSPF here is `ospf v3` (IPv6-only - see `bird.conf`'s
+    // `protocol ospf v3 mesh6`): it never sees, let alone redistributes, an IPv4 address on a
+    // `mesh-*` interface at all (BIRD's own `ospf_get_af` filters out addresses of the "wrong"
+    // family before stub-network advertisement even runs). So the tunnel IPv4 address
+    // `mesh_interfaces_for` puts on every `mesh-*` interface (see `node_tunnel_addresses`) would
+    // otherwise exist purely locally - reachable on no other node, meaning replies masqueraded
+    // through it can never route back. `protocol direct` doesn't have this family restriction
+    // (that's exactly how `router-lo`'s own IPv4 loopback already reaches the rest of the mesh, via
+    // the `direct1` block `bird.conf` always renders), so `tunnel_networks` and a `mesh-*` entry in
+    // `direct_interfaces` have to travel together.
+    //
+    // This used to append `mesh-*` itself when it was missing. That silently produced a config
+    // `mesh.yaml` didn't ask for, which is how the whole `direct_interfaces` mechanism came to hide
+    // what a node actually announces - so the pairing is now enforced by refusing to render instead.
     if node_tunnel_addresses(mesh, node_name)?.is_some()
         && !direct_interfaces.iter().any(|s| s == "mesh-*")
     {
-        direct_interfaces.push("mesh-*".to_string());
+        anyhow::bail!(
+            "node {node_name:?}: cluster.tunnel_networks is configured, so direct_interfaces must \
+             include \"mesh-*\" - the tunnel IPv4 address is otherwise announced by nothing \
+             (OSPFv3 is IPv6-only) and is reachable on no other node"
+        );
     }
     Ok(RouterConfig {
         node: NodeIdentity {
@@ -367,7 +398,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         bgp_peers: bgp_peers_for(mesh, node_name)?,
         ospf_interfaces: OSPF_INTERFACES.iter().map(|s| s.to_string()).collect(),
         direct_interfaces,
-        learn: vec![],
+        learn: learn_for(mesh),
         announce: announce_for(mesh),
         bypass: bypass_for(mesh, node_name),
     })
@@ -783,13 +814,13 @@ bypass:
     }
 
     #[test]
-    fn render_router_config_direct_interfaces_defaults_to_cni_glob() {
+    fn render_router_config_direct_interfaces_has_no_default() {
+        // An omitted list announces nothing - it does not resurrect the old `cni*` default.
         let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
-        // Same value on every node with no per-node override - the global default.
-        assert_eq!(cfg_a.direct_interfaces, vec!["cni*".to_string()]);
-        assert_eq!(cfg_b.direct_interfaces, vec!["cni*".to_string()]);
+        assert!(cfg_a.direct_interfaces.is_empty());
+        assert!(cfg_b.direct_interfaces.is_empty());
     }
 
     #[test]
@@ -817,10 +848,21 @@ bypass:
         mesh.nodes[0].direct_interfaces = Some(vec!["home".to_string()]);
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
-        // Overridden node gets exactly its own list - "cni*" is not also present.
+        // Overridden node gets exactly its own list.
         assert_eq!(cfg_a.direct_interfaces, vec!["home".to_string()]);
-        // Untouched node still gets the global default.
-        assert_eq!(cfg_b.direct_interfaces, vec!["cni*".to_string()]);
+        // Untouched node still gets the (here empty) global value, not the override.
+        assert!(cfg_b.direct_interfaces.is_empty());
+    }
+
+    #[test]
+    fn render_router_config_per_node_override_replaces_a_nonempty_global() {
+        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        mesh.cluster.direct_interfaces = vec!["mesh-*".to_string()];
+        mesh.nodes[0].direct_interfaces = Some(vec!["home".to_string()]);
+        let cfg_a = render_router_config(&mesh, "a").unwrap();
+        let cfg_b = render_router_config(&mesh, "b").unwrap();
+        assert_eq!(cfg_a.direct_interfaces, vec!["home".to_string()]);
+        assert_eq!(cfg_b.direct_interfaces, vec!["mesh-*".to_string()]);
     }
 
     #[test]
@@ -841,6 +883,37 @@ bypass:
             assert_eq!(cfg.announce[0].net, "10.60.0.0/16");
             assert_eq!(cfg.announce[0].label.as_deref(), Some("k8s-services"));
         }
+    }
+
+    #[test]
+    fn render_router_config_learn_is_empty_by_default() {
+        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let cfg = render_router_config(&mesh, "a").unwrap();
+        assert!(cfg.learn.is_empty());
+    }
+
+    #[test]
+    fn render_router_config_learns_the_configured_pod_subnet_on_every_node() {
+        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        mesh.cluster.pod_subnet = Some("10.61.0.0/16".to_string());
+        let cfg_a = render_router_config(&mesh, "a").unwrap();
+        let cfg_b = render_router_config(&mesh, "b").unwrap();
+        for cfg in [&cfg_a, &cfg_b] {
+            assert_eq!(cfg.learn, vec!["10.61.0.0/16".to_string()]);
+        }
+    }
+
+    /// `pod_subnet` and `direct_interfaces` are independent knobs: dropping `cni*` is what makes
+    /// `learn` the *only* source of this node's podCIDR, which is the whole point of stating both
+    /// in `mesh.yaml` rather than having one imply the other.
+    #[test]
+    fn render_router_config_learns_pod_subnet_with_direct_interfaces_emptied() {
+        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        mesh.cluster.pod_subnet = Some("10.61.0.0/16".to_string());
+        mesh.cluster.direct_interfaces = vec![];
+        let cfg = render_router_config(&mesh, "a").unwrap();
+        assert_eq!(cfg.learn, vec!["10.61.0.0/16".to_string()]);
+        assert!(!cfg.direct_interfaces.iter().any(|s| s == "cni*"));
     }
 
     #[test]
@@ -979,15 +1052,17 @@ mesh:
     }
 
     #[test]
-    fn render_router_config_adds_mesh_glob_to_direct_interfaces_when_tunnel_networks_configured() {
-        // Without this, the tunnel IPv4 address `mesh_interfaces_for` assigns is never
-        // redistributed anywhere - OSPF here is IPv6-only (`ospf v3`) and silently ignores IPv4
-        // addresses entirely, so `protocol direct` on `mesh-*` is the only thing that can get it
-        // into BGP, same as `direct1` already does for `router-lo`'s own IPv4 loopback.
+    fn render_router_config_rejects_tunnel_networks_without_the_mesh_glob() {
+        // The tunnel IPv4 address `mesh_interfaces_for` assigns is redistributed by nothing else -
+        // OSPF here is IPv6-only (`ospf v3`) and silently ignores IPv4 addresses entirely, so
+        // `protocol direct` on `mesh-*` is the only thing that can get it into BGP, same as
+        // `direct1` already does for `router-lo`'s own IPv4 loopback. Previously appended
+        // silently; now a hard error, so `mesh.yaml` states what a node announces.
         let mesh: MeshConfig =
             serde_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
-        let cfg = render_router_config(&mesh, "a").unwrap();
-        assert!(cfg.direct_interfaces.iter().any(|s| s == "mesh-*"));
+        let err = render_router_config(&mesh, "a").unwrap_err().to_string();
+        assert!(err.contains("mesh-*"), "unexpected error: {err}");
+        assert!(err.contains("tunnel_networks"), "unexpected error: {err}");
     }
 
     #[test]

@@ -205,6 +205,21 @@ pub fn exact_iface_names(ospf_interfaces: &[String]) -> Vec<String> {
 /// individual road-warrior `/32` (the k8s original's shape). Empty `learn` means `learn` stays off
 /// entirely in the kernel protocol.
 ///
+/// `learn all`, not a bare `learn`: BIRD's two learn modes differ in exactly the case this needs.
+/// A bare `learn` is `KRT_LEARN_ALIEN` and picks up only routes installed by *other daemons*;
+/// `learn all` is `KRT_LEARN_ALL` and additionally picks up `KRT_SRC_KERNEL` - routes carrying
+/// `RTPROT_KERNEL`, which is what the kernel stamps on a connected route it derives from an
+/// interface address (`sysdep/unix/krt.h`'s `KRT_LEARN_*`, the `case KRT_SRC_KERNEL: if
+/// (KRT_CF->learn != KRT_LEARN_ALL) goto ignore;` in `krt.c`, and `krt.Y`'s `kern_learn` grammar,
+/// all as of the BIRD 2.18 this extension pins). A node's own podCIDR route is precisely such a
+/// route under every CNI tried - `10.61.x.0/24 dev cni0` under bridge/host-local, `10.61.x.0/24
+/// via 10.61.x.1 dev cilium_host` under Cilium - so a bare `learn` silently learns nothing and the
+/// node stops announcing its pods to the mesh. Confirmed live on msk1-01: correct filter, route
+/// present in the FIB, announcement absent from every peer until `all` was added.
+///
+/// `all` widens the *source* of learnable routes, not the *scope*: the `import filter` above still
+/// rejects everything outside the configured prefixes, so this is not "learn the whole table".
+///
 /// The desired-state inputs that vary independently of `identity`/`as_number` - bundled into one
 /// struct (rather than five loose slice params) purely to keep `render`/`reconcile` under this
 /// workspace's default clippy `too-many-arguments` threshold, not because these five are used
@@ -646,7 +661,10 @@ mod tests {
         }];
         let learn = vec!["10.99.0.0/24".to_string()];
         let conf = render(identity(), 64512, &inputs(&[], &peers, &[], &[], &learn)).unwrap();
-        assert!(conf.contains("    learn;\n"));
+        // `all`, not a bare `learn` - see `RenderInputs`'s doc comment: without it BIRD skips
+        // KRT_SRC_KERNEL routes, which is the only kind a node's own podCIDR route ever is.
+        assert!(conf.contains("    learn all;\n"));
+        assert!(!conf.contains("    learn;\n"));
         assert!(conf.contains("if net ~ [ 10.99.0.0/24+ ] then accept;"));
         assert!(conf.contains("if source = RTS_INHERIT then accept;"));
         assert!(!conf.contains("learn no;"));

@@ -39,15 +39,23 @@ pub struct ClusterConfig {
     pub loopback_networks: LoopbackNetworks,
     #[serde(default)]
     pub bypass_refresh_interval_secs: Option<u64>,
-    /// Extra interfaces every node's `router.yaml` should treat as `protocol direct` sources (see
-    /// `router::config::RouterConfig::direct_interfaces`'s own doc comment) - global, not per-node:
-    /// the mechanism this exists for (`slipmesh/cni-config`'s pod-bridge) is the same interface
-    /// naming on every node by construction, not something that varies node to node. Harmless to
-    /// include on a node that never runs `cni-config` - `protocol direct` is inert until a matching
-    /// interface actually appears. Defaults to `cni*` (a glob, not the exact `cni0` - matches
-    /// whatever the CNI bridge plugin actually names it without needing to hardcode the number)
-    /// rather than empty, so this works out of the box without `mesh.yaml` having to know about it.
-    #[serde(default = "default_direct_interfaces")]
+    /// Interfaces every node's `router.yaml` should treat as `protocol direct` sources (see
+    /// `router::config::RouterConfig::direct_interfaces`'s own doc comment) - global, not per-node,
+    /// since the interface naming is the same on every node by construction. `protocol direct` is
+    /// inert until a matching interface appears, so listing one a given node lacks is harmless.
+    ///
+    /// No default: an empty/omitted list means "announce nothing from interfaces", not "announce
+    /// the usual suspects". This used to default to `cni*`, naming the pod bridge of whichever CNI
+    /// plugin was installed - which is precisely the coupling that broke when the CNI changed, and
+    /// broke *silently*, because a glob that matches nothing looks exactly like a glob that was
+    /// never configured. `render.rs` likewise no longer appends `mesh-*` on its own.
+    ///
+    /// Must include `"mesh-*"` whenever `tunnel_networks` is set - `render_router_config` refuses
+    /// to render otherwise; see the check there for why the two travel together.
+    ///
+    /// Note this is *not* where a node's own podCIDR comes from. That arrives through `pod_subnet`
+    /// and the kernel `learn` scope it drives, for reasons spelled out on that field.
+    #[serde(default)]
     pub direct_interfaces: Vec<String>,
     /// Kubernetes' ClusterIP range (Talos's own `cluster.network.serviceSubnets`, stated here too
     /// since `router.yaml` has no live Kubernetes API access to discover it - see this crate's own
@@ -60,6 +68,24 @@ pub struct ClusterConfig {
     /// service CIDR the way there's a de-facto-standard CNI bridge naming convention.
     #[serde(default)]
     pub service_subnet: Option<String>,
+    /// Kubernetes' pod range (Talos's own `cluster.network.podSubnets`), stated here for the same
+    /// reason `service_subnet` is - `router.yaml` has no live Kubernetes API access. Drives the
+    /// kernel `learn` scope in `router.yaml`, which is how this node's *own* podCIDR reaches iBGP.
+    ///
+    /// Why `learn` and not `direct_interfaces`: every CNI installs a route for the node's podCIDR
+    /// into the main table, but only some of them also put an address carrying that prefix on an
+    /// interface. `bridge`/`host-local` does (`10.61.x.1/24` on `cni0`), which is why `protocol
+    /// direct` on `cni*` worked at all; Cilium does not (`cilium_host` carries a `/32`, the podCIDR
+    /// exists only as `10.61.x.0/24 via 10.61.x.1 dev cilium_host`). Learning by prefix reads the
+    /// route itself rather than an interface-address side effect of one particular plugin, so it
+    /// holds for any CNI and doesn't couple this generator to a foreign interface name.
+    ///
+    /// A *range*, not this node's own `/24`: which sub-prefix kube-controller-manager hands a node
+    /// isn't knowable at render time (unlike `service_subnet`, fixed at cluster bootstrap), so the
+    /// filter covers the whole pod range and the kernel supplies the specific one. `None` by
+    /// default - same reasoning as `service_subnet`, there's no sensible universal value.
+    #[serde(default)]
+    pub pod_subnet: Option<String>,
     /// A second `node_id`-derived address pair, distinct from `loopback_networks`, hung on every
     /// `mesh-*`/awg tunnel interface (not just `router-lo`). The IPv4 half is the confirmed fix this
     /// exists for: `mesh-*` interfaces otherwise carry no IPv4 address at all, so NAT/MASQUERADE has
@@ -75,10 +101,6 @@ pub struct ClusterConfig {
     /// behavior for any `mesh.yaml` that hasn't opted in yet.
     #[serde(default)]
     pub tunnel_networks: Option<TunnelNetworks>,
-}
-
-fn default_direct_interfaces() -> Vec<String> {
-    vec!["cni*".to_string()]
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq)]
