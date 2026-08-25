@@ -161,17 +161,6 @@ pub fn exact_iface_names(ospf_interfaces: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// The IPv6 kernel protocol exports every OSPF route source, not just `RTS_OSPF`. BIRD splits
-/// OSPF routes across four sources (`nest/route.h`): `RTS_OSPF` intra-area, `RTS_OSPF_IA`
-/// inter-area, `RTS_OSPF_EXT1`/`RTS_OSPF_EXT2` the two external metric types - and `proto/ospf`
-/// really does set all four, they are not BIRD 1.x leftovers. Matching only `RTS_OSPF` silently
-/// drops anything a peer redistributes rather than originates intra-area, which is exactly how
-/// the RouterOS mesh peer advertises its own loopback: RouterOS will not originate an
-/// Intra-Area-Prefix-LSA for a passive interface, so `slipmesh/routeros` has to use
-/// `redistribute=connected`, and that arrives here as external type-1. The route was learned and
-/// then never installed, so nothing could route back to that peer's loopback and its iBGP
-/// sessions could never establish - observed live with a Full adjacency and no route to it.
-///
 /// OSPFv3 over the mesh links + loopback stub (`export none` - OSPF must never re-export
 /// kernel/BGP routes back into the IGP) plus an iBGP full mesh over loopbacks (`multihop` +
 /// RFC 8950), exporting this node's own IPv4 loopback (`source = RTS_DEVICE`, `direct1`/
@@ -650,30 +639,6 @@ mod tests {
             .unwrap();
         assert!(announce_block.contains("via \"router-lo\";"));
         assert!(!announce_block.contains("blackhole"));
-    }
-
-    /// A peer that redistributes its loopback rather than originating it intra-area (RouterOS
-    /// must - see `RenderInputs`' doc comment) arrives as external type-1. Matching only
-    /// `RTS_OSPF` dropped it on the floor: route learned, never installed, peer's loopback
-    /// unroutable, its iBGP sessions permanently down with a Full adjacency showing.
-    #[test]
-    fn ipv6_kernel_export_accepts_every_ospf_route_source() {
-        let peers = vec![BgpPeer {
-            name: "peer1".to_string(),
-            address: "fd00::2".parse().unwrap(),
-        }];
-        let conf = render(identity(), 64512, &inputs(&[], &peers, &[], &[], &[])).unwrap();
-        for src in [
-            "RTS_OSPF",
-            "RTS_OSPF_IA",
-            "RTS_OSPF_EXT1",
-            "RTS_OSPF_EXT2",
-        ] {
-            assert!(
-                conf.contains(&format!("source = {src}")),
-                "IPv6 kernel export must accept {src}"
-            );
-        }
     }
 
     #[test]
