@@ -5,7 +5,7 @@ node's mesh networking with no Kubernetes API involved, plus the offline generat
 their config.
 
 | crate | binary | runs | what it does |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `awg` | `awg` | on the node, as `ext-awg` | brings up AmneziaWG interfaces and peers over netlink |
 | `router` | `router` | on the node, as `ext-router` | renders BIRD config (OSPFv3 + iBGP), supervises `bird` |
 | `nftables` | `nftables` | on the node, as `ext-nftables` | applies an nftables ruleset and keeps it applied |
