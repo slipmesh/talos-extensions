@@ -1,0 +1,71 @@
+# The three extension repositories cross-compile their daemons out of this workspace, so a
+# break here reaches an image without ever showing up in the repository that publishes it.
+# This is the only place that catches it before that happens.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: test
+        run: cargo test --workspace
+
+  # The packaging repositories build these two targets, not a host binary - a musl-only
+  # breakage would otherwise surface as a failed release rather than a failed check.
+  cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@v2
+      - uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Cross-compile every daemon for both targets
+        run: |
+          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
+            cargo zigbuild --release --target "$target" -p awg -p router -p nftables
+          done
+
+  # Separate job so an advisory hit is unambiguous in the checks list, rather than buried in
+  # the same log as an unrelated clippy or test failure.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
