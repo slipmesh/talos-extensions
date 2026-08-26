@@ -76,6 +76,17 @@ pub struct Obfuscation {
     pub keepalive_timeout: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_handshake_attempts: Option<u32>,
+
+    /// AmneziaWG 3.1. Appends a random-length trailer to outgoing packets, sized against what
+    /// the peer has been seen to send, so the wire lengths stop being a fingerprint. Receive-side
+    /// length checks become "at least" rather than "exactly", so both ends may set it
+    /// independently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub random_trailers: Option<bool>,
+    /// AmneziaWG 3.1. Suppresses cookie replies, which are a message type of their own and
+    /// therefore a signature. The cost is the load-shedding those replies exist for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disable_cookies: Option<bool>,
 }
 
 #[cfg(test)]

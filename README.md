@@ -97,6 +97,8 @@ interfaces:
       content_padding_addition: 128
       rekey_after_time: 120
       max_handshake_attempts: 90
+      random_trailers: true            # 3.1: pad outgoing packets to a varying length
+      disable_cookies: true            # 3.1: never send cookie replies
 ```
 
 **Private keys always come from the config - this binary never generates or persists one.**
@@ -106,13 +108,20 @@ roaming client sees one consistent server identity no matter which node it's cur
 to). This is a config-authoring concern, not something `awg` decides. The same applies to
 `header_protection_key`. `patches` (below) is one such config author.
 
-**Every AmneziaWG 3.0 obfuscation parameter is exposed**, not just the original nine
+**Every AmneziaWG obfuscation parameter is exposed**, through 3.1, not just the original nine
 (jc/jmin/jmax/s1/s2/h1-h4) - confirmed field-by-field against the current kernel module's
 `src/netlink.c` and amneziawg-tools' own config parser (`src/config.c`), since the kernel module's
 own README only documents the original set. See `common::Obfuscation`'s doc comment for the full
 field list and what each one does. `header_protection_key` + a peer's `advanced_security: true` are
 a matched pair - the key alone does nothing without the flag, and both ends of a peering need the
 same key.
+
+The two 3.1 switches are the exception to that pairing: each end decides for itself.
+`random_trailers` appends a random-length trailer to outgoing packets and relaxes the receive-side
+length check to "at least", so a peer that doesn't set it still accepts the traffic.
+`disable_cookies` suppresses cookie replies, whose own message type is a signature - at the cost
+of the load-shedding they exist for. Both are sent explicitly on every reconcile, set or not:
+an omitted attribute leaves the kernel's current value alone.
 
 ### Ownership: the whole `amneziawg` netlink kind, no naming convention
 

@@ -110,6 +110,8 @@ pub(crate) fn resolve_obfuscation(
         reject_after_time: field!(reject_after_time),
         keepalive_timeout: field!(keepalive_timeout),
         max_handshake_attempts: field!(max_handshake_attempts),
+        random_trailers: field!(random_trailers),
+        disable_cookies: field!(disable_cookies),
     }
 }
 
@@ -584,6 +586,19 @@ mod tests {
         let resolved = resolve_obfuscation(&specific, &global, None);
         assert_eq!(resolved.jc, Some(9));
         assert_eq!(resolved.jmin, Some(10));
+    }
+
+    /// The 3.1 switches follow the same precedence as every other field, and are never
+    /// invented: `generate()` leaves them unset, so an unconfigured mesh stays as it was.
+    #[test]
+    fn resolve_obfuscation_carries_the_31_switches_and_never_generates_them() {
+        let global = Obfuscation {
+            random_trailers: Some(true),
+            ..Obfuscation::default()
+        };
+        let resolved = resolve_obfuscation(&Obfuscation::default(), &global, None);
+        assert_eq!(resolved.random_trailers, Some(true));
+        assert_eq!(resolved.disable_cookies, None);
     }
 
     #[test]

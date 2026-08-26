@@ -133,6 +133,14 @@ pub fn push_obfuscation_attrs(
     if let Some(v) = o.max_handshake_attempts {
         attrs.push(AmneziaWireguardAttribute::MaxHandshakeAttempts(v));
     }
+    // Always sent, unlike the tuning values above: these are obfuscation switches, and an
+    // omitted attribute leaves whatever the kernel already has.
+    attrs.push(AmneziaWireguardAttribute::RandomTrailers(
+        o.random_trailers.unwrap_or(false),
+    ));
+    attrs.push(AmneziaWireguardAttribute::DisableCookies(
+        o.disable_cookies.unwrap_or(false),
+    ));
     Ok(())
 }
 
@@ -248,6 +256,28 @@ mod tests {
         assert!(attrs.contains(&AmneziaWireguardAttribute::H2Range(u32_range_pack(2, 2))));
         assert!(attrs.contains(&AmneziaWireguardAttribute::H3Range(u32_range_pack(3, 3))));
         assert!(attrs.contains(&AmneziaWireguardAttribute::H4Range(u32_range_pack(4, 4))));
+    }
+
+    /// Same reasoning as the junk attributes above, applied to AmneziaWG 3.1's two device
+    /// flags: an omitted attribute leaves the kernel's current value in place, so a link that
+    /// once had them on would keep them on after they were dropped from the config.
+    #[test]
+    fn default_obfuscation_pushes_both_31_flags_explicitly_off() {
+        let attrs = push(&Obfuscation::default());
+        assert!(attrs.contains(&AmneziaWireguardAttribute::RandomTrailers(false)));
+        assert!(attrs.contains(&AmneziaWireguardAttribute::DisableCookies(false)));
+    }
+
+    #[test]
+    fn explicit_31_flags_are_used_verbatim() {
+        let o = Obfuscation {
+            random_trailers: Some(true),
+            disable_cookies: Some(true),
+            ..Obfuscation::default()
+        };
+        let attrs = push(&o);
+        assert!(attrs.contains(&AmneziaWireguardAttribute::RandomTrailers(true)));
+        assert!(attrs.contains(&AmneziaWireguardAttribute::DisableCookies(true)));
     }
 
     #[test]
