@@ -26,7 +26,7 @@ pub struct InterfaceEntry {
     #[serde(default)]
     pub addresses: Vec<String>,
     /// Base64 X25519 private key. Always supplied here - this daemon never generates or persists
-    /// a key itself (see README/AGENTS.md); whoever renders the machine config is responsible for
+    /// a key itself (see the README); whoever renders the machine config is responsible for
     /// giving a node its own per-interface key, or the same key across every node's config when a
     /// single shared identity is needed (e.g. so roaming clients see one consistent server
     /// identity regardless of which node they connect to).

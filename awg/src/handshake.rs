@@ -6,7 +6,7 @@
 //!
 //! - Routes are tagged with `common::ROUTE_PROTOCOL` on add/delete, and the in-memory
 //!   "what did I already install" tracking is *seeded from the kernel's own routes carrying that
-//!   tag* at startup, not assumed empty - `handleRestart()` (see AGENTS.md) restarts this whole
+//!   tag* at startup, not assumed empty - Talos's own `handleRestart()` restarts this whole
 //!   process on every config change, far more often than a k8s pod restarts, so a route installed
 //!   by a previous run and left behind must still be recognized as ours.
 //! - The very first reconciliation pass runs immediately, not after waiting for the first 1Hz

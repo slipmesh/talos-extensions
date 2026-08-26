@@ -1,7 +1,7 @@
 //! X25519 key wire format only - no generation. Every private/public key an interface or peer
 //! needs comes straight from the `ExtensionServiceConfig`-rendered config file; nothing here ever
-//! generates or persists a key locally (see AGENTS.md/README - keys are the config-renderer's
-//! responsibility, not this daemon's).
+//! generates or persists a key locally - keys are the config-renderer's responsibility, not this
+//! daemon's.
 
 use anyhow::{Context, Result};
 

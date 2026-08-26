@@ -1,7 +1,7 @@
 //! Removes any `amneziawg`-kind interface on the host that isn't in the current config. Ownership
 //! is total: this daemon manages every interface of that netlink kind on the node, so no naming
 //! convention or second filter is needed - unlike the two-separate-services design this replaced,
-//! there's no "someone else's AWG interface" to avoid stepping on (see AGENTS.md).
+//! there's no "someone else's AWG interface" to avoid stepping on.
 
 use anyhow::Result;
 use common::netlink::rt::RtClient;

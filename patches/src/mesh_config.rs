@@ -57,8 +57,8 @@ pub struct ClusterConfig {
     #[serde(default)]
     pub direct_interfaces: Vec<String>,
     /// Kubernetes' ClusterIP range (Talos's own `cluster.network.serviceSubnets`, stated here too
-    /// since `router.yaml` has no live Kubernetes API access to discover it - see this crate's own
-    /// `AGENTS.md`/workspace principle). Ported from the old k8s-CRD system's `router`, which read
+    /// since `router.yaml` has no live Kubernetes API access to discover it, by design - no daemon
+    /// in this workspace has one). Ported from the old k8s-CRD system's `router`, which read
     /// this live from a `ServiceCIDR` object and re-announced it over iBGP as `AnnounceRoute{label:
     /// "k8s-services"}` (`slipmesh/operators/router/src/main.rs`) - here it's a static value instead
     /// (unlike podCIDR, the service range is fixed at cluster-bootstrap time, not dynamically

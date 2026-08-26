@@ -6,7 +6,7 @@ use common::netlink::rt::RtClient;
 use std::collections::{HashMap, HashSet};
 
 /// Fixed path, matching `extension-services/awg.yaml`'s `configFiles[].mountPath` - never an env
-/// var or CLI flag (see AGENTS.md: everything comes from `ExtensionServiceConfig`, nothing else).
+/// var or CLI flag: everything comes from the `ExtensionServiceConfig`, nothing else.
 const CONFIG_PATH: &str = "/etc/talos-extensions/awg.yaml";
 
 #[tokio::main]

@@ -5,7 +5,7 @@
 //! porting), so this is close to verbatim; the only structural change is `BypassSourceEntry`
 //! below, a plain `#[derive(Deserialize)]` struct read straight out of `router.yaml` instead of
 //! the CRD-schema'd version in `core/src/router_types.rs` (which derives `JsonSchema`/
-//! `CustomResource` via `kube`'s macros - exactly the dependency this repo's `AGENTS.md` forbids).
+//! `CustomResource` via `kube`'s macros - exactly the dependency this workspace refuses to take).
 //!
 //! One behavioral change versus the k8s original, worth calling out explicitly rather than
 //! silently dropping: `core::resolver::self_and_cluster_exclude_entry` isn't ported. It punched

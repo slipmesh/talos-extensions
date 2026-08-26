@@ -1,7 +1,7 @@
 //! Applies one `InterfaceEntry` to the kernel: link/addresses/identity, then a point-wise peer
 //! diff against whatever's actually configured (read back from the kernel, not assumed empty -
 //! this process gets fully restarted on every config change, so there is no in-memory "previous"
-//! to carry over between runs; see AGENTS.md).
+//! to carry over between runs).
 //!
 //! Ported and merged from slipmesh-operators' `mesh::awg`/`roadwarriors::awg` (same repo,
 //! github.com/slipmesh/operators) - the two were nearly-identical device/peer-attribute-building
