@@ -216,9 +216,11 @@ fn rw_add(
         qr,
     )?;
 
-    std::fs::write(config_path, &updated)
-        .with_context(|| format!("writing {config_path:?}"))?;
-    println!("added {name:?} to roadwarriors pool {if_:?} in {}", config_path.display());
+    std::fs::write(config_path, &updated).with_context(|| format!("writing {config_path:?}"))?;
+    println!(
+        "added {name:?} to roadwarriors pool {if_:?} in {}",
+        config_path.display()
+    );
 
     if let Some((_, text)) = client_config {
         if export {
@@ -240,8 +242,7 @@ fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
 
     let (updated, public_key) = roadwarrior::del(&mesh, &raw_mesh, if_, name)?;
 
-    std::fs::write(config_path, &updated)
-        .with_context(|| format!("writing {config_path:?}"))?;
+    std::fs::write(config_path, &updated).with_context(|| format!("writing {config_path:?}"))?;
     println!(
         "removed {name:?} (public_key {public_key:?}) from roadwarriors pool {if_:?} in {}",
         config_path.display()

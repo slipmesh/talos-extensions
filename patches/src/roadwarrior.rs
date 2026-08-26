@@ -12,7 +12,7 @@ use crate::existing::FileExistingState;
 use crate::keys;
 use crate::mesh_config::{MeshConfig, RoadwarriorClient, RoadwarriorPool};
 use crate::render::{self, ExistingState};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use common::Obfuscation;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
@@ -77,10 +77,7 @@ pub(crate) fn parse_allowed_ip(input: &str) -> Result<String> {
 /// `rw-add` is what mints names now, so it enforces uniqueness of both up front.
 fn check_not_duplicate(pool: &RoadwarriorPool, name: &str, public_key: &str) -> Result<()> {
     if pool.clients.iter().any(|c| c.name == name) {
-        bail!(
-            "client {name:?} already exists in pool {:?}",
-            pool.name
-        );
+        bail!("client {name:?} already exists in pool {:?}", pool.name);
     }
     if pool.clients.iter().any(|c| c.public_key == public_key) {
         bail!(
@@ -238,7 +235,9 @@ pub(crate) fn render_client_config(
     out.push('\n');
     out.push_str("[Peer]\n");
     out.push_str(&format!("PublicKey = {server_public_key}\n"));
-    let (primary, alternates) = endpoints.split_first().expect("pool has >=1 node_hostnames");
+    let (primary, alternates) = endpoints
+        .split_first()
+        .expect("pool has >=1 node_hostnames");
     out.push_str(&format!("Endpoint = {primary}\n"));
     for alt in alternates {
         out.push_str(&format!("#Endpoint = {alt}\n"));
@@ -310,7 +309,7 @@ fn append_flow_item(
     let value_str = flow_style(value)?;
     let insertion_point = yamlpatch::find_content_end(feature, doc);
     let source = doc.source();
-    let needs_leading_newline = source[..insertion_point].chars().next_back() != Some('\n');
+    let needs_leading_newline = !source[..insertion_point].ends_with('\n');
     let mut new_item = String::new();
     if needs_leading_newline {
         new_item.push('\n');
@@ -355,7 +354,9 @@ pub(crate) fn add_client_to_yaml(
         yamlpatch::Style::FlowSequence if doc.extract(&feature).trim() == "[]" => {
             replace_empty_flow_sequence(&doc, &feature, value)
         }
-        other => bail!("clients list has unsupported YAML style {other:?} - expected a block sequence"),
+        other => {
+            bail!("clients list has unsupported YAML style {other:?} - expected a block sequence")
+        }
     }
 }
 
@@ -597,7 +598,10 @@ roadwarriors:
             None,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("doesn't match"), "error was: {err}");
+        assert!(
+            err.to_string().contains("doesn't match"),
+            "error was: {err}"
+        );
     }
 
     #[test]
@@ -651,15 +655,15 @@ roadwarriors:
 
     #[test]
     fn parse_allowed_ip_normalizes_bare_v4_to_slash_32() {
-        assert_eq!(parse_allowed_ip("198.51.100.99").unwrap(), "198.51.100.99/32");
+        assert_eq!(
+            parse_allowed_ip("198.51.100.99").unwrap(),
+            "198.51.100.99/32"
+        );
     }
 
     #[test]
     fn parse_allowed_ip_normalizes_bare_v6_to_slash_128() {
-        assert_eq!(
-            parse_allowed_ip("2001:db8::1").unwrap(),
-            "2001:db8::1/128"
-        );
+        assert_eq!(parse_allowed_ip("2001:db8::1").unwrap(), "2001:db8::1/128");
     }
 
     #[test]
@@ -668,7 +672,10 @@ roadwarriors:
             parse_allowed_ip("203.0.113.0/28").unwrap(),
             "203.0.113.0/28"
         );
-        assert_eq!(parse_allowed_ip("2001:db8::/120").unwrap(), "2001:db8::/120");
+        assert_eq!(
+            parse_allowed_ip("2001:db8::/120").unwrap(),
+            "2001:db8::/120"
+        );
     }
 
     #[test]
@@ -717,15 +724,19 @@ roadwarriors:
     fn add_client_to_yaml_appends_flow_style_and_leaves_the_rest_untouched() {
         let value = client_value("dave", "DDD=", &["198.51.100.99/32".to_string()]);
         let out = add_client_to_yaml(fixture(), 0, &value).unwrap();
-        assert!(out.contains(
-            r#"- {name: dave, public_key: "DDD=", allowed_ips: ["198.51.100.99/32"]}"#
-        ));
+        assert!(
+            out.contains(
+                r#"- {name: dave, public_key: "DDD=", allowed_ips: ["198.51.100.99/32"]}"#
+            )
+        );
         // untouched: the other pool, and its own clients/obfuscation
         assert!(out.contains("carol"));
         assert!(out.contains("jc: 4"));
         assert!(out.contains("h4: 2070706730"));
         // untouched: existing entries in the same pool
-        assert!(out.contains(r#"{name: alice, public_key: "AAA=", allowed_ips: ["198.51.100.41/32"]}"#));
+        assert!(
+            out.contains(r#"{name: alice, public_key: "AAA=", allowed_ips: ["198.51.100.41/32"]}"#)
+        );
     }
 
     #[test]
@@ -754,7 +765,9 @@ roadwarriors:
 "#;
         let value = client_value("eve", "EEE=", &["198.51.100.5/32".to_string()]);
         let out = add_client_to_yaml(src, 0, &value).unwrap();
-        assert!(out.contains(r#"- {name: eve, public_key: "EEE=", allowed_ips: ["198.51.100.5/32"]}"#));
+        assert!(
+            out.contains(r#"- {name: eve, public_key: "EEE=", allowed_ips: ["198.51.100.5/32"]}"#)
+        );
     }
 
     #[test]
@@ -895,7 +908,15 @@ roadwarriors:
     #[test]
     fn inspect_renders_the_same_config_shape_as_add_with_a_placeholder_key() {
         let m = mesh();
-        let cfg = inspect(&m, Path::new("/nonexistent"), "obfuscation", "carol", None, None).unwrap();
+        let cfg = inspect(
+            &m,
+            Path::new("/nonexistent"),
+            "obfuscation",
+            "carol",
+            None,
+            None,
+        )
+        .unwrap();
         assert!(cfg.contains("<enter your private key here>"));
         assert!(cfg.contains("Address = 203.0.113.22/32"));
         assert!(cfg.contains("Jc = 4"));
