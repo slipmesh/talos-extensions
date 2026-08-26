@@ -110,6 +110,12 @@ pub(crate) fn resolve_obfuscation(
         reject_after_time: field!(reject_after_time),
         keepalive_timeout: field!(keepalive_timeout),
         max_handshake_attempts: field!(max_handshake_attempts),
+        // Deliberately not `field!`: these two skip the `existing` tier. Every other field
+        // falls back to the last render because it holds a generated secret worth keeping,
+        // but a switch that fell back could never be turned off by removing it from
+        // mesh.yaml.
+        random_trailers: specific.random_trailers.or(global.random_trailers),
+        disable_cookies: specific.disable_cookies.or(global.disable_cookies),
     }
 }
 
@@ -584,6 +590,38 @@ mod tests {
         let resolved = resolve_obfuscation(&specific, &global, None);
         assert_eq!(resolved.jc, Some(9));
         assert_eq!(resolved.jmin, Some(10));
+    }
+
+    /// The 3.1 switches are never invented: `generate()` leaves them unset, so an
+    /// unconfigured mesh stays as it was.
+    #[test]
+    fn resolve_obfuscation_carries_the_31_switches_and_never_generates_them() {
+        let global = Obfuscation {
+            random_trailers: Some(true),
+            ..Obfuscation::default()
+        };
+        let resolved = resolve_obfuscation(&Obfuscation::default(), &global, None);
+        assert_eq!(resolved.random_trailers, Some(true));
+        assert_eq!(resolved.disable_cookies, None);
+    }
+
+    /// Unlike the generated secrets around them, the switches do not fall back to what was
+    /// rendered last time: mesh.yaml is where they are decided, so dropping one there has to
+    /// turn it off rather than leave the previous render in force.
+    #[test]
+    fn resolve_obfuscation_lets_a_dropped_31_switch_go_away() {
+        let existing = Obfuscation {
+            random_trailers: Some(true),
+            h1: Some(42),
+            ..Obfuscation::default()
+        };
+        let resolved = resolve_obfuscation(
+            &Obfuscation::default(),
+            &Obfuscation::default(),
+            Some(&existing),
+        );
+        assert_eq!(resolved.random_trailers, None);
+        assert_eq!(resolved.h1, Some(42), "generated secrets still carry over");
     }
 
     #[test]

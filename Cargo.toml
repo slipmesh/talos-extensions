@@ -42,8 +42,8 @@ qrcode = "0.14.1"
 
 genetlink = "0.2.7"
 # Pinned to a specific rev, not crates.io's 0.1.2: the amneziawg kernel module we build against
-# (see ../talos-awg-extension/versions.env's AWG_REF, currently the latest upstream commit) speaks
-# genl family version 3 ("AmneziaWG 3.0"), which changed WGDEVICE_A_H1..H4 from a NUL-terminated
+# (see talos-awg-extension's versions.env) speaks genl family version 3, which changed
+# WGDEVICE_A_H1..H4 from a NUL-terminated
 # decimal string to a packed u64 (per the kernel module's own src/netlink.c nla_policy
 # table - .type = NLA_U64). crates.io's 0.1.2 still only emits/parses the
 # old string form for those four attributes, which the current kernel module's nla_policy rejects
@@ -51,8 +51,10 @@ genetlink = "0.2.7"
 # likely also break parsing GetDevice responses, since the kernel echoes H1 back as raw u64 bytes
 # that are not valid UTF-8. This exact fix (H1Range/H2Range/H3Range/H4Range as packed u64) landed
 # upstream the day before the kernel commit we're pinned to, but was never published to crates.io -
-# see push_obfuscation_attrs in netlink/awg.rs for the call site.
-netlink-packet-amnezia-wireguard = { git = "https://github.com/frkn-dev/netlink-packet-amnezia-wireguard", rev = "1b1220dd739cc5c68707f98534f714ef70359d04" }
+# see push_obfuscation_attrs in netlink/awg.rs for the call site. The rev is now the one that
+# added AmneziaWG 3.1's WGDEVICE_A_RANDOM_TRAILERS and WGDEVICE_A_DISABLE_COOKIES; nothing is
+# published to crates.io, so a rev is the only pin available.
+netlink-packet-amnezia-wireguard = { git = "https://github.com/frkn-dev/netlink-packet-amnezia-wireguard", rev = "b8b5fcc75adbc0c63cac0a9b30fdecbe783efd6c" }
 netlink-packet-core = "0.8.2"
 netlink-packet-generic = "0.4.0"
 rtnetlink = "0.21.0"

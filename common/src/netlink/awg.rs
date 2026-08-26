@@ -133,7 +133,38 @@ pub fn push_obfuscation_attrs(
     if let Some(v) = o.max_handshake_attempts {
         attrs.push(AmneziaWireguardAttribute::MaxHandshakeAttempts(v));
     }
+    // Always sent, unlike the tuning values above: these are obfuscation switches, and an
+    // omitted attribute leaves whatever the kernel already has.
+    attrs.push(AmneziaWireguardAttribute::RandomTrailers(
+        o.random_trailers.unwrap_or(false),
+    ));
+    attrs.push(AmneziaWireguardAttribute::DisableCookies(
+        o.disable_cookies.unwrap_or(false),
+    ));
     Ok(())
+}
+
+/// The 3.1 attributes removed, or `None` if there were none to remove.
+///
+/// Generic netlink validates against the family's own `maxattr`, so a module that predates
+/// AmneziaWG 3.1 does not ignore `WGDEVICE_A_RANDOM_TRAILERS` and `WGDEVICE_A_DISABLE_COOKIES` -
+/// it fails the entire `SetDevice`, leaving the interface unconfigured. The two are optional
+/// obfuscation switches, so dropping them and retrying keeps a node reachable on an older module
+/// instead of failing to bring its mesh up at all.
+fn without_31_attributes(
+    attrs: &[AmneziaWireguardAttribute],
+) -> Option<Vec<AmneziaWireguardAttribute>> {
+    let is_31 = |a: &AmneziaWireguardAttribute| {
+        matches!(
+            a,
+            AmneziaWireguardAttribute::RandomTrailers(_)
+                | AmneziaWireguardAttribute::DisableCookies(_)
+        )
+    };
+    attrs
+        .iter()
+        .any(is_31)
+        .then(|| attrs.iter().filter(|a| !is_31(a)).cloned().collect())
 }
 
 #[derive(Clone)]
@@ -179,6 +210,23 @@ impl AwgClient {
     }
 
     pub async fn set_device(&mut self, attributes: Vec<AmneziaWireguardAttribute>) -> Result<()> {
+        match self.set_device_once(attributes.clone()).await {
+            Ok(()) => Ok(()),
+            Err(e) => match without_31_attributes(&attributes) {
+                Some(older) => {
+                    tracing::warn!(
+                        error = %e,
+                        "SetDevice refused; retrying without AmneziaWG 3.1's device switches, \
+                         which a module older than 3.1 rejects outright"
+                    );
+                    self.set_device_once(older).await
+                }
+                None => Err(e),
+            },
+        }
+    }
+
+    async fn set_device_once(&mut self, attributes: Vec<AmneziaWireguardAttribute>) -> Result<()> {
         let msg = AmneziaWireguardMessage {
             cmd: AmneziaWireguardCmd::SetDevice,
             attributes,
@@ -248,6 +296,47 @@ mod tests {
         assert!(attrs.contains(&AmneziaWireguardAttribute::H2Range(u32_range_pack(2, 2))));
         assert!(attrs.contains(&AmneziaWireguardAttribute::H3Range(u32_range_pack(3, 3))));
         assert!(attrs.contains(&AmneziaWireguardAttribute::H4Range(u32_range_pack(4, 4))));
+    }
+
+    #[test]
+    fn stripping_the_31_attributes_leaves_everything_else_in_order() {
+        let attrs = push(&Obfuscation::default());
+        let stripped = without_31_attributes(&attrs).expect("3.1 attributes were present");
+        assert!(!stripped.iter().any(|a| matches!(
+            a,
+            AmneziaWireguardAttribute::RandomTrailers(_)
+                | AmneziaWireguardAttribute::DisableCookies(_)
+        )));
+        assert_eq!(stripped.len(), attrs.len() - 2);
+        assert!(stripped.contains(&AmneziaWireguardAttribute::JC(0)));
+    }
+
+    #[test]
+    fn stripping_reports_nothing_to_strip_when_the_31_attributes_are_absent() {
+        let attrs = vec![AmneziaWireguardAttribute::JC(4)];
+        assert!(without_31_attributes(&attrs).is_none());
+    }
+
+    /// Same reasoning as the junk attributes above, applied to AmneziaWG 3.1's two device
+    /// flags: an omitted attribute leaves the kernel's current value in place, so a link that
+    /// once had them on would keep them on after they were dropped from the config.
+    #[test]
+    fn default_obfuscation_pushes_both_31_flags_explicitly_off() {
+        let attrs = push(&Obfuscation::default());
+        assert!(attrs.contains(&AmneziaWireguardAttribute::RandomTrailers(false)));
+        assert!(attrs.contains(&AmneziaWireguardAttribute::DisableCookies(false)));
+    }
+
+    #[test]
+    fn explicit_31_flags_are_used_verbatim() {
+        let o = Obfuscation {
+            random_trailers: Some(true),
+            disable_cookies: Some(true),
+            ..Obfuscation::default()
+        };
+        let attrs = push(&o);
+        assert!(attrs.contains(&AmneziaWireguardAttribute::RandomTrailers(true)));
+        assert!(attrs.contains(&AmneziaWireguardAttribute::DisableCookies(true)));
     }
 
     #[test]
