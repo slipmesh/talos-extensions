@@ -6,8 +6,8 @@ container:
     writeableSysfs: false
 depends:
   - configuration: true
-# Not a oneshot, despite applying a static ruleset: confirmed directly on a real node that
-# something else's first nftables/iptables-nft bootstrap around kubelet/kube-proxy startup can
+# Not a oneshot, despite applying a static ruleset: something else's first nftables/iptables-nft
+# bootstrap around kubelet/kube-proxy startup can
 # wipe our tables in a one-time boot race (which side wins depends on scheduling, not anything in
 # our control - see nftables.rs's own doc comment for the full story). `restart: always` +
 # main.rs's `nft monitor`-driven watchdog loop reapplies whenever that happens, the same strategy

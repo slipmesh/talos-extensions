@@ -214,8 +214,8 @@ pub fn exact_iface_names(ospf_interfaces: &[String]) -> Vec<String> {
 /// all as of the BIRD 2.18 this extension pins). A node's own podCIDR route is precisely such a
 /// route under every CNI tried - `10.61.x.0/24 dev cni0` under bridge/host-local, `10.61.x.0/24
 /// via 10.61.x.1 dev cilium_host` under Cilium - so a bare `learn` silently learns nothing and the
-/// node stops announcing its pods to the mesh. Confirmed live on a real node: correct filter, route
-/// present in the FIB, announcement absent from every peer until `all` was added.
+/// node stops announcing its pods to the mesh: the filter matches and the route sits in the FIB,
+/// but nothing reaches any peer.
 ///
 /// `all` widens the *source* of learnable routes, not the *scope*: the `import filter` above still
 /// rejects everything outside the configured prefixes, so this is not "learn the whole table".
@@ -320,8 +320,8 @@ async fn birdc_show(command: &str) -> Result<String> {
     Ok(reply.text)
 }
 
-/// Verified directly against a real BIRD 2.19.1 `strict bind yes` protocol whose local address
-/// didn't exist yet at bind time: `show protocols`' Info column reads exactly `Error: No
+/// For a BIRD 2.19.1 `strict bind yes` protocol whose local address doesn't exist yet at bind
+/// time, `show protocols`' Info column reads exactly `Error: No
 /// listening socket`, a terminal failure state distinct from the normal `Connect`/`Active`/
 /// `OpenSent` states a still-negotiating-but-healthy session passes through - so matching this
 /// substring anywhere in `show protocols` can't false-positive on a peer that's simply not up yet.

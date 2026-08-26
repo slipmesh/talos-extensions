@@ -32,7 +32,7 @@ const REAL_H4: u32 = 4;
 /// Appends every device-level obfuscation attribute AmneziaWG's `SetDevice` accepts.
 ///
 /// `jc`/`jmin`/`jmax`/`s1`..`s4`/`h1`..`h4` are always sent, substituting each field's own real
-/// kernel-module default (confirmed directly against `device.c`'s `wg_init`, which `memset`s the
+/// kernel-module default (per `device.c`'s `wg_init`, which `memset`s the
 /// whole device to zero and then only overrides `h1..h4` - see `REAL_H1`..`REAL_H4` above) for an
 /// unset field, rather than omitting the attribute entirely. This is deliberate, not just
 /// thorough: AmneziaWG's `SetDevice` treats an *omitted* attribute as "leave whatever's already
@@ -40,9 +40,9 @@ const REAL_H4: u32 = 4;
 /// not "reset to default" - so on a link this daemon previously configured *with* obfuscation,
 /// omitting these attributes on a later run that now wants none would silently leave the kernel
 /// serving the old junk-packet/magic-header config forever, even though the rendered config now
-/// says otherwise (confirmed directly: a peer speaking stock WireGuard never completed a
-/// handshake against a link whose obfuscation had just been cleared in config this way - the
-/// kernel-side state never actually cleared). Always sending an explicit value - the real
+/// says otherwise: a peer speaking stock WireGuard cannot complete a handshake against a link
+/// whose obfuscation was cleared in config this way, because the kernel-side state never
+/// actually cleared. Always sending an explicit value - the real
 /// kernel-module default when unset - is correct on *both* a brand-new device (identical to what
 /// it would already be) and a previously-obfuscated one (actually clears it), so there's no need
 /// to distinguish the two cases here.

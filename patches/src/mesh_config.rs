@@ -159,8 +159,8 @@ pub struct MeshLink {
     /// significance (same as the old schema) - only used to derive a deterministic interface name/
     /// link-local address, see `render.rs`.
     pub pair: [String; 2],
-    /// Shared UDP port, both ends - always explicit, never generated (see plan's "Идемпотентность"
-    /// section: ports are an operator decision, not state this tool invents).
+    /// Shared UDP port, both ends - always explicit, never generated: a port is an operator
+    /// decision, not state this tool invents.
     pub port: u16,
     #[serde(default)]
     pub obfuscation: Obfuscation,

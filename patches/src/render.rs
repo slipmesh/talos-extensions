@@ -304,9 +304,8 @@ pub fn bypass_for(mesh: &MeshConfig, node_name: &str) -> Option<BypassConfig> {
     })
 }
 
-/// Fixed generator-side convention, not a `mesh.yaml` field - every rendered node gets the same
-/// two OSPF interface patterns (see the plan's "Пер-нодовое вычисление" section for why this isn't
-/// user-configurable in this first version).
+/// Fixed generator-side convention, not a `mesh.yaml` field: every rendered node gets the same
+/// two OSPF interface patterns.
 pub const OSPF_INTERFACES: [&str; 2] = ["mesh-*", "router-lo"];
 
 /// This node's `direct_interfaces`: its own override if set, else `cluster.direct_interfaces` - an

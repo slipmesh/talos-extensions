@@ -56,8 +56,8 @@ pub struct BgpPeerEntry {
     pub name: String,
     /// A single bare IPv6 address (no prefix length - this isn't a network). Not a list: a
     /// `protocol bgp` instance in BIRD takes exactly one `local`/`neighbor` address each, so a
-    /// list here would imply failover/multi-address support BIRD's config syntax doesn't have -
-    /// see the plan's rationale for this field. Always IPv6: the iBGP session itself runs over
+    /// list here would imply failover/multi-address support BIRD's config syntax doesn't have.
+    /// Always IPv6: the iBGP session itself runs over
     /// IPv6 loopbacks (RFC 8950 extended next hop carries the IPv4 payload prefixes on top of
     /// that IPv6-only session), same as `node.loopback_addresses`'s v6 entry.
     pub address: String,

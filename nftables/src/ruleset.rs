@@ -23,15 +23,13 @@
 //! this binary can't enforce on its own (it doesn't parse ruleset content, see above).
 //!
 //! **Why this daemon watches for its own tables disappearing** (see `main.rs`'s watchdog loop):
-//! confirmed directly on a real node - something on a freshly-booted Talos+Kubernetes node (most
-//! likely the first `iptables`/`ip6tables` invocation transitioning into iptables-nft mode, timed
-//! around kubelet/kube-proxy's own first sync) does a one-time broad nftables reset that can catch
-//! tables it doesn't recognize, including ours, if our own apply happens to run before that reset.
-//! Observed both ways on the same node across reboots: apply-then-reset wipes us; apply-after-reset
-//! coexists fine indefinitely (confirmed via 2 minutes of 2-second polling with zero further
-//! drift). Not a perpetual conflict, just an unpredictable one-time boot race - but unpredictable
-//! enough (which side of it we land on depends on scheduling, not anything in our control) that a
-//! bare "apply once and hope" isn't reliable.
+//! something on a freshly-booted Talos+Kubernetes node (most likely the first
+//! `iptables`/`ip6tables` invocation transitioning into iptables-nft mode, timed around
+//! kubelet/kube-proxy's own first sync) does a one-time broad nftables reset that can catch tables
+//! it doesn't recognize, including ours, if our own apply happens to run before that reset.
+//! Apply-then-reset wipes us; apply-after-reset coexists indefinitely. Which side of that race we
+//! land on depends on scheduling, not on anything in our control, so a bare "apply once and hope"
+//! isn't reliable.
 
 use anyhow::{Context, Result};
 use std::collections::HashSet;

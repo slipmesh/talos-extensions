@@ -5,8 +5,8 @@
 //! doesn't own (see `segments.rs`). `--check`/`--diff` both stop short of writing; `--diff` also
 //! prints what would change.
 //!
-//! `validate`/`diff`/`apply` as separate subcommands are deliberately not implemented in this
-//! pass - their function is covered by `generate`'s own flags (see the plan).
+//! `validate`/`diff`/`apply` are deliberately not separate subcommands: `generate`'s own
+//! `--check`/`--diff` flags already cover them.
 
 mod addressing;
 mod existing;

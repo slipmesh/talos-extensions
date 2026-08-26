@@ -5,7 +5,7 @@
 //! `mesh.yaml` is edited via `yamlpatch` (comment/format-preserving YAML patch operations, part
 //! of the `zizmor` project), addressed by numeric `Route` (no path-predicate syntax - the pool/
 //! client index has to be found by hand first, see `find_pool`/`find_client_index`), not by a
-//! hand-rolled text scan - see the plan this was built from for why.
+//! hand-rolled text scan: a scan cannot add an entry without reflowing what surrounds it.
 
 use crate::addressing;
 use crate::existing::FileExistingState;
@@ -254,9 +254,9 @@ pub(crate) fn render_client_config(
 /// Renders a client config as an in-terminal QR code (unicode block art) - scan straight off the
 /// screen instead of needing a file to hand off. `invert` swaps dark/light modules - a dark-
 /// themed terminal renders "dark" modules as the foreground color and "light" ones as the
-/// background, the visual opposite of standard (dark-on-light) QR polarity. Confirmed live: the
-/// official WireGuard app's own scanner rejects the un-inverted default there, while AmneziaWG's
-/// and a plain camera read either polarity fine.
+/// background, the visual opposite of standard (dark-on-light) QR polarity. The official
+/// WireGuard app's own scanner rejects the un-inverted default there; AmneziaWG's and a plain
+/// camera read either polarity fine.
 pub(crate) fn render_qr(config_text: &str, invert: bool) -> Result<String> {
     let code = qrcode::QrCode::new(config_text).context("encoding client config as a QR code")?;
     let mut renderer = code.render::<qrcode::render::unicode::Dense1x2>();

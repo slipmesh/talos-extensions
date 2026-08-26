@@ -135,8 +135,8 @@ timestamps.
 ### Restarts are the reload mechanism
 
 Talos restarts an extension service's container whenever its `ExtensionServiceConfig` changes -
-confirmed directly from Talos source (`internal/app/machined/pkg/controllers/runtime/
-extension_service.go`'s `handleRestart()`), regardless of the service's own `restart:` policy. So
+per Talos source (`internal/app/machined/pkg/controllers/runtime/extension_service.go`'s
+`handleRestart()`), regardless of the service's own `restart:` policy. So
 `awg` never needs to watch its own config file for changes - a config edit always means a fresh
 process, from scratch. Every startup step is written to be correct under that assumption:
 `ensure_link`/`ensure_addresses` are idempotent, peer sync reads the kernel's actual peer set
@@ -193,13 +193,12 @@ Applies `/etc/talos-extensions/nftables.yaml`'s `ruleset:` once at startup, the 
 `awg`/`router` converge their own state once at startup - but unlike a true oneshot, it doesn't
 exit afterward.
 
-**Why it stays resident**: confirmed directly on a real node - something else's first
-`iptables`/`ip6tables` invocation transitioning into iptables-nft mode (timed around kubelet/
-kube-proxy's own first sync on a freshly booted node) can do a one-time broad nftables reset that
-catches tables it doesn't recognize, including ours, *if* our own apply happens to run before that
-reset. Observed both outcomes on the same node across reboots depending on scheduling alone - not a
-perpetual conflict, but an unpredictable one-time boot race that a bare "apply once and exit"
-can't be reliable against. `extension-services/nftables.yaml`'s `restart: always` plus a
+**Why it stays resident**: something else's first `iptables`/`ip6tables` invocation transitioning
+into iptables-nft mode (timed around kubelet/kube-proxy's own first sync on a freshly booted node)
+can do a one-time broad nftables reset that catches tables it doesn't recognize, including ours,
+*if* our own apply happens to run before that reset. Which side of the race wins depends on
+scheduling alone, so a bare "apply once and exit" is not reliable against it.
+`extension-services/nftables.yaml`'s `restart: always` plus a
 `nft monitor`-driven watchdog loop in `main.rs` (every nftables event on the node wakes it to
 re-check its own tables via `nftables::all_present` and reapply if any are missing) is the same
 strategy Talos's own `network.NfTablesChainController` uses to keep *its* table present - see that
