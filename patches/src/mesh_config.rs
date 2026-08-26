@@ -5,9 +5,8 @@
 //! keeping them apart would just mean re-stating those facts in multiple places.
 //!
 //! Ported from (not identical to) the older Kubernetes-CRD system's schema
-//! (`slipmesh-core::mesh_types`/`node_config_types`/`router_types`/`cluster_config_types`,
-//! `IaC/k8s/main/network/.values.yaml`) - see `render.rs`'s module doc comment for exactly what
-//! changed and why.
+//! (`slipmesh-core::mesh_types`/`node_config_types`/`router_types`/`cluster_config_types`) - see
+//! `render.rs`'s module doc comment for exactly what changed and why.
 
 use common::Obfuscation;
 use serde::Deserialize;
@@ -131,7 +130,7 @@ pub struct NodeEntry {
     /// Publicly reachable hostname or IP, no port - `render.rs` appends the specific mesh link's
     /// own `port` per interface, since one node can have several mesh links each listening on a
     /// different port (a fixed `host:port` here couldn't represent more than one of them). Omitted
-    /// for a NAT'd node (the old schema's "hq" node is the precedent): such a node can still be
+    /// for a node behind NAT, with no reachable address of its own: such a node can still be
     /// the *desired* end of a mesh link, it just never appears as `endpoint` on the peer's side.
     #[serde(default)]
     pub endpoint: Option<String>,

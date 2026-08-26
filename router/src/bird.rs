@@ -214,7 +214,7 @@ pub fn exact_iface_names(ospf_interfaces: &[String]) -> Vec<String> {
 /// all as of the BIRD 2.18 this extension pins). A node's own podCIDR route is precisely such a
 /// route under every CNI tried - `10.61.x.0/24 dev cni0` under bridge/host-local, `10.61.x.0/24
 /// via 10.61.x.1 dev cilium_host` under Cilium - so a bare `learn` silently learns nothing and the
-/// node stops announcing its pods to the mesh. Confirmed live on msk1-01: correct filter, route
+/// node stops announcing its pods to the mesh. Confirmed live on a real node: correct filter, route
 /// present in the FIB, announcement absent from every peer until `all` was added.
 ///
 /// `all` widens the *source* of learnable routes, not the *scope*: the `import filter` above still

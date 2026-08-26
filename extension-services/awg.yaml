@@ -6,7 +6,7 @@ container:
     writeableSysfs: false
 depends:
   - configuration: true
-# Perpetual daemon, not one-shot: it never intentionally exits (see AGENTS.md - handshake/route
+# Perpetual daemon, not one-shot: it never intentionally exits (handshake/route
 # tracking for explicitly-addressed peers runs for the life of the process). `always` restarts it
 # regardless of exit reason, which also covers a bad startup (malformed config, unreachable peer
 # DNS) - it'll keep retrying every 5s until it converges, then run forever.
