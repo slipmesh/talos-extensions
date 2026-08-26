@@ -66,9 +66,9 @@ pub const RESOLVE_TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
 /// One shared client for every RIPEstat call - connection/TLS reuse across the lookups a single
 /// resolve makes, instead of a fresh connection pool and TLS handshake per request.
 ///
-/// Fallible rather than `.expect()`-built: building the TLS backend can fail on its own (confirmed
-/// directly - this used to be an unconditional `.expect()` that panicked the whole process the
-/// moment this extension's rootfs had nowhere for `rustls-platform-verifier` to find a CA store; see
+/// Fallible rather than `.expect()`-built: building the TLS backend can fail on its own, and an
+/// `.expect()` here panics the whole process when the extension's rootfs gives
+/// `rustls-platform-verifier` nowhere to find a CA store; see
 /// `../../extension-services/router.yaml`'s `mounts:`, which bind-mounts the Talos host's own
 /// `/etc/ssl/certs` into the container to fix that at the packaging level rather than here), and a
 /// `LazyLock` initializer panicking on first access would take down this whole process rather than

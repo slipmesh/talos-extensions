@@ -161,74 +161,51 @@ pub fn exact_iface_names(ospf_interfaces: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// OSPFv3 over the mesh links + loopback stub (`export none` - OSPF must never re-export
-/// kernel/BGP routes back into the IGP) plus an iBGP full mesh over loopbacks (`multihop` +
-/// RFC 8950), exporting this node's own IPv4 loopback (`source = RTS_DEVICE`, `direct1`/
-/// `router-lo` is a `protocol direct` instance), this node's own BYPASS/ANNOUNCE statics
-/// (`source = RTS_STATIC`), and any kernel-learned route inside a `learn` CIDR range
-/// (`source = RTS_INHERIT`) - not OSPF-learned routes, which would risk a route-preference fight
-/// between the two protocols for the same prefix.
-///
-/// `RTS_DEVICE` matters specifically because OSPFv3 is IPv6-only by protocol design - it can never
-/// carry an IPv4 loopback, so mesh-wide IPv4 loopback-to-loopback reachability has nowhere to come
-/// from *except* BGP. The IPv4 kernel protocol's export filter sets `krt_prefsrc` to this node's
-/// own loopback on every exported (`RTS_BGP`) route: mesh links carry no IPv4 address at all
-/// (link-local IPv6 only), so a BGP-learned route's next-hop interface has nothing for Linux to
-/// pick a source address from on its own - without an explicit hint, the kernel would default to
-/// whatever address its normal route-selection picks, and a reply sent with that source gets
-/// dropped by the peer as a bogon.
-///
-/// The `ANNOUNCE` protocol instance (not `BYPASS`) additionally gets its own `if proto =
-/// "ANNOUNCE" then { krt_prefsrc = ...; accept; }` clause, by name rather than by `source =
-/// RTS_STATIC` (which would catch `BYPASS` too - deliberately not done, see below). Confirmed
-/// directly this matters, not just for symmetry: there's no overlay here, mesh links carry no
-/// encapsulation, so a host-network process's *own* connection to a Service ClusterIP (e.g.
-/// `10.60.234.252`, inside the cluster.service_subnet `ANNOUNCE`s) picks its source address at
-/// socket-connect time, in a route lookup against the *pre*-DNAT destination - a separate, earlier
-/// step than kube-proxy's own DNAT rewrite. Without a specific local route to the whole service
-/// subnet, that lookup falls through to the node's real default route (its public WAN interface),
-/// so the connection leaves with the node's public IP as source regardless of how correctly
-/// kube-proxy rewrites the destination afterwards. Safe to install locally precisely because
-/// `cluster.service_subnet` is never a real Internet destination - nothing else could ever
-/// legitimately compete for it.
-///
-/// `BYPASS` is deliberately excluded from this - unlike the service subnet, `bypass.include`
-/// resolves to *real* Internet prefixes (GitHub, Google, Yandex, ...), and this same node also
-/// makes its own genuine outbound connections to some of them (image pulls, DNS, etc.). Installing
-/// `BYPASS`'s `blackhole`/relay routes into this node's *own* kernel table would hijack that
-/// traffic too, not just what's meant to be relayed for peers - a real regression, not a fix. Only
-/// the export to iBGP peers matters for `BYPASS` (already unconditional on `source = RTS_STATIC`
-/// there, unaffected by this filter), not local kernel installation.
-///
-/// `learn` entries get a trailing `+` in the rendered prefix-set pattern (`net ~ [ 10.99.0.0/24+
-/// ]`) - "this network and everything more specific inside it", not an exact-match list of every
-/// individual road-warrior `/32` (the k8s original's shape). Empty `learn` means `learn` stays off
-/// entirely in the kernel protocol.
-///
-/// `learn all`, not a bare `learn`: BIRD's two learn modes differ in exactly the case this needs.
-/// A bare `learn` is `KRT_LEARN_ALIEN` and picks up only routes installed by *other daemons*;
-/// `learn all` is `KRT_LEARN_ALL` and additionally picks up `KRT_SRC_KERNEL` - routes carrying
-/// `RTPROT_KERNEL`, which is what the kernel stamps on a connected route it derives from an
-/// interface address (`sysdep/unix/krt.h`'s `KRT_LEARN_*`, the `case KRT_SRC_KERNEL: if
-/// (KRT_CF->learn != KRT_LEARN_ALL) goto ignore;` in `krt.c`, and `krt.Y`'s `kern_learn` grammar,
-/// all as of the BIRD 2.18 this extension pins). A node's own podCIDR route is precisely such a
-/// route under every CNI tried - `10.61.x.0/24 dev cni0` under bridge/host-local, `10.61.x.0/24
-/// via 10.61.x.1 dev cilium_host` under Cilium - so a bare `learn` silently learns nothing and the
-/// node stops announcing its pods to the mesh: the filter matches and the route sits in the FIB,
-/// but nothing reaches any peer.
-///
-/// `all` widens the *source* of learnable routes, not the *scope*: the `import filter` above still
-/// rejects everything outside the configured prefixes, so this is not "learn the whole table".
-///
-/// The desired-state inputs that vary independently of `identity`/`as_number` - bundled into one
-/// struct (rather than five loose slice params) purely to keep `render`/`reconcile` under this
-/// workspace's default clippy `too-many-arguments` threshold, not because these five are used
-/// together for any other reason.
+/// The desired-state inputs that vary independently of `identity`/`as_number` - one struct
+/// rather than five loose slice params, to stay under the workspace's `too-many-arguments`
+/// clippy threshold.
 pub struct RenderInputs<'a> {
+    /// OSPFv3 runs over the mesh links plus the loopback stub, and never re-exports
+    /// kernel or BGP routes back into the IGP (`export none`).
     pub ospf_interfaces: &'a [String],
+    /// iBGP full mesh over the loopbacks (`multihop` + RFC 8950). It carries this node's own
+    /// IPv4 loopback (`source = RTS_DEVICE`), its BYPASS/ANNOUNCE statics (`RTS_STATIC`) and any
+    /// kernel route inside a `learn` range (`RTS_INHERIT`) - but never OSPF-learned routes, which
+    /// would put the two protocols in a preference fight over the same prefix.
+    ///
+    /// BGP is the only possible carrier for the IPv4 loopbacks: OSPFv3 is IPv6-only by design.
+    /// The IPv4 kernel protocol's export filter therefore sets `krt_prefsrc` to this node's own
+    /// loopback on every exported route - mesh links carry no IPv4 address, so a BGP-learned
+    /// route's next-hop interface offers Linux no source address to pick, and without the hint a
+    /// reply leaves with whatever address route selection chose and is dropped by the peer as a
+    /// bogon.
     pub bgp_peers: &'a [BgpPeer],
+    /// Exported to iBGP peers only, never installed in this node's own kernel table: unlike the
+    /// service subnet, `bypass.include` resolves to real Internet prefixes that this node also
+    /// reaches on its own behalf (image pulls, DNS). Installing the blackhole/relay routes
+    /// locally would hijack that traffic too.
     pub bypass: &'a [BypassRoute],
+    /// Matched by protocol name in the kernel export filter rather than by `source = RTS_STATIC`,
+    /// which would catch `bypass` as well. A local route matters here: with no encapsulation on
+    /// the mesh, a host-network process connecting to a ClusterIP picks its source address at
+    /// connect time, in a route lookup against the pre-DNAT destination - earlier than
+    /// kube-proxy's rewrite. Without a local route covering the service subnet that lookup falls
+    /// through to the default route and the connection leaves with the node's public address.
+    /// Installing it locally is safe precisely because the service subnet is never a real
+    /// Internet destination.
     pub announce: &'a [AnnounceRoute],
+    /// IPv4 CIDR *ranges*. Each is rendered with a trailing `+` (`net ~ [ 10.99.0.0/24+ ]`) -
+    /// the network and everything more specific inside it, not an exact-match list of
+    /// individual `/32`s. An empty list turns kernel learning off entirely.
+    ///
+    /// Rendered as `learn all`, not a bare `learn`: a bare `learn` is `KRT_LEARN_ALIEN` and picks
+    /// up only routes installed by other daemons, while `learn all` is `KRT_LEARN_ALL` and also
+    /// takes `KRT_SRC_KERNEL` - what the kernel stamps on a connected route derived from an
+    /// interface address (`sysdep/unix/krt.h`'s `KRT_LEARN_*`, the `case KRT_SRC_KERNEL` guard in
+    /// `krt.c`, and `krt.Y`'s `kern_learn` grammar, as of the pinned BIRD 2.18). A node's own
+    /// podCIDR route is exactly that under every CNI, so a bare `learn` silently learns nothing
+    /// and the node stops announcing its pods. `all` widens the *source* of learnable routes, not
+    /// the scope: the import filter still rejects everything outside these prefixes.
     pub learn: &'a [String],
     /// Extra interfaces (exact name, glob, or CIDR - same grammar as `ospf_interfaces`) to treat
     /// as `protocol direct` sources, each exported over iBGP by the existing `RTS_DEVICE` clause
