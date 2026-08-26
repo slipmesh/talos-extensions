@@ -120,8 +120,13 @@ The two 3.1 switches are the exception to that pairing: each end decides for its
 `random_trailers` appends a random-length trailer to outgoing packets and relaxes the receive-side
 length check to "at least", so a peer that doesn't set it still accepts the traffic.
 `disable_cookies` suppresses cookie replies, whose own message type is a signature - at the cost
-of the load-shedding they exist for. Both are sent explicitly on every reconcile, set or not:
-an omitted attribute leaves the kernel's current value alone.
+of the load-shedding they exist for.
+
+Both are sent explicitly on every reconcile, set or not: an omitted attribute leaves the
+kernel's current value alone. A module older than 3.1 rejects them - generic netlink validates against
+the family's own attribute maximum and fails the whole request rather than ignoring what it
+does not know - so a refused `SetDevice` is retried once without them, and the interface comes
+up without the two switches instead of not at all.
 
 ### Ownership: the whole `amneziawg` netlink kind, no naming convention
 
