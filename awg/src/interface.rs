@@ -4,7 +4,7 @@
 //! to carry over between runs).
 //!
 //! Ported and merged from slipmesh-operators' `mesh::awg`/`roadwarriors::awg` (same repo,
-//! github.com/slipmesh/operators) - the two were nearly-identical device/peer-attribute-building
+//! ) - the two were nearly-identical device/peer-attribute-building
 //! code with different reconciliation shapes (mesh: exactly one peer, unconditional resend;
 //! roadwarriors: many peers, point-wise diff). One shape (point-wise diff) now covers both, since
 //! a diff against a single peer degenerates to exactly the same SetDevice call an unconditional

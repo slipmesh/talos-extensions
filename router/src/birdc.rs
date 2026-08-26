@@ -24,7 +24,7 @@
 //! a normal final-line-only reply) before any command is sent - `command` consumes and discards
 //! it as part of every fresh connection.
 //!
-//! Ported from `slipmesh/operators`' `router/src/birdc.rs` (github.com/slipmesh/operators) -
+//! Ported from `slipmesh/operators`' `router/src/birdc.rs` -
 //! verbatim, no changes: this module has zero coupling to Kubernetes or to how `router.yaml` is
 //! shaped, it's a pure client for BIRD's own wire protocol.
 

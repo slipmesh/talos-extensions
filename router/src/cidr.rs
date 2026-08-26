@@ -1,6 +1,6 @@
 //! Pure IPv4 CIDR parsing and set arithmetic - no I/O, no netlink, fully portable. Ported from
-//! `slipmesh/core`'s `cidr.rs` (github.com/slipmesh/core), dropped down to just the pieces
-//! `resolver.rs`'s bypass-route set arithmetic and `config.rs`'s validation actually use - the
+//! `slipmesh/core`'s `cidr.rs`, dropped down to just the pieces `resolver.rs`'s bypass-route set
+//! arithmetic and `config.rs`'s validation actually use - the
 //! `Cidr`/`contains`/`address_exclude`/`collapse` trio matches Python's `ipaddress` module's
 //! `subnet_of`/`address_exclude`/`collapse_addresses` shape. IPv4 only throughout: BYPASS/ANNOUNCE
 //! stay IPv4-only even after the OSPFv3/RFC 8950 underlay migration (only the transport under iBGP

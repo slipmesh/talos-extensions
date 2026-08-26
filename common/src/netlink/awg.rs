@@ -3,7 +3,7 @@
 //! the `awg` CLI. This module only owns the raw `GetDevice`/`SetDevice` netlink transport;
 //! interface/address/route management is `rt.rs` (a different netlink family).
 //!
-//! Ported from slipmesh-operators' `common::netlink::awg` (github.com/slipmesh/operators) -
+//! Ported from slipmesh-operators' `common::netlink::awg` -
 //! functionally identical, just re-homed into a project with no Kubernetes dependency.
 
 use crate::keys::decode_key;

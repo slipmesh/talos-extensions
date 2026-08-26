@@ -9,7 +9,7 @@
 //! `talos-extensions/awg`) and re-announces them over iBGP as `RTS_INHERIT`. Still out of scope:
 //! eBGP peers.
 //!
-//! Ported from `slipmesh/operators`' `router/src/bird.rs` (github.com/slipmesh/operators), with
+//! Ported from `slipmesh/operators`' `router/src/bird.rs`, with
 //! the Kubernetes-only pieces dropped (CNI conflist rendering, the `DIRECT_CNI` protocol block,
 //! `ospf_ifaces`/`bgp_peers` derived from CRDs) and replaced by what `router.yaml` declares
 //! directly - see `talos-extensions/README.md`'s design notes and `config.rs`'s doc comments for

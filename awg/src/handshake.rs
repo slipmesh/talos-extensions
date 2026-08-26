@@ -1,6 +1,6 @@
 //! Handshake polling + kernel route management for "tracked" peers (config entries with an
 //! explicit `allowed_ips` - see `config::PeerEntry`). Ported from slipmesh-operators'
-//! `roadwarriors::handshake` (github.com/slipmesh/operators), generalized from one fixed shared
+//! `roadwarriors::handshake`, generalized from one fixed shared
 //! interface to any number of interfaces, and with two changes this daemon's restart-heavy
 //! lifecycle needs that the original (a long-lived pod, rarely restarted) didn't:
 //!

@@ -1,7 +1,7 @@
 //! Thin wrapper around `rtnetlink` - the route/link/address netlink family (`NETLINK_ROUTE`,
 //! distinct from the "amneziawg" genl one in `awg.rs`). Replaces `ip` subprocess calls entirely.
 //!
-//! Ported from slipmesh-operators' `common::netlink::rt` (github.com/slipmesh/operators), with two
+//! Ported from slipmesh-operators' `common::netlink::rt`, with two
 //! changes beyond the re-home: address handling is generalized from "one IPv4 address" (`
 //! ensure_address`) / "N IPv6 addresses" (`ensure_address_v6`) into one `ensure_addresses` that
 //! takes any mix of IPv4/IPv6 CIDRs; and routes carry an explicit `RouteProtocol` tag (`route_add`/

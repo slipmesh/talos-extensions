@@ -1,8 +1,8 @@
 //! Resolution pipeline: resolve each source (asn -> RIPEstat, literal -> verbatim, geoip ->
 //! RIPEstat, dns -> A record) into (net, label) pairs, dedupe/collapse per label, then punch out
-//! every excluded network (resolved the same way). Ported from `slipmesh/core`'s `resolver.rs`
-//! (github.com/slipmesh/core) - that module has no `kube`/`k8s-openapi` import (confirmed before
-//! porting), so this is close to verbatim; the only structural change is `BypassSourceEntry`
+//! every excluded network (resolved the same way). Ported from `slipmesh/core`'s `resolver.rs`,
+//! which carried no `kube`/`k8s-openapi` import, so this is close to verbatim; the only
+//! structural change is `BypassSourceEntry`
 //! below, a plain `#[derive(Deserialize)]` struct read straight out of `router.yaml` instead of
 //! the CRD-schema'd version in `core/src/router_types.rs` (which derives `JsonSchema`/
 //! `CustomResource` via `kube`'s macros - exactly the dependency this workspace refuses to take).
