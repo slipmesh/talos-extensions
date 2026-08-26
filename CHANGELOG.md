@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added ✨
+
+- Router: learn kernel-proto routes, drop the implicit direct_interfaces defaults
+
+### Documentation 📚
+
+- Drop deployment-specific names from comments and metadata
+- Describe the whole workspace, not just awg
+- State the facts instead of pointing at an unpublished file
+- State the facts, drop how they were found
+- Keep the provenance, drop links to repositories that no longer exist
+- Document each field where it is, not in one block above the struct
+
+### Fixed 🐛
+
+- Router: export every OSPF route source to the kernel, not just RTS_OSPF
+
+### Miscellaneous 🧹
+
+- Add the standard markdownlint and clippy config
+
+### Reverts ⏪
+
+- Router: export every OSPF route source to the kernel, not just RTS_OSPF
+
+### Style 🎨
+
+- Satisfy rustfmt and clippy as of Rust 1.98
+
 ## [0.1.1] - 2026-08-19
 
 ### Added ✨
