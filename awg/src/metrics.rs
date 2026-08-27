@@ -67,8 +67,9 @@ struct PeerLabels {
     /// anywhere else in this output.
     peer: String,
     /// The config's own name for the peer, empty when it has none - what a dashboard shows
-    /// instead of a base64 key. Prometheus treats an empty label value as an absent one, so an
-    /// unnamed peer costs nothing.
+    /// instead of a base64 key. An empty value still occupies the label in the exposition; it
+    /// simply reads as "no name", and Prometheus considers the resulting series identical to one
+    /// carrying no `peer_name` at all.
     peer_name: String,
 }
 
@@ -271,18 +272,31 @@ async fn collect(client: &Mutex<Option<AwgClient>>, cfg: &AwgConfig) -> Dumps {
     let mut guard = client.lock().await;
     let mut dumps = Dumps::new();
 
-    for iface in &cfg.interfaces {
-        if guard.is_none() {
-            match AwgClient::connect() {
-                Ok(c) => *guard = Some(c),
-                Err(e) => {
-                    tracing::warn!(error = %e, "metrics: failed to open its own genetlink socket");
-                    dumps.insert(iface.name.clone(), None);
-                    continue;
-                }
+    // One connect attempt per scrape, not per interface: if opening the socket fails it will fail
+    // the same way for every interface behind it, and retrying down the list would only multiply
+    // the log line and the latency by however many interfaces the node has.
+    if guard.is_none() {
+        match AwgClient::connect() {
+            Ok(client) => *guard = Some(client),
+            Err(e) => {
+                tracing::warn!(error = %e, "metrics: failed to open its own genetlink socket");
+                return cfg
+                    .interfaces
+                    .iter()
+                    .map(|iface| (iface.name.clone(), None))
+                    .collect();
             }
         }
-        let awg = guard.as_mut().expect("just connected");
+    }
+
+    for iface in &cfg.interfaces {
+        let Some(awg) = guard.as_mut() else {
+            // An earlier interface timed out and dropped the client. Reconnecting mid-scrape would
+            // only risk waiting out the same timeout again, so the rest of this scrape reports
+            // itself unread and the next one starts with a fresh socket.
+            dumps.insert(iface.name.clone(), None);
+            continue;
+        };
 
         let dump = match timeout(DUMP_TIMEOUT, dump_peers(awg, &iface.name)).await {
             Ok(Ok(peers)) => Some(peers),
@@ -534,6 +548,8 @@ mod tests {
             &snapshot(&[], NOW),
             NOW,
         );
+        // Still labelled, with an empty value - the series is identical to one with no
+        // `peer_name` at all as far as Prometheus is concerned.
         assert!(out.contains("peer_name=\"\""), "{out}");
         assert!(
             !series(&out, "slipmesh_awg_peer_last_handshake_seconds{").is_empty(),

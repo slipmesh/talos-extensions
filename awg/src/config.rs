@@ -104,6 +104,22 @@ pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
              which is the v4 loopback",
             metrics.listen
         );
+        // Both of the below parse happily and would bind, which is why they are worth refusing
+        // here. A wildcard address puts the endpoint on every interface the node has, public ones
+        // included, when being reachable only inside the overlay is its whole protection.
+        anyhow::ensure!(
+            !listen.ip().is_unspecified(),
+            "metrics.listen {:?} is a wildcard address - bind this node's own mesh loopback, which \
+             exists only inside the overlay",
+            metrics.listen
+        );
+        // Port 0 asks the kernel for an ephemeral one, which nothing can then be pointed at.
+        // "Serve nothing" is spelled by omitting the section.
+        anyhow::ensure!(
+            listen.port() != 0,
+            "metrics.listen {:?} has no port - omit the metrics section to serve nothing",
+            metrics.listen
+        );
     }
 
     let mut seen_names = HashSet::new();
@@ -348,6 +364,20 @@ interfaces:
     #[test]
     fn accepts_a_v4_metrics_listen_address() {
         validate(&with_metrics("10.0.0.1:9586")).unwrap();
+    }
+
+    #[test]
+    fn rejects_a_wildcard_metrics_listen_address() {
+        // The whole point of the address is that it exists only inside the overlay. Binding
+        // 0.0.0.0 would put the endpoint on every interface the node has, public ones included.
+        assert!(validate(&with_metrics("0.0.0.0:9586")).is_err());
+    }
+
+    #[test]
+    fn rejects_port_zero() {
+        // The kernel would pick an ephemeral port, which nothing could then scrape. "Do not
+        // listen" is spelled by omitting the section, not by asking for port 0.
+        assert!(validate(&with_metrics("10.0.0.1:0")).is_err());
     }
 
     #[test]

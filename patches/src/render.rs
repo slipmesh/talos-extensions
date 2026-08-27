@@ -555,6 +555,13 @@ fn metrics_for(mesh: &MeshConfig, node_name: &str) -> Result<Option<MetricsConfi
     let Some(port) = mesh.cluster.metrics_port else {
         return Ok(None);
     };
+    // Caught here rather than left to `awg::config::validate` on the node: unset already means
+    // "serve nothing", so `metrics_port: 0` is never anything but a mistake, and it should fail
+    // where it was written instead of on five nodes at once.
+    anyhow::ensure!(
+        port != 0,
+        "cluster.metrics_port is 0 - remove the field to serve no metrics"
+    );
     let (v4, _v6) = node_loopbacks(mesh, node_name)?;
     Ok(Some(MetricsConfig {
         listen: format!("{v4}:{port}"),
@@ -1191,6 +1198,15 @@ mesh:
 
         let rw_iface = cfg.interfaces.iter().find(|i| i.name == "rw-eu").unwrap();
         assert_eq!(rw_iface.peers[0].name.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn render_awg_config_refuses_metrics_port_zero() {
+        let yaml = mesh_and_roadwarriors_yaml()
+            .replace("  bgp_as: 64512", "  bgp_as: 64512\n  metrics_port: 0");
+        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let resolved = resolved_for(&mesh);
+        assert!(render_awg_config(&mesh, "a", &resolved).is_err());
     }
 
     #[test]
