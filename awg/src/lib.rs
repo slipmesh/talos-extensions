@@ -7,3 +7,4 @@ pub mod config;
 pub mod gc;
 pub mod handshake;
 pub mod interface;
+pub mod metrics;

@@ -15,11 +15,17 @@ path = "src/main.rs"
 anyhow.workspace = true
 base64.workspace = true
 common.workspace = true
+bytes.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 netlink-packet-amnezia-wireguard.workspace = true
 netlink-packet-core.workspace = true
+prometheus-client.workspace = true
 rtnetlink.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+socket2.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
