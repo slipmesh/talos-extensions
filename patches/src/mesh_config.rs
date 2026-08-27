@@ -38,6 +38,13 @@ pub struct ClusterConfig {
     pub loopback_networks: LoopbackNetworks,
     #[serde(default)]
     pub bypass_refresh_interval_secs: Option<u64>,
+    /// TCP port every node's `awg` serves Prometheus metrics on, bound to that node's own v4
+    /// loopback - the address kubelet already reports as `InternalIP`, so node discovery plus a
+    /// port relabel reaches it exactly the way node-exporter is reached today. Global rather than
+    /// per-node: one scrape config for the fleet, and a port that differs by node is a port someone
+    /// has to look up. Unset means no node listens - `awg` opens nothing it wasn't told to.
+    #[serde(default)]
+    pub metrics_port: Option<u16>,
     /// Interfaces every node's `router.yaml` should treat as `protocol direct` sources (see
     /// `router::config::RouterConfig::direct_interfaces`'s own doc comment) - global, not per-node,
     /// since the interface naming is the same on every node by construction. `protocol direct` is

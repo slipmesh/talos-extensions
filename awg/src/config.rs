@@ -8,11 +8,27 @@ use common::Obfuscation;
 use common::netlink::rt::parse_cidr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::net::SocketAddr;
 
 #[derive(Deserialize, Serialize, Debug, Default, PartialEq)]
 pub struct AwgConfig {
     #[serde(default)]
     pub interfaces: Vec<InterfaceEntry>,
+    /// Absent means "do not listen" - a node not set up for scraping must not open a port because
+    /// a default said so. Rendered rather than hand-written (see the `patches` crate), and safe to
+    /// render ahead of the binary that reads it: nothing here denies unknown fields, so an older
+    /// `awg` ignores the section instead of refusing the config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<MetricsConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
+pub struct MetricsConfig {
+    /// `ip:port` for the Prometheus endpoint - the node's own mesh loopback address, never
+    /// `0.0.0.0`: that address exists only inside the overlay, so the endpoint is unreachable from
+    /// outside without depending on a firewall rule being in place first. IPv4 only, because that
+    /// is the address kubelet reports as `InternalIP` and Prometheus therefore discovers.
+    pub listen: String,
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
@@ -69,8 +85,21 @@ pub struct PeerEntry {
 pub const DEFAULT_HANDSHAKE_STALE_SECS: u64 = 180;
 
 /// Pure validation, no I/O: interface names are non-empty, fit `IFNAMSIZ`, and are unique;
-/// every `addresses`/`allowed_ips` entry is a parseable CIDR (either family).
+/// every `addresses`/`allowed_ips` entry is a parseable CIDR (either family); `metrics.listen`,
+/// when present, is a parseable IPv4 `ip:port`.
 pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
+    if let Some(metrics) = &cfg.metrics {
+        let listen: SocketAddr = metrics.listen.parse().map_err(|e| {
+            anyhow::anyhow!("metrics.listen {:?} is not an ip:port: {e}", metrics.listen)
+        })?;
+        anyhow::ensure!(
+            listen.is_ipv4(),
+            "metrics.listen {:?} is not IPv4 - Prometheus discovers a node by its InternalIP, \
+             which is the v4 loopback",
+            metrics.listen
+        );
+    }
+
     let mut seen_names = HashSet::new();
     for iface in &cfg.interfaces {
         anyhow::ensure!(!iface.name.is_empty(), "interface name must not be empty");
@@ -198,6 +227,7 @@ interfaces:
     fn rejects_duplicate_interface_names() {
         let cfg = AwgConfig {
             interfaces: vec![iface("dup"), iface("dup")],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -206,6 +236,7 @@ interfaces:
     fn rejects_a_name_longer_than_ifnamsiz() {
         let cfg = AwgConfig {
             interfaces: vec![iface("this-name-is-way-too-long")],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -216,6 +247,7 @@ interfaces:
         a.addresses.push("not-a-cidr".to_string());
         let cfg = AwgConfig {
             interfaces: vec![a],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -231,6 +263,7 @@ interfaces:
         });
         let cfg = AwgConfig {
             interfaces: vec![a],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -252,6 +285,7 @@ interfaces:
         });
         let cfg = AwgConfig {
             interfaces: vec![a],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -268,6 +302,7 @@ interfaces:
         // a.obfuscation.header_protection_key is left at its default: None.
         let cfg = AwgConfig {
             interfaces: vec![a],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -285,8 +320,50 @@ interfaces:
         });
         let cfg = AwgConfig {
             interfaces: vec![a],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_ok());
+    }
+
+    fn with_metrics(listen: &str) -> AwgConfig {
+        AwgConfig {
+            interfaces: vec![],
+            metrics: Some(MetricsConfig {
+                listen: listen.to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn accepts_a_v4_metrics_listen_address() {
+        validate(&with_metrics("10.0.0.1:9586")).unwrap();
+    }
+
+    #[test]
+    fn rejects_a_malformed_metrics_listen_address() {
+        assert!(validate(&with_metrics("10.0.0.1")).is_err());
+        assert!(validate(&with_metrics("not-an-address")).is_err());
+    }
+
+    #[test]
+    fn rejects_a_v6_metrics_listen_address() {
+        // The address Prometheus discovers is the node's InternalIP, which is the v4 loopback;
+        // a v6 listener would be bound to something nothing scrapes.
+        assert!(validate(&with_metrics("[fd00::1]:9586")).is_err());
+    }
+
+    #[test]
+    fn a_config_without_a_metrics_section_parses_and_validates() {
+        let cfg: AwgConfig = serde_yaml::from_str("interfaces: []").unwrap();
+        assert_eq!(cfg.metrics, None);
+        validate(&cfg).unwrap();
+    }
+
+    #[test]
+    fn a_metrics_section_round_trips_through_yaml() {
+        let cfg = with_metrics("10.0.0.1:9586");
+        let yaml = serde_yaml::to_string(&cfg).unwrap();
+        assert_eq!(serde_yaml::from_str::<AwgConfig>(&yaml).unwrap(), cfg);
     }
 
     #[test]
