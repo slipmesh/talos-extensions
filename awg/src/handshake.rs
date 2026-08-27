@@ -48,8 +48,8 @@ fn now_unix() -> u64 {
 
 /// Everything one peer's `GetDevice` dump says that anything here reads: the handshake the route
 /// tracking below decides on, and the byte counters `metrics` reports. Deliberately not
-/// `Endpoint`: on a roadwarrior that is a client's current address, and nothing in this daemon
-/// may put it anywhere it could be retained.
+/// `Endpoint`: a roaming client changes address whenever its network does, so as a metric label it
+/// would mint a fresh time series on every reconnection.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PeerStats {
     /// Unix seconds, `0` when the kernel has never reported a handshake for this peer.

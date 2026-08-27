@@ -60,6 +60,12 @@ pub struct InterfaceEntry {
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct PeerEntry {
     pub public_key: String,
+    /// Human-readable name, carried for display only: it reaches the `peer_name` metric label and
+    /// nothing else. Never used to decide behaviour - the public key is the identity, and
+    /// `allowed_ips` is the only discriminator between kinds of peer. A base64 key is what a
+    /// dashboard would otherwise have to show, which nobody can read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
     /// `None` => this peer gets the full-tunnel default (`0.0.0.0/0` + `::/0`) as its AllowedIPs,
@@ -257,6 +263,7 @@ interfaces:
         let mut a = iface("a");
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
+            name: None,
             endpoint: None,
             allowed_ips: Some(vec!["not-a-cidr".to_string()]),
             advanced_security: false,
@@ -273,12 +280,14 @@ interfaces:
         let mut a = iface("a");
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
+            name: None,
             endpoint: None,
             allowed_ips: Some(vec!["10.0.0.1/32".to_string()]),
             advanced_security: false,
         });
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
+            name: None,
             endpoint: None,
             allowed_ips: Some(vec!["10.0.0.2/32".to_string()]),
             advanced_security: false,
@@ -295,6 +304,7 @@ interfaces:
         let mut a = iface("a");
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
+            name: None,
             endpoint: None,
             allowed_ips: None,
             advanced_security: true,
@@ -314,6 +324,7 @@ interfaces:
             Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
+            name: None,
             endpoint: None,
             allowed_ips: None,
             advanced_security: true,

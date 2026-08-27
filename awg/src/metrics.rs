@@ -66,6 +66,10 @@ struct PeerLabels {
     /// The peer's base64 public key. Public keys are not secret; private keys never appear here or
     /// anywhere else in this output.
     peer: String,
+    /// The config's own name for the peer, empty when it has none - what a dashboard shows
+    /// instead of a base64 key. Prometheus treats an empty label value as an absent one, so an
+    /// unnamed peer costs nothing.
+    peer_name: String,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
@@ -145,6 +149,7 @@ pub fn render(cfg: &AwgConfig, dumps: &Dumps, snapshot: &ReconcileSnapshot, now:
                 interface: iface.name.clone(),
                 kind: kind.to_string(),
                 peer: peer.public_key.clone(),
+                peer_name: peer.name.clone().unwrap_or_default(),
             };
             interface_peers
                 .get_or_create(&InterfaceKindLabels {
@@ -396,9 +401,10 @@ mod tests {
     const PRIVATE_KEY: &str = "private-key-must-never-be-emitted";
     const NOW: u64 = 1_700_000_000;
 
-    fn peer(public_key: &str, allowed_ips: Option<&[&str]>) -> PeerEntry {
+    fn peer(public_key: &str, name: Option<&str>, allowed_ips: Option<&[&str]>) -> PeerEntry {
         PeerEntry {
             public_key: public_key.to_string(),
+            name: name.map(str::to_string),
             endpoint: Some("203.0.113.7:51820".to_string()),
             allowed_ips: allowed_ips.map(|cidrs| cidrs.iter().map(|c| (*c).to_string()).collect()),
             advanced_security: false,
@@ -422,8 +428,11 @@ mod tests {
     fn config() -> AwgConfig {
         AwgConfig {
             interfaces: vec![
-                iface("mesh-node-a", vec![peer(MESH_PEER, None)]),
-                iface("rw-eu", vec![peer(RW_PEER, Some(&["10.99.0.5/32"]))]),
+                iface("mesh-node-a", vec![peer(MESH_PEER, Some("node-a"), None)]),
+                iface(
+                    "rw-eu",
+                    vec![peer(RW_PEER, Some("client-one"), Some(&["10.99.0.5/32"]))],
+                ),
             ],
             metrics: Some(MetricsConfig {
                 listen: "10.62.0.1:9586".to_string(),
@@ -488,6 +497,46 @@ mod tests {
             handshakes
                 .iter()
                 .any(|l| l.contains("interface=\"rw-eu\"") && l.contains("kind=\"roadwarrior\"")),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_peer_name_is_carried_through_as_its_own_label() {
+        // A base64 public key is unreadable on a dashboard; the name is what a human picks a
+        // series by. It never decides anything - the key stays the identity.
+        let out = render(
+            &config(),
+            &dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4))),
+            &snapshot(&[("rw-eu", RW_PEER)], NOW),
+            NOW,
+        );
+        assert!(out.contains("peer_name=\"node-a\""), "{out}");
+        assert!(out.contains("peer_name=\"client-one\""), "{out}");
+        assert!(out.contains("peer=\"peer-roadwarrior\""), "{out}");
+    }
+
+    #[test]
+    fn an_unnamed_peer_still_gets_every_series() {
+        let cfg = AwgConfig {
+            interfaces: vec![iface(
+                "rw-eu",
+                vec![peer(RW_PEER, None, Some(&["10.9.0.1/32"]))],
+            )],
+            metrics: None,
+        };
+        let out = render(
+            &cfg,
+            &Dumps::from([(
+                "rw-eu".to_string(),
+                Some(HashMap::from([(RW_PEER.to_string(), stats(NOW - 5, 1, 1))])),
+            )]),
+            &snapshot(&[], NOW),
+            NOW,
+        );
+        assert!(out.contains("peer_name=\"\""), "{out}");
+        assert!(
+            !series(&out, "slipmesh_awg_peer_last_handshake_seconds{").is_empty(),
             "{out}"
         );
     }

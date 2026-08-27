@@ -477,6 +477,7 @@ fn mesh_interfaces_for(
             handshake_stale_secs: None,
             peers: vec![PeerEntry {
                 public_key: keys::public_key_from_private(peer_private_key)?,
+                name: Some(peer_name.clone()),
                 endpoint: peer_node
                     .endpoint
                     .as_ref()
@@ -522,6 +523,7 @@ fn roadwarrior_interfaces_for(
                     .iter()
                     .map(|c| PeerEntry {
                         public_key: c.public_key.clone(),
+                        name: Some(c.name.clone()),
                         endpoint: None,
                         allowed_ips: Some(c.allowed_ips.clone()),
                         advanced_security: c.advanced_security,
@@ -1174,6 +1176,21 @@ mesh:
         let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
         awg::config::validate(&cfg).unwrap();
         assert_eq!(cfg.interfaces.len(), 2);
+    }
+
+    #[test]
+    fn every_rendered_peer_carries_the_name_it_has_in_mesh_yaml() {
+        // Straight from mesh.yaml: the node on the far end of a link, the client's own name in a
+        // pool. It only ever reaches the `peer_name` metric label - nothing decides on it.
+        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let resolved = resolved_for(&mesh);
+        let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
+
+        let mesh_iface = cfg.interfaces.iter().find(|i| i.name == "mesh-b").unwrap();
+        assert_eq!(mesh_iface.peers[0].name.as_deref(), Some("b"));
+
+        let rw_iface = cfg.interfaces.iter().find(|i| i.name == "rw-eu").unwrap();
+        assert_eq!(rw_iface.peers[0].name.as_deref(), Some("alice"));
     }
 
     #[test]

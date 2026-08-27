@@ -49,7 +49,8 @@ peer:
   handshake-tracked at 1Hz: while its handshake stays fresher than `handshake_stale_secs` (default
   180), a kernel route is installed for each CIDR; once it goes stale, the route is removed. This
   is a roaming client - the route's mere presence in the kernel *is* the "this client is currently
-  connected" signal (`talosctl get routes`), with no status field anywhere.
+  connected" signal, with no status field anywhere. `slipmesh_awg_peer_connected` (below) reports
+  that same verdict without reading the FIB by hand.
 
 One interface can freely mix both kinds of peer.
 
@@ -99,6 +100,8 @@ interfaces:
       max_handshake_attempts: 90
       random_trailers: true            # 3.1: pad outgoing packets to a varying length
       disable_cookies: true            # 3.1: never send cookie replies
+metrics:
+  listen: "10.62.0.4:9586"             # omit the whole section to serve nothing
 ```
 
 **Private keys always come from the config - this binary never generates or persists one.**
@@ -141,10 +144,48 @@ Routes this daemon installs are tagged with a dedicated `RouteProtocol` value
 to mark their own routes. This is what makes route bookkeeping correct across a restart (see below):
 only routes carrying that exact tag are ever treated as "ours".
 
-A live handshake-polling *watcher* independent of route installation (i.e. something readable via
-`talosctl` beyond "does a route exist") was deliberately deferred - if it's ever wanted, the hook
-point is `handshake.rs`'s `dump_handshakes`, which already has the parsed per-peer handshake
-timestamps.
+### Metrics
+
+With a `metrics` section in the config, `awg` serves `GET /metrics` on that address; without one it
+opens nothing, because a node not set up for scraping should not open a port on a default. `patches`
+(below) renders the section from `cluster.metrics_port`, binding it to the node's own v4 mesh
+loopback - the address kubelet reports as `InternalIP`, so Prometheus reaches it through node
+discovery plus a port relabel, exactly the way node-exporter is reached. That address belongs to
+`ext-router`, and Talos does not order extension startup, so the socket is bound with `IP_FREEBIND`
+and starts answering once the address appears; until then the scrape fails, which is the honest
+reading rather than a fault to paper over.
+
+What it answers is the one thing per-interface counters cannot: whether a link is quiet or dead.
+Both read as zero bytes, the last handshake separates them, and that lives only in the `amneziawg`
+genl family - `WG_GENL_NAME` is `"amneziawg"`, not `"wireguard"`, so every exporter built on
+`wgctrl` looks at the wrong family and sees nothing.
+
+| metric | type | meaning |
+| --- | --- | --- |
+| `slipmesh_awg_peer_last_handshake_seconds` | gauge | unix time; no series at all if the peer never handshook |
+| `slipmesh_awg_peer_rx_bytes_total` / `..._tx_bytes_total` | counter | per-peer traffic |
+| `slipmesh_awg_peer_connected` | gauge | 1/0, this daemon's own verdict - roadwarrior peers only |
+| `slipmesh_awg_interface_peers` | gauge | peers *configured*, by `interface` and `kind` |
+| `slipmesh_awg_interface_dump_ok` | gauge | 1/0 per interface, this scrape |
+| `slipmesh_awg_reconcile_last_success_seconds` | gauge | the routing loop's last completed pass |
+| `slipmesh_build_info` | gauge | `component="awg"`, `version` |
+
+Peer series carry `interface`, `kind`, `peer` (the base64 public key) and `peer_name` (the config's
+own name for it, empty when it has none - a dashboard needs something a human can read). `kind` is
+`mesh` or `roadwarrior`, decided by `allowed_ips` and nothing else: matching on the interface name
+would work today and break the first time something is named differently.
+
+Labels come from the config and values from the dump, joined on the public key, so a peer removed
+from the config disappears on the next scrape and a peer the kernel still has but the config no
+longer names is not reported at all. `slipmesh_awg_peer_connected` is the routing loop's own
+verdict, published over a watch channel and emitted only while the snapshot behind it is fresh: it
+says a route is installed, which is not the same as "the handshake looks recent" whenever
+`route_add` failed. A peer's `Endpoint` is deliberately never read into a label - a roaming client
+changes address with its network, and each change would mint a new time series.
+
+The prefix is `slipmesh_awg_`, not `slipmesh_`: `ext-router` has peers of its own (BGP, OSPF) and
+would collide on `slipmesh_peer_*` the day it exports anything. `slipmesh_build_info` is the one
+family deliberately without a subsystem, so `component` separates the extensions there.
 
 ### Restarts are the reload mechanism
 
