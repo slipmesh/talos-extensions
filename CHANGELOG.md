@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.3] - 2026-08-27
+
+### Added ✨
+
+- Expose AmneziaWG 3.1's random trailers and cookie suppression
+
+### CI/CD ⚙️
+
+- Check this workspace on its own, not only through the repositories that ship it
+
+### Fixed 🐛
+
+- Let a dropped 3.1 switch turn off, and survive an older module
+
+### Miscellaneous 🧹
+
+- Move markdownlint config to the cli2 file
+
 ## [0.1.2] - 2026-08-26
 
 ### Added ✨
