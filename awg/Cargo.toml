@@ -20,6 +20,6 @@ netlink-packet-core.workspace = true
 rtnetlink.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

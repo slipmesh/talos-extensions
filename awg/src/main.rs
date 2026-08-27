@@ -1,3 +1,4 @@
+use awg::handshake::ReconcileSnapshot;
 use awg::{config, gc, handshake, interface};
 
 use anyhow::{Context, Result};
@@ -70,11 +71,12 @@ async fn run() -> Result<()> {
     log_handshake_summary(&mut awg, &cfg).await;
 
     let tracked = build_tracked_interfaces(&rt, &cfg).await?;
+    let (verdict_tx, _verdict_rx) = tokio::sync::watch::channel(ReconcileSnapshot::default());
     tracing::info!(
         tracked_interfaces = tracked.len(),
         "startup converged, entering handshake/route tracking loop"
     );
-    handshake::run(rt, awg, tracked).await;
+    handshake::run(rt, awg, tracked, verdict_tx).await;
 }
 
 /// One-time diagnostic dump of every peer's handshake state right after convergence - not just
@@ -83,10 +85,11 @@ async fn run() -> Result<()> {
 /// interface is logged and skipped, never fatal.
 async fn log_handshake_summary(awg: &mut AwgClient, cfg: &config::AwgConfig) {
     for iface in &cfg.interfaces {
-        match handshake::dump_handshakes(awg, &iface.name).await {
-            Ok(handshakes) => {
+        match handshake::dump_peers(awg, &iface.name).await {
+            Ok(peers) => {
                 for peer in &iface.peers {
-                    let last_handshake = handshakes.get(&peer.public_key).copied().unwrap_or(0);
+                    let last_handshake =
+                        peers.get(&peer.public_key).map_or(0, |p| p.last_handshake);
                     tracing::info!(
                         iface = iface.name,
                         public_key = peer.public_key,
