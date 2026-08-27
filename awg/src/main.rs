@@ -1,9 +1,13 @@
-use awg::{config, gc, handshake, interface};
+use awg::handshake::ReconcileSnapshot;
+use awg::{config, gc, handshake, interface, metrics};
 
 use anyhow::{Context, Result};
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
 use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::watch;
 
 /// Fixed path, matching `extension-services/awg.yaml`'s `configFiles[].mountPath` - never an env
 /// var or CLI flag: everything comes from the `ExtensionServiceConfig`, nothing else.
@@ -35,6 +39,7 @@ async fn run() -> Result<()> {
     let cfg: config::AwgConfig =
         serde_yaml::from_str(&raw).context("failed to parse config file as YAML")?;
     config::validate(&cfg).context("config validation failed")?;
+    let cfg = Arc::new(cfg);
 
     tracing::info!(interfaces = cfg.interfaces.len(), "starting awg");
 
@@ -70,11 +75,42 @@ async fn run() -> Result<()> {
     log_handshake_summary(&mut awg, &cfg).await;
 
     let tracked = build_tracked_interfaces(&rt, &cfg).await?;
+    let (verdict_tx, verdict_rx) = tokio::sync::watch::channel(ReconcileSnapshot::default());
+    spawn_metrics(&cfg, verdict_rx);
+
     tracing::info!(
         tracked_interfaces = tracked.len(),
         "startup converged, entering handshake/route tracking loop"
     );
-    handshake::run(rt, awg, tracked).await;
+    handshake::run(rt, awg, tracked, verdict_tx).await;
+}
+
+/// Starts the metrics endpoint, if this node is configured for one. A task of its own with its own
+/// lifecycle: it gets its own `AwgClient` inside `metrics::run` rather than sharing the routing
+/// loop's, so a diagnostic side channel can never wedge or slow the loop it exists to observe.
+///
+/// A failure here is logged and dropped rather than returned. Reconciliation is the daemon's job
+/// and must survive a listener that could not bind; the scrape failing is itself the signal, which
+/// is the whole reason this serves rather than writing a file.
+fn spawn_metrics(cfg: &Arc<config::AwgConfig>, verdict: watch::Receiver<ReconcileSnapshot>) {
+    let Some(metrics) = &cfg.metrics else {
+        tracing::info!("no metrics section in the config - not listening");
+        return;
+    };
+    let listen: SocketAddr = match metrics.listen.parse() {
+        Ok(listen) => listen,
+        Err(e) => {
+            // `config::validate` already parsed this, so reaching here means the two disagree.
+            tracing::error!(listen = metrics.listen, error = %e, "metrics: unusable listen address");
+            return;
+        }
+    };
+    let cfg = Arc::clone(cfg);
+    tokio::spawn(async move {
+        if let Err(e) = metrics::run(listen, cfg, verdict).await {
+            tracing::error!(error = %e, "metrics endpoint stopped - routing continues");
+        }
+    });
 }
 
 /// One-time diagnostic dump of every peer's handshake state right after convergence - not just
@@ -83,10 +119,11 @@ async fn run() -> Result<()> {
 /// interface is logged and skipped, never fatal.
 async fn log_handshake_summary(awg: &mut AwgClient, cfg: &config::AwgConfig) {
     for iface in &cfg.interfaces {
-        match handshake::dump_handshakes(awg, &iface.name).await {
-            Ok(handshakes) => {
+        match handshake::dump_peers(awg, &iface.name).await {
+            Ok(peers) => {
                 for peer in &iface.peers {
-                    let last_handshake = handshakes.get(&peer.public_key).copied().unwrap_or(0);
+                    let last_handshake =
+                        peers.get(&peer.public_key).map_or(0, |p| p.last_handshake);
                     tracing::info!(
                         iface = iface.name,
                         public_key = peer.public_key,

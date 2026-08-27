@@ -8,11 +8,27 @@ use common::Obfuscation;
 use common::netlink::rt::parse_cidr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::net::SocketAddr;
 
 #[derive(Deserialize, Serialize, Debug, Default, PartialEq)]
 pub struct AwgConfig {
     #[serde(default)]
     pub interfaces: Vec<InterfaceEntry>,
+    /// Absent means "do not listen" - a node not set up for scraping must not open a port because
+    /// a default said so. Rendered rather than hand-written (see the `patches` crate), and safe to
+    /// render ahead of the binary that reads it: nothing here denies unknown fields, so an older
+    /// `awg` ignores the section instead of refusing the config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<MetricsConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, PartialEq)]
+pub struct MetricsConfig {
+    /// `ip:port` for the Prometheus endpoint - the node's own mesh loopback address, never
+    /// `0.0.0.0`: that address exists only inside the overlay, so the endpoint is unreachable from
+    /// outside without depending on a firewall rule being in place first. IPv4 only, because that
+    /// is the address kubelet reports as `InternalIP` and Prometheus therefore discovers.
+    pub listen: String,
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
@@ -44,6 +60,12 @@ pub struct InterfaceEntry {
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct PeerEntry {
     pub public_key: String,
+    /// Human-readable name, carried for display only: it reaches the `peer_name` metric label and
+    /// nothing else. Never used to decide behaviour - the public key is the identity, and
+    /// `allowed_ips` is the only discriminator between kinds of peer. A base64 key is what a
+    /// dashboard would otherwise have to show, which nobody can read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
     /// `None` => this peer gets the full-tunnel default (`0.0.0.0/0` + `::/0`) as its AllowedIPs,
@@ -69,8 +91,37 @@ pub struct PeerEntry {
 pub const DEFAULT_HANDSHAKE_STALE_SECS: u64 = 180;
 
 /// Pure validation, no I/O: interface names are non-empty, fit `IFNAMSIZ`, and are unique;
-/// every `addresses`/`allowed_ips` entry is a parseable CIDR (either family).
+/// every `addresses`/`allowed_ips` entry is a parseable CIDR (either family); `metrics.listen`,
+/// when present, is a parseable IPv4 `ip:port`.
 pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
+    if let Some(metrics) = &cfg.metrics {
+        let listen: SocketAddr = metrics.listen.parse().map_err(|e| {
+            anyhow::anyhow!("metrics.listen {:?} is not an ip:port: {e}", metrics.listen)
+        })?;
+        anyhow::ensure!(
+            listen.is_ipv4(),
+            "metrics.listen {:?} is not IPv4 - Prometheus discovers a node by its InternalIP, \
+             which is the v4 loopback",
+            metrics.listen
+        );
+        // Both of the below parse happily and would bind, which is why they are worth refusing
+        // here. A wildcard address puts the endpoint on every interface the node has, public ones
+        // included, when being reachable only inside the overlay is its whole protection.
+        anyhow::ensure!(
+            !listen.ip().is_unspecified(),
+            "metrics.listen {:?} is a wildcard address - bind this node's own mesh loopback, which \
+             exists only inside the overlay",
+            metrics.listen
+        );
+        // Port 0 asks the kernel for an ephemeral one, which nothing can then be pointed at.
+        // "Serve nothing" is spelled by omitting the section.
+        anyhow::ensure!(
+            listen.port() != 0,
+            "metrics.listen {:?} has no port - omit the metrics section to serve nothing",
+            metrics.listen
+        );
+    }
+
     let mut seen_names = HashSet::new();
     for iface in &cfg.interfaces {
         anyhow::ensure!(!iface.name.is_empty(), "interface name must not be empty");
@@ -198,6 +249,7 @@ interfaces:
     fn rejects_duplicate_interface_names() {
         let cfg = AwgConfig {
             interfaces: vec![iface("dup"), iface("dup")],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -206,6 +258,7 @@ interfaces:
     fn rejects_a_name_longer_than_ifnamsiz() {
         let cfg = AwgConfig {
             interfaces: vec![iface("this-name-is-way-too-long")],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -216,6 +269,7 @@ interfaces:
         a.addresses.push("not-a-cidr".to_string());
         let cfg = AwgConfig {
             interfaces: vec![a],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -225,12 +279,14 @@ interfaces:
         let mut a = iface("a");
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
+            name: None,
             endpoint: None,
             allowed_ips: Some(vec!["not-a-cidr".to_string()]),
             advanced_security: false,
         });
         let cfg = AwgConfig {
             interfaces: vec![a],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -240,18 +296,21 @@ interfaces:
         let mut a = iface("a");
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
+            name: None,
             endpoint: None,
             allowed_ips: Some(vec!["10.0.0.1/32".to_string()]),
             advanced_security: false,
         });
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
+            name: None,
             endpoint: None,
             allowed_ips: Some(vec!["10.0.0.2/32".to_string()]),
             advanced_security: false,
         });
         let cfg = AwgConfig {
             interfaces: vec![a],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -261,6 +320,7 @@ interfaces:
         let mut a = iface("a");
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
+            name: None,
             endpoint: None,
             allowed_ips: None,
             advanced_security: true,
@@ -268,6 +328,7 @@ interfaces:
         // a.obfuscation.header_protection_key is left at its default: None.
         let cfg = AwgConfig {
             interfaces: vec![a],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_err());
     }
@@ -279,14 +340,71 @@ interfaces:
             Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
+            name: None,
             endpoint: None,
             allowed_ips: None,
             advanced_security: true,
         });
         let cfg = AwgConfig {
             interfaces: vec![a],
+            ..Default::default()
         };
         assert!(validate(&cfg).is_ok());
+    }
+
+    fn with_metrics(listen: &str) -> AwgConfig {
+        AwgConfig {
+            interfaces: vec![],
+            metrics: Some(MetricsConfig {
+                listen: listen.to_string(),
+            }),
+        }
+    }
+
+    #[test]
+    fn accepts_a_v4_metrics_listen_address() {
+        validate(&with_metrics("10.0.0.1:9586")).unwrap();
+    }
+
+    #[test]
+    fn rejects_a_wildcard_metrics_listen_address() {
+        // The whole point of the address is that it exists only inside the overlay. Binding
+        // 0.0.0.0 would put the endpoint on every interface the node has, public ones included.
+        assert!(validate(&with_metrics("0.0.0.0:9586")).is_err());
+    }
+
+    #[test]
+    fn rejects_port_zero() {
+        // The kernel would pick an ephemeral port, which nothing could then scrape. "Do not
+        // listen" is spelled by omitting the section, not by asking for port 0.
+        assert!(validate(&with_metrics("10.0.0.1:0")).is_err());
+    }
+
+    #[test]
+    fn rejects_a_malformed_metrics_listen_address() {
+        assert!(validate(&with_metrics("10.0.0.1")).is_err());
+        assert!(validate(&with_metrics("not-an-address")).is_err());
+    }
+
+    #[test]
+    fn rejects_a_v6_metrics_listen_address() {
+        // The address Prometheus discovers is the node's InternalIP, which is the v4 loopback;
+        // a v6 listener would be bound to something nothing scrapes.
+        assert!(validate(&with_metrics("[fd00::1]:9586")).is_err());
+    }
+
+    #[test]
+    fn a_config_without_a_metrics_section_parses_and_validates() {
+        let cfg: AwgConfig = serde_yaml::from_str("interfaces: []").unwrap();
+        assert_eq!(cfg.metrics, None);
+        validate(&cfg).unwrap();
+    }
+
+    #[test]
+    fn a_metrics_section_round_trips_through_yaml() {
+        let cfg = with_metrics("10.0.0.1:9586");
+        let yaml = serde_yaml::to_string(&cfg).unwrap();
+        assert_eq!(serde_yaml::from_str::<AwgConfig>(&yaml).unwrap(), cfg);
     }
 
     #[test]

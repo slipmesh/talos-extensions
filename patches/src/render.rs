@@ -22,7 +22,7 @@ use crate::keys;
 use crate::mesh_config::{BypassSourceEntry, MeshConfig};
 use crate::obfuscation_gen;
 use anyhow::{Context, Result};
-use awg::config::{AwgConfig, InterfaceEntry, PeerEntry};
+use awg::config::{AwgConfig, InterfaceEntry, MetricsConfig, PeerEntry};
 use common::Obfuscation;
 use nftables::config::NftablesConfig;
 use router::config::{AnnounceEntry, BgpPeerEntry, BypassConfig, NodeIdentity, RouterConfig};
@@ -477,6 +477,7 @@ fn mesh_interfaces_for(
             handshake_stale_secs: None,
             peers: vec![PeerEntry {
                 public_key: keys::public_key_from_private(peer_private_key)?,
+                name: Some(peer_name.clone()),
                 endpoint: peer_node
                     .endpoint
                     .as_ref()
@@ -522,6 +523,7 @@ fn roadwarrior_interfaces_for(
                     .iter()
                     .map(|c| PeerEntry {
                         public_key: c.public_key.clone(),
+                        name: Some(c.name.clone()),
                         endpoint: None,
                         allowed_ips: Some(c.allowed_ips.clone()),
                         advanced_security: c.advanced_security,
@@ -539,7 +541,31 @@ pub fn render_awg_config(
 ) -> Result<AwgConfig> {
     let mut interfaces = mesh_interfaces_for(mesh, node_name, resolved)?;
     interfaces.extend(roadwarrior_interfaces_for(mesh, node_name, resolved));
-    Ok(AwgConfig { interfaces })
+    Ok(AwgConfig {
+        interfaces,
+        metrics: metrics_for(mesh, node_name)?,
+    })
+}
+
+/// The metrics listener for this node, when `cluster.metrics_port` says there is one. The address
+/// is derived, never configured: it comes from the same `node_loopbacks` call that renders
+/// `node.loopback_addresses` for `ext-router`, so the address `awg` binds cannot drift from the
+/// one `ext-router` actually brings up on `router-lo`.
+fn metrics_for(mesh: &MeshConfig, node_name: &str) -> Result<Option<MetricsConfig>> {
+    let Some(port) = mesh.cluster.metrics_port else {
+        return Ok(None);
+    };
+    // Caught here rather than left to `awg::config::validate` on the node: unset already means
+    // "serve nothing", so `metrics_port: 0` is never anything but a mistake, and it should fail
+    // where it was written instead of on five nodes at once.
+    anyhow::ensure!(
+        port != 0,
+        "cluster.metrics_port is 0 - remove the field to serve no metrics"
+    );
+    let (v4, _v6) = node_loopbacks(mesh, node_name)?;
+    Ok(Some(MetricsConfig {
+        listen: format!("{v4}:{port}"),
+    }))
 }
 
 /// The single global `nftables.ruleset`, verbatim, for every node - `None` if `mesh.yaml` has no
@@ -1157,6 +1183,55 @@ mesh:
         let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
         awg::config::validate(&cfg).unwrap();
         assert_eq!(cfg.interfaces.len(), 2);
+    }
+
+    #[test]
+    fn every_rendered_peer_carries_the_name_it_has_in_mesh_yaml() {
+        // Straight from mesh.yaml: the node on the far end of a link, the client's own name in a
+        // pool. It only ever reaches the `peer_name` metric label - nothing decides on it.
+        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let resolved = resolved_for(&mesh);
+        let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
+
+        let mesh_iface = cfg.interfaces.iter().find(|i| i.name == "mesh-b").unwrap();
+        assert_eq!(mesh_iface.peers[0].name.as_deref(), Some("b"));
+
+        let rw_iface = cfg.interfaces.iter().find(|i| i.name == "rw-eu").unwrap();
+        assert_eq!(rw_iface.peers[0].name.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn render_awg_config_refuses_metrics_port_zero() {
+        let yaml = mesh_and_roadwarriors_yaml()
+            .replace("  bgp_as: 64512", "  bgp_as: 64512\n  metrics_port: 0");
+        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let resolved = resolved_for(&mesh);
+        assert!(render_awg_config(&mesh, "a", &resolved).is_err());
+    }
+
+    #[test]
+    fn render_awg_config_has_no_metrics_section_when_no_port_is_configured() {
+        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let resolved = resolved_for(&mesh);
+        let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
+        assert_eq!(cfg.metrics, None);
+    }
+
+    #[test]
+    fn render_awg_config_binds_metrics_to_this_node_s_own_v4_loopback() {
+        let yaml = mesh_and_roadwarriors_yaml()
+            .replace("  bgp_as: 64512", "  bgp_as: 64512\n  metrics_port: 9586");
+        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let resolved = resolved_for(&mesh);
+
+        // The same address `node_loopbacks` hands `ext-router` as node.loopback_addresses, so the
+        // two cannot drift: node b's own identity, not node a's, not the network's.
+        let cfg = render_awg_config(&mesh, "b", &resolved).unwrap();
+        assert_eq!(
+            cfg.metrics.as_ref().map(|m| m.listen.as_str()),
+            Some("10.62.0.2:9586")
+        );
+        awg::config::validate(&cfg).unwrap();
     }
 
     #[test]

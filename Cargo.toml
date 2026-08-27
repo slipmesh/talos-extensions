@@ -40,6 +40,26 @@ yaml_serde = "0.10"
 # `rw-inspect --qr` to print a scannable client config straight to the terminal.
 qrcode = "0.14.1"
 
+# The metrics endpoint's HTTP surface (`awg::metrics`). Not a new stack: `router`'s `reqwest`
+# already pulls hyper/hyper-util/http-body-util into this workspace, so this only turns on hyper's
+# `server` feature over crates that are already built and already audited here. One route, no TLS,
+# no routing - but request-line parsing, malformed input and half-close are not worth re-deriving.
+hyper = { version = "1.11.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1.20", features = ["tokio"] }
+http-body-util = "0.1.4"
+# Hyper's own body type; already in the lock graph via the same reqwest dependency.
+bytes = "1.12.1"
+# Prometheus exposition. Used by building a fresh `Registry` per scrape rather than through the
+# `Collector` trait, whose `encode` is synchronous and so cannot host the async netlink dump the
+# values come from - a per-scrape registry also means a peer removed from the config is simply
+# never registered, with no state carried between scrapes. Brings escaping, HELP/TYPE, counter
+# `_total` handling and family grouping, which is precisely what a hand-written encoder gets wrong.
+prometheus-client = "0.25.0"
+# `IP_FREEBIND` has no tokio API (see `awg::metrics::bind`), so the listening socket is configured
+# through socket2 before `bind()`. Already in the lock graph at this version via tokio's own `net`
+# feature - a manifest line, not a new crate.
+socket2 = { version = "0.6.5", features = ["all"] }
+
 genetlink = "0.2.7"
 # Pinned to a specific rev, not crates.io's 0.1.2: the amneziawg kernel module we build against
 # (see talos-awg-extension's versions.env) speaks genl family version 3, which changed
