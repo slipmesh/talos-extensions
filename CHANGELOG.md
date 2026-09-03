@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.4] - 2026-09-03
+
+### Added ✨
+
+- Read full peer stats and publish the reconcile verdict
+- Render an awg metrics listener from cluster.metrics_port
+- Serve per-peer metrics over HTTP
+- Label peer metrics with the name from the config
+
+### Fixed 🐛
+
+- Refuse a wildcard or portless metrics address, connect once per scrape
+
 ## [0.1.3] - 2026-08-27
 
 ### Added ✨
