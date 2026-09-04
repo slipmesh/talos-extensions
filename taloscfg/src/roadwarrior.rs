@@ -60,7 +60,7 @@ fn find_client_index(pool: &RoadwarriorPool, name: &str) -> Result<usize> {
 pub(crate) fn parse_allowed_ip(input: &str) -> Result<String> {
     let input = input.trim();
     if input.contains('/') {
-        let (addr, prefix) = common::netlink::rt::parse_cidr(input)
+        let (addr, prefix) = common::cidr::parse_cidr(input)
             .with_context(|| format!("invalid --allowed-ips entry {input:?}"))?;
         Ok(format!("{addr}/{prefix}"))
     } else {
@@ -176,7 +176,7 @@ pub(crate) fn resolve_dns(mesh: &MeshConfig, pool: &RoadwarriorPool) -> Option<S
         return Some(dns.clone());
     }
     let subnet = mesh.cluster.service_subnet.as_deref()?;
-    let (IpAddr::V4(network), prefix) = common::netlink::rt::parse_cidr(subnet).ok()? else {
+    let (IpAddr::V4(network), prefix) = common::cidr::parse_cidr(subnet).ok()? else {
         return None;
     };
     Some(addressing::ipv4_loopback(network, prefix, Ipv4Addr::new(0, 0, 0, 10)).to_string())

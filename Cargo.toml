@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["common", "awg", "router", "nftables", "patches"]
+members = ["common", "awg", "router", "nftables", "taloscfg"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,10 +10,13 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/slipmesh/talos-extensions"
 
 [workspace.dependencies]
-common = { path = "common" }
-awg = { path = "awg" }
-router = { path = "router" }
-nftables = { path = "nftables" }
+# default-features = false throughout: the netlink-backed halves are opt-in, so `patches` - which
+# needs the config types alone - builds off Linux. The daemons re-enable them through their own
+# `runtime` feature, which is on by default for each of them.
+common = { path = "common", default-features = false }
+awg = { path = "awg", default-features = false }
+router = { path = "router", default-features = false }
+nftables = { path = "nftables", default-features = false }
 
 anyhow = "1.0.104"
 clap = { version = "4.5.51", features = ["derive"] }

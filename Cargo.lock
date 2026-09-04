@@ -1215,29 +1215,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
-name = "patches"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "awg",
- "base64 0.23.1",
- "clap",
- "common",
- "nftables",
- "qrcode",
- "rand 0.8.7",
- "router",
- "serde",
- "serde_yaml",
- "sha2",
- "similar",
- "x25519-dalek",
- "yaml_serde",
- "yamlpatch",
- "yamlpath",
-]
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1945,6 +1922,29 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "taloscfg"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "awg",
+ "base64 0.23.1",
+ "clap",
+ "common",
+ "nftables",
+ "qrcode",
+ "rand 0.8.7",
+ "router",
+ "serde",
+ "serde_yaml",
+ "sha2",
+ "similar",
+ "x25519-dalek",
+ "yaml_serde",
+ "yamlpatch",
+ "yamlpath",
 ]
 
 [[package]]

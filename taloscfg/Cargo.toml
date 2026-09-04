@@ -1,5 +1,5 @@
 [package]
-name = "patches"
+name = "taloscfg"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,9 +8,11 @@ repository.workspace = true
 description = "Offline generator for Talos machine-config patches (awg mesh/roadwarriors, router BGP/OSPF, nftables) from a single mesh.yaml topology file - never touches a live node"
 
 [[bin]]
-name = "slipmesh-patches"
+name = "slipmesh-taloscfg"
 path = "src/main.rs"
 
+# The daemon crates come in for their config types only - `default-features = false` leaves the
+# netlink-backed modules out, which is what lets this generator build off Linux.
 [dependencies]
 anyhow.workspace = true
 awg.workspace = true

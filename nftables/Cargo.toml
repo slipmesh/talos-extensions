@@ -10,6 +10,8 @@ description = "Talos extension service: oneshot loader for an nftables ruleset s
 [[bin]]
 name = "nftables"
 path = "src/main.rs"
+# The daemon is netlink-backed; a config-only build of this crate builds the library alone.
+required-features = ["runtime"]
 
 [dependencies]
 anyhow.workspace = true
@@ -19,3 +21,8 @@ serde_yaml.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "io-util", "fs"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[features]
+default = ["runtime"]
+# The netlink-backed modules and the binary over them; `config` builds without any of it.
+runtime = ["common/netlink"]

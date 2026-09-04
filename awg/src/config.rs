@@ -5,7 +5,7 @@
 //! `ExtensionServiceConfig.configFiles` - never an env var or CLI flag.
 
 use common::Obfuscation;
-use common::netlink::rt::parse_cidr;
+use common::cidr::parse_cidr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -15,7 +15,7 @@ pub struct AwgConfig {
     #[serde(default)]
     pub interfaces: Vec<InterfaceEntry>,
     /// Absent means "do not listen" - a node not set up for scraping must not open a port because
-    /// a default said so. Rendered rather than hand-written (see the `patches` crate), and safe to
+    /// a default said so. Rendered rather than hand-written (see the `taloscfg` crate), and safe to
     /// render ahead of the binary that reads it: nothing here denies unknown fields, so an older
     /// `awg` ignores the section instead of refusing the config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
