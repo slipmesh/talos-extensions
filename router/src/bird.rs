@@ -699,13 +699,14 @@ mod tests {
     // with a deliberately reproduced "strict bind yes local address not present yet" / "OSPF
     // interface not attached yet" race - not hand-guessed from memory of BIRD's CLI format.
     //
-    // The extension ships BIRD 2.19.2, so that is what these describe. They would hold for 3.3.2
-    // too: all three formats are byte-identical in its sources - `nest/proto.c`'s
+    // The extension ships 2.19.2, one patch release on from the capture. They would hold for 3.3.2
+    // as well: all three formats are byte-identical in its sources - `nest/proto.c`'s
     // `cli_msg(-1002, "%-10s %-10s %-10s %-6s %-12s  %s")` with the same header row,
     // `proto/ospf/iface.c`'s `cli_msg(-1015, "Interface %s (%N)")`, and "No listening socket"
     // in `proto/bgp/bgp.c`'s `bgp_misc_errors[]`. Only the version in the greeting differs, and
-    // nothing here reads it. Kept for whenever 3.x is attempted again - it is not pinned now,
-    // its own test suite having failed to build in slipmesh/bird.
+    // nothing here reads it. That comparison is kept for whenever 3.x is attempted again: it is
+    // not pinned now, its own filter_test having died with SIGILL in slipmesh/bird's static
+    // build.
     const SHOW_PROTOCOLS_NO_LISTENING_SOCKET: &str = "\
 BIRD 2.19.1 ready.
 Name       Proto      Table      State  Since         Info
