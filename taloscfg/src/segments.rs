@@ -65,8 +65,13 @@ pub fn split(raw: &str) -> Result<Vec<String>> {
         .map(|n| n.start_byte())
         .collect();
     // Whatever precedes the first document - a leading comment, a `%YAML` directive - belongs to it.
-    if let Some(first) = starts.first_mut() {
-        *first = 0;
+    match starts.first_mut() {
+        Some(first) => *first = 0,
+        // A file the grammar finds no document in is not necessarily empty: a file of nothing but
+        // comments parses to no documents at all, and dropping it would delete someone's note.
+        // There is nothing to split, so the whole of it is one segment; an actually empty file
+        // still yields none, since the segment then trims away to nothing.
+        None => starts.push(0),
     }
 
     Ok(starts
@@ -248,6 +253,25 @@ mod tests {
         let segments = split(raw).unwrap();
         assert_eq!(segments.len(), 1);
         assert!(segments[0].ends_with("note: ..."));
+    }
+
+    #[test]
+    fn a_file_of_only_comments_is_kept_whole() {
+        let raw = "# a note someone left, and nothing else
+";
+        let segments = split(raw).unwrap();
+        assert_eq!(
+            segments,
+            vec!["# a note someone left, and nothing else".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_quoted_marker_is_scalar_content_not_a_marker() {
+        let raw = "note: \"--- not a marker\"
+";
+        let segments = split(raw).unwrap();
+        assert_eq!(segments, vec!["note: \"--- not a marker\"".to_string()]);
     }
 
     #[test]
