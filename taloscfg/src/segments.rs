@@ -71,7 +71,17 @@ pub fn split(raw: &str) -> Result<Vec<String>> {
             continue;
         }
         starts.push(document.start_byte());
+        let mut after_directive = false;
         for child in document.children(&mut inside) {
+            if child.kind().ends_with("_directive") {
+                after_directive = true;
+                continue;
+            }
+            // A `---` that follows a directive is not a separator this module writes back - it is
+            // what terminates the directives, and a document that loses it stops being YAML.
+            if child.kind() == "---" && after_directive {
+                continue;
+            }
             // The markers are anonymous tokens: the grammar has already decided that this `---`
             // opens a document and that `---foo` is a mapping key, which is not a distinction to
             // re-derive from the text.
@@ -268,6 +278,25 @@ mod tests {
         assert_eq!(
             segments,
             vec!["# note\n# why this document exists\nmachine: x".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_directive_survives_a_round_trip_as_valid_yaml() {
+        // The `---` after a directive is what terminates it, not a separator to be rewritten:
+        // dropping it turns the file into something no YAML parser accepts.
+        let raw = "%YAML 1.2\n---\nmachine:\n    install:\n        disk: /dev/vda\n";
+        let rebuilt = render_file(&split(raw).unwrap(), &[]);
+        assert!(rebuilt.contains("%YAML 1.2\n---\n"), "rebuilt: {rebuilt:?}");
+
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_yaml::LANGUAGE.into())
+            .unwrap();
+        let tree = parser.parse(&rebuilt, None).unwrap();
+        assert!(
+            !tree.root_node().has_error(),
+            "rebuilding produced invalid YAML: {rebuilt:?}"
         );
     }
 
