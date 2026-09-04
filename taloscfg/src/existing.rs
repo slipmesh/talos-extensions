@@ -7,9 +7,11 @@
 use crate::mesh_config::MeshConfig;
 use crate::render::ExistingState;
 use crate::segments;
+use anyhow::{Context, Result};
 use common::Obfuscation;
 use serde::Deserialize;
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::Path;
 
 #[derive(Deserialize)]
 struct ConfigFileEntry {
@@ -22,35 +24,84 @@ struct ExtensionServiceConfigDoc {
     config_files: Vec<ConfigFileEntry>,
 }
 
-fn load_existing_awg_config(patches_dir: &Path, node_name: &str) -> Option<awg::config::AwgConfig> {
-    let raw = std::fs::read_to_string(patches_dir.join(format!("{node_name}.yaml"))).ok()?;
-    let segment = segments::owned_segment(&raw, "awg").ok().flatten()?;
-    let doc: ExtensionServiceConfigDoc = serde_yaml::from_str(&segment).ok()?;
-    serde_yaml::from_str(&doc.config_files.first()?.content).ok()
-}
-
 pub struct FileExistingState<'a> {
     pub mesh: &'a MeshConfig,
-    pub patches_dir: PathBuf,
+    awg_by_node: HashMap<String, awg::config::AwgConfig>,
+}
+
+impl<'a> FileExistingState<'a> {
+    /// Reads every patch file in `patches_dir` once, up front.
+    ///
+    /// Eagerly, and fallibly, on purpose: the values read back here are secrets - a node's mesh
+    /// private key, a pool's roadwarrior key. A file that cannot be read as one is
+    /// indistinguishable, to every caller of the trait below, from a node that has no key yet, and
+    /// the answer to that is to mint a fresh one. Silently rotating a live node's identity because
+    /// its patch file had a stray character is not a failure mode worth keeping, so the parse
+    /// happens here, where it can still say what went wrong.
+    pub fn new(mesh: &'a MeshConfig, patches_dir: &Path) -> Result<Self> {
+        let mut awg_by_node = HashMap::new();
+
+        let entries = match std::fs::read_dir(patches_dir) {
+            Ok(entries) => entries,
+            // No directory yet is the from-scratch case, not an error.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self { mesh, awg_by_node });
+            }
+            Err(e) => return Err(e).with_context(|| format!("reading {patches_dir:?}")),
+        };
+
+        for entry in entries {
+            let path = entry
+                .with_context(|| format!("reading {patches_dir:?}"))?
+                .path();
+            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+                continue;
+            }
+            let Some(node) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let raw =
+                std::fs::read_to_string(&path).with_context(|| format!("reading {path:?}"))?;
+            let Some(segment) = segments::owned_segment(&raw, "awg")
+                .with_context(|| format!("reading {path:?}"))?
+            else {
+                continue;
+            };
+            let doc: ExtensionServiceConfigDoc = serde_yaml::from_str(&segment)
+                .with_context(|| format!("parsing the awg document in {path:?}"))?;
+            let Some(file) = doc.config_files.first() else {
+                continue;
+            };
+            let cfg: awg::config::AwgConfig = serde_yaml::from_str(&file.content)
+                .with_context(|| format!("parsing the awg config inside {path:?}"))?;
+            awg_by_node.insert(node.to_owned(), cfg);
+        }
+
+        Ok(Self { mesh, awg_by_node })
+    }
+
+    fn awg(&self, node_name: &str) -> Option<&awg::config::AwgConfig> {
+        self.awg_by_node.get(node_name)
+    }
 }
 
 impl ExistingState for FileExistingState<'_> {
     fn mesh_private_key(&self, node_name: &str) -> Option<String> {
-        load_existing_awg_config(&self.patches_dir, node_name)?
+        self.awg(node_name)?
             .interfaces
-            .into_iter()
+            .iter()
             .find(|i| i.name.starts_with("mesh-"))
-            .map(|i| i.private_key)
+            .map(|i| i.private_key.clone())
     }
 
     fn mesh_link_obfuscation(&self, pair: &[String; 2]) -> Option<Obfuscation> {
         for (this, other) in [(&pair[0], &pair[1]), (&pair[1], &pair[0])] {
             let name = format!("mesh-{other}");
-            let Some(cfg) = load_existing_awg_config(&self.patches_dir, this) else {
+            let Some(cfg) = self.awg(this) else {
                 continue;
             };
-            if let Some(iface) = cfg.interfaces.into_iter().find(|i| i.name == name) {
-                return Some(iface.obfuscation);
+            if let Some(iface) = cfg.interfaces.iter().find(|i| i.name == name) {
+                return Some(iface.obfuscation.clone());
             }
         }
         None
@@ -63,11 +114,11 @@ impl ExistingState for FileExistingState<'_> {
             .iter()
             .find(|p| p.name == pool_name)?;
         pool.node_hostnames.iter().find_map(|host| {
-            load_existing_awg_config(&self.patches_dir, host)?
+            self.awg(host)?
                 .interfaces
-                .into_iter()
+                .iter()
                 .find(|i| i.name == format!("rw-{}", pool.name))
-                .map(|i| i.private_key)
+                .map(|i| i.private_key.clone())
         })
     }
 
@@ -78,11 +129,11 @@ impl ExistingState for FileExistingState<'_> {
             .iter()
             .find(|p| p.name == pool_name)?;
         pool.node_hostnames.iter().find_map(|host| {
-            load_existing_awg_config(&self.patches_dir, host)?
+            self.awg(host)?
                 .interfaces
-                .into_iter()
+                .iter()
                 .find(|i| i.name == format!("rw-{}", pool.name))
-                .map(|i| i.obfuscation)
+                .map(|i| i.obfuscation.clone())
         })
     }
 }
@@ -90,6 +141,7 @@ impl ExistingState for FileExistingState<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     fn temp_dir() -> PathBuf {
@@ -146,10 +198,7 @@ roadwarriors:
             "interfaces:\n  - name: mesh-b\n    listen_port: 51820\n    private_key: \"existing-a-key\"\n    peers: []\n",
         );
         let mesh = mesh_with_link();
-        let state = FileExistingState {
-            mesh: &mesh,
-            patches_dir: dir,
-        };
+        let state = FileExistingState::new(&mesh, &dir).unwrap();
         assert_eq!(
             state.mesh_private_key("a"),
             Some("existing-a-key".to_string())
@@ -160,10 +209,7 @@ roadwarriors:
     fn mesh_private_key_is_none_when_no_file_exists() {
         let dir = temp_dir();
         let mesh = mesh_with_link();
-        let state = FileExistingState {
-            mesh: &mesh,
-            patches_dir: dir,
-        };
+        let state = FileExistingState::new(&mesh, &dir).unwrap();
         assert_eq!(state.mesh_private_key("a"), None);
     }
 
@@ -176,10 +222,7 @@ roadwarriors:
             "interfaces:\n  - name: mesh-a\n    listen_port: 51820\n    private_key: \"existing-b-key\"\n    obfuscation: {h1: 111}\n    peers: []\n",
         );
         let mesh = mesh_with_link();
-        let state = FileExistingState {
-            mesh: &mesh,
-            patches_dir: dir,
-        };
+        let state = FileExistingState::new(&mesh, &dir).unwrap();
         let pair = ["a".to_string(), "b".to_string()];
         assert_eq!(state.mesh_link_obfuscation(&pair).unwrap().h1, Some(111));
     }
@@ -193,10 +236,7 @@ roadwarriors:
             "interfaces:\n  - name: rw-eu\n    listen_port: 51900\n    private_key: \"existing-rw-key\"\n    peers: []\n",
         );
         let mesh = mesh_with_link();
-        let state = FileExistingState {
-            mesh: &mesh,
-            patches_dir: dir,
-        };
+        let state = FileExistingState::new(&mesh, &dir).unwrap();
         assert_eq!(
             state.roadwarrior_private_key("eu"),
             Some("existing-rw-key".to_string())
@@ -207,10 +247,7 @@ roadwarriors:
     fn roadwarrior_obfuscation_is_none_for_an_unknown_pool() {
         let dir = temp_dir();
         let mesh = mesh_with_link();
-        let state = FileExistingState {
-            mesh: &mesh,
-            patches_dir: dir,
-        };
+        let state = FileExistingState::new(&mesh, &dir).unwrap();
         assert_eq!(state.roadwarrior_obfuscation("nonexistent"), None);
     }
 }

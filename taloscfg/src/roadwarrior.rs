@@ -96,11 +96,8 @@ fn resolve_pool_identity(
     mesh: &MeshConfig,
     pool: &RoadwarriorPool,
     patches_dir: &Path,
-) -> (String, Obfuscation) {
-    let existing = FileExistingState {
-        mesh,
-        patches_dir: patches_dir.to_path_buf(),
-    };
+) -> Result<(String, Obfuscation)> {
+    let existing = FileExistingState::new(mesh, patches_dir)?;
     let private_key = render::resolve_string(
         pool.private_key.as_deref(),
         existing.roadwarrior_private_key(&pool.name),
@@ -115,7 +112,7 @@ fn resolve_pool_identity(
             existing.roadwarrior_obfuscation(&pool.name).as_ref(),
         )
     };
-    (private_key, obfuscation)
+    Ok((private_key, obfuscation))
 }
 
 /// The pool's endpoint(s): every `node_hostnames` entry's `nodes[].endpoint` + `pool.listen_port`.
@@ -423,7 +420,7 @@ pub fn add(
     let updated = add_client_to_yaml(source, pool_index, &value)?;
 
     let config = if export || qr {
-        let (server_private_key, obfuscation) = resolve_pool_identity(mesh, pool, patches_dir);
+        let (server_private_key, obfuscation) = resolve_pool_identity(mesh, pool, patches_dir)?;
         let server_public_key = keys::public_key_from_private(&server_private_key)?;
         let endpoints = pool_endpoints(mesh, pool, endpoint)?;
         let text = render_client_config(
@@ -467,7 +464,7 @@ pub fn inspect(
     let client_index = find_client_index(pool, name)?;
     let client: &RoadwarriorClient = &pool.clients[client_index];
 
-    let (server_private_key, obfuscation) = resolve_pool_identity(mesh, pool, patches_dir);
+    let (server_private_key, obfuscation) = resolve_pool_identity(mesh, pool, patches_dir)?;
     let server_public_key = keys::public_key_from_private(&server_private_key)?;
     let endpoints = pool_endpoints(mesh, pool, endpoint)?;
     let client_private_key = match private_key {
@@ -774,7 +771,7 @@ roadwarriors:
     fn render_client_config_includes_amneziawg_fields_for_a_non_plain_pool() {
         let m = mesh();
         let (_, pool) = find_pool(&m, "obfuscation").unwrap();
-        let (server_key, obf) = resolve_pool_identity(&m, pool, Path::new("/nonexistent"));
+        let (server_key, obf) = resolve_pool_identity(&m, pool, Path::new("/nonexistent")).unwrap();
         let server_pub = keys::public_key_from_private(&server_key).unwrap();
         let endpoints = pool_endpoints(&m, pool, None).unwrap();
         let cfg = render_client_config(
@@ -798,7 +795,7 @@ roadwarriors:
     fn render_client_config_omits_amneziawg_fields_for_a_plain_pool() {
         let m = mesh();
         let (_, pool) = find_pool(&m, "plain").unwrap();
-        let (server_key, obf) = resolve_pool_identity(&m, pool, Path::new("/nonexistent"));
+        let (server_key, obf) = resolve_pool_identity(&m, pool, Path::new("/nonexistent")).unwrap();
         assert_eq!(obf, Obfuscation::default());
         let server_pub = keys::public_key_from_private(&server_key).unwrap();
         let endpoints = pool_endpoints(&m, pool, None).unwrap();

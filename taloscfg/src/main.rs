@@ -312,10 +312,7 @@ fn generate(
         );
     }
 
-    let existing_state = existing::FileExistingState {
-        mesh: &mesh,
-        patches_dir: patches_dir.to_path_buf(),
-    };
+    let existing_state = existing::FileExistingState::new(&mesh, patches_dir)?;
     let resolved = render::resolve_secrets(&mesh, &existing_state);
 
     let target_nodes: Vec<&str> = match node {

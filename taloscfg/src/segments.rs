@@ -1,8 +1,10 @@
 //! Raw multi-document YAML I/O for `patches/<node>.yaml`: splits a patch file into segments this
 //! tool owns (its own `ExtensionServiceConfig` documents for awg/router/nftables) versus segments
 //! it must never touch (anything else - e.g. `machine.install.disk`, hand-written per node).
-//! Segments are handed back as raw text, never re-serialized, so a foreign one round-trips byte
-//! for byte - only `apiVersion`/`kind`/`name` are ever parsed out of it.
+//! Segments are handed back as raw text, never re-serialized: a foreign one keeps its keys, its
+//! order, its comments and its formatting, and only `apiVersion`/`kind`/`name` are ever parsed out
+//! of it. Not byte for byte, though - surrounding blank lines and the document markers themselves
+//! are dropped here, because `render_file` writes those back itself.
 //!
 //! Where a document begins comes from the YAML grammar rather than from a search for `---`: a
 //! text split cannot tell a document marker from the same three characters inside a block
@@ -80,13 +82,21 @@ pub fn split(raw: &str) -> Result<Vec<String>> {
 
 /// Drops the document markers the grammar counts as part of a document, since `render_file` writes
 /// its own: a leading `---`, and a trailing `...`.
+///
+/// The end marker only counts as one when it stands alone on the last line. `...` is also ordinary
+/// scalar content - `description: ...` ends a document just as well - and cutting three characters
+/// off the end of that would corrupt the very documents this module exists to hand back untouched.
 fn strip_markers(segment: &str) -> String {
     let mut s = segment.trim();
     if let Some(rest) = s.strip_prefix("---") {
         s = rest.trim_start();
     }
-    if let Some(rest) = s.strip_suffix("...") {
-        s = rest;
+    if let Some((body, last)) = s.rsplit_once('\n')
+        && last.trim_end() == "..."
+    {
+        s = body;
+    } else if s.trim_end() == "..." {
+        s = "";
     }
     s.trim().to_owned()
 }
@@ -226,6 +236,18 @@ mod tests {
             segments,
             vec!["machine:\n    install:\n        disk: /dev/vda".to_string()]
         );
+    }
+
+    #[test]
+    fn three_dots_as_content_are_not_an_end_marker() {
+        let raw = "machine:
+    install:
+        disk: /dev/vda
+    note: ...
+";
+        let segments = split(raw).unwrap();
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0].ends_with("note: ..."));
     }
 
     #[test]
