@@ -37,8 +37,9 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 /// Relative to this service's own entrypoint directory - the vendored static `nft` binary is
-/// staged into the same `rootfs/usr/local/lib/containers/nftables/` directory as this binary (see
-/// the packaging plan), the same convention `router/src/main.rs`'s `BIRD_BIN` uses for `bird`.
+/// staged into the same `rootfs/usr/local/lib/containers/nftables/` directory as this binary (the
+/// `install:` step in `slipmesh/talos-nftables-extension`'s `patches/extensions/nftables/pkg.yaml`),
+/// the same convention `router/src/main.rs`'s `BIRD_BIN` uses for `bird`.
 pub const NFT_BIN: &str = "./nft";
 
 /// `table <family> <name> {` at the start of a (non-comment) line - deliberately simple: this
