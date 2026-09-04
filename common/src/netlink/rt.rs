@@ -12,6 +12,7 @@
 //! Route/link types are imported via `rtnetlink::packet_route::...`, not a separate top-level
 //! `netlink-packet-route` dependency - see this workspace's root `Cargo.toml` comment on why.
 
+use crate::cidr::parse_cidr;
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
 use rtnetlink::packet_route::link::InfoKind;
