@@ -359,7 +359,14 @@ fn generate(
         }
 
         let patch_path = patches_dir.join(format!("{node_name}.yaml"));
-        let existing_raw = std::fs::read_to_string(&patch_path).unwrap_or_default();
+        // A missing file is the from-scratch case; anything else - a permission, an encoding, a
+        // half-written file - must not read as "there was nothing here", which would drop every
+        // foreign document in it and write the file anyway.
+        let existing_raw = match std::fs::read_to_string(&patch_path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e).with_context(|| format!("reading {patch_path:?}")),
+        };
         let foreign = segments::foreign_segments(&existing_raw)
             .with_context(|| format!("reading the existing {patch_path:?}"))?;
         let new_content = segments::render_file(&foreign, &owned);

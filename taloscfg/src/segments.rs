@@ -50,9 +50,11 @@ pub fn split(raw: &str) -> Result<Vec<String>> {
     parser
         .set_language(&tree_sitter_yaml::LANGUAGE.into())
         .context("loading the YAML grammar")?;
+    // `parse` returns None only when the parser has no language, which the line above just gave
+    // it - not for malformed input, which comes back as a tree with error nodes in it instead.
     let tree = parser
         .parse(raw, None)
-        .context("parsing the patch file as YAML")?;
+        .context("the YAML grammar did not load")?;
     anyhow::ensure!(
         !tree.root_node().has_error(),
         "the patch file is not valid YAML - refusing to rewrite it"
@@ -60,19 +62,27 @@ pub fn split(raw: &str) -> Result<Vec<String>> {
 
     let mut starts: Vec<usize> = Vec::new();
     let mut markers: Vec<Range<usize>> = Vec::new();
-    let mut cursor = tree.root_node().walk();
-    for document in tree.root_node().children(&mut cursor) {
+    // One cursor per level, reused across nodes: `children` resets it to the node it is given, and
+    // the crate asks for exactly this rather than a fresh cursor per call.
+    let mut documents = tree.root_node().walk();
+    let mut inside = tree.root_node().walk();
+    for document in tree.root_node().children(&mut documents) {
         if document.kind() != "document" {
             continue;
         }
         starts.push(document.start_byte());
-        let mut inner = document.walk();
-        for child in document.children(&mut inner) {
+        for child in document.children(&mut inside) {
             // The markers are anonymous tokens: the grammar has already decided that this `---`
             // opens a document and that `---foo` is a mapping key, which is not a distinction to
             // re-derive from the text.
             if matches!(child.kind(), "---" | "...") {
-                markers.push(child.start_byte()..line_end(raw, child.end_byte()));
+                // Up to whatever the parser found next: that swallows the rest of the marker's
+                // line - trailing spaces, the newline - without this module deciding what those
+                // are, and stops at a comment written beside the marker, which is content.
+                let end = child
+                    .next_sibling()
+                    .map_or(child.end_byte(), |next| next.start_byte());
+                markers.push(child.start_byte()..end);
             }
         }
     }
@@ -97,19 +107,6 @@ pub fn split(raw: &str) -> Result<Vec<String>> {
         })
         .filter(|s| !s.is_empty())
         .collect())
-}
-
-/// One past the marker's line terminator, so cutting the marker takes its whole line with it
-/// rather than leaving a blank one behind.
-fn line_end(raw: &str, end: usize) -> usize {
-    let rest = &raw[end..];
-    if rest.starts_with("\r\n") {
-        end + 2
-    } else if rest.starts_with('\n') {
-        end + 1
-    } else {
-        end
-    }
 }
 
 /// The segment's text with the document markers inside it removed - `render_file` writes its own.
@@ -209,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn foreign_segment_round_trips_byte_for_byte() {
+    fn foreign_segment_keeps_its_own_text() {
         let disk_segment = "machine:\n    install:\n        disk: /dev/vda";
         let raw = format!("{disk_segment}\n");
         let foreign = foreign_segments(&raw).unwrap();
@@ -262,6 +259,23 @@ mod tests {
         assert_eq!(
             segments,
             vec!["machine:\n    install:\n        disk: /dev/vda".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_marker_line_with_trailing_spaces_leaves_no_blank_line() {
+        let raw = "# note\n---   \nmachine: x\n";
+        let segments = split(raw).unwrap();
+        assert_eq!(segments, vec!["# note\nmachine: x".to_string()]);
+    }
+
+    #[test]
+    fn a_comment_written_beside_a_marker_survives_it() {
+        let raw = "# note\n--- # why this document exists\nmachine: x\n";
+        let segments = split(raw).unwrap();
+        assert_eq!(
+            segments,
+            vec!["# note\n# why this document exists\nmachine: x".to_string()]
         );
     }
 
