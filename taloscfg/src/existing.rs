@@ -139,6 +139,9 @@ mod tests {
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir =
             std::env::temp_dir().join(format!("patches-existing-test-{}-{id}", std::process::id()));
+        // Start from an empty directory: the name is only unique per process id, which the OS
+        // hands out again, and a leftover file from an earlier run would be read as this run's.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -254,5 +257,27 @@ roadwarriors:
         // Neither node has a patch file yet; the stray one must not be looked at at all.
         let state = FileExistingState::new(&mesh, &dir).unwrap();
         assert!(state.mesh_private_key("a").is_none());
+    }
+
+    #[test]
+    fn a_patch_file_that_does_not_parse_stops_the_run() {
+        let dir = temp_dir();
+        // A node's own file, and it is broken: reading it as "no key here" would answer every
+        // question about this node with a freshly generated one, rotating a live identity.
+        std::fs::write(
+            dir.join("a.yaml"),
+            "machine:
+  install: [unterminated
+",
+        )
+        .unwrap();
+        let mesh = mesh_with_link();
+        let Err(err) = FileExistingState::new(&mesh, &dir) else {
+            panic!("a broken patch file must stop the run, not read as an absent key");
+        };
+        assert!(
+            format!("{err:#}").contains("a.yaml"),
+            "the error should name the file: {err:#}"
+        );
     }
 }

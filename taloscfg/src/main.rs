@@ -466,6 +466,9 @@ mod tests {
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir =
             std::env::temp_dir().join(format!("patches-main-test-{}-{id}", std::process::id()));
+        // Start from an empty directory: the name is only unique per process id, which the OS
+        // hands out again, and a leftover file from an earlier run would be read as this run's.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
