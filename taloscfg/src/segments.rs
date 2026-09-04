@@ -14,6 +14,7 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::ops::Range;
 use tree_sitter::Parser;
 
 /// The `name`s this tool ever writes, under `kind: ExtensionServiceConfig` - the exact ownership
@@ -57,20 +58,33 @@ pub fn split(raw: &str) -> Result<Vec<String>> {
         "the patch file is not valid YAML - refusing to rewrite it"
     );
 
+    let mut starts: Vec<usize> = Vec::new();
+    let mut markers: Vec<Range<usize>> = Vec::new();
     let mut cursor = tree.root_node().walk();
-    let mut starts: Vec<usize> = tree
-        .root_node()
-        .children(&mut cursor)
-        .filter(|n| n.kind() == "document")
-        .map(|n| n.start_byte())
-        .collect();
-    // Whatever precedes the first document - a leading comment, a `%YAML` directive - belongs to it.
+    for document in tree.root_node().children(&mut cursor) {
+        if document.kind() != "document" {
+            continue;
+        }
+        starts.push(document.start_byte());
+        let mut inner = document.walk();
+        for child in document.children(&mut inner) {
+            // The markers are anonymous tokens: the grammar has already decided that this `---`
+            // opens a document and that `---foo` is a mapping key, which is not a distinction to
+            // re-derive from the text.
+            if matches!(child.kind(), "---" | "...") {
+                markers.push(child.start_byte()..line_end(raw, child.end_byte()));
+            }
+        }
+    }
+
     match starts.first_mut() {
+        // Whatever precedes the first document - a comment, a directive - is a sibling of the
+        // documents rather than part of one, and belongs to the document it introduces.
         Some(first) => *first = 0,
-        // A file the grammar finds no document in is not necessarily empty: a file of nothing but
+        // A file the grammar finds no document in is not necessarily empty: one of nothing but
         // comments parses to no documents at all, and dropping it would delete someone's note.
         // There is nothing to split, so the whole of it is one segment; an actually empty file
-        // still yields none, since the segment then trims away to nothing.
+        // still yields none, since that segment trims away to nothing.
         None => starts.push(0),
     }
 
@@ -79,58 +93,39 @@ pub fn split(raw: &str) -> Result<Vec<String>> {
         .enumerate()
         .map(|(i, &start)| {
             let end = starts.get(i + 1).copied().unwrap_or(raw.len());
-            strip_markers(&raw[start..end])
+            without_markers(raw, start..end, &markers)
         })
         .filter(|s| !s.is_empty())
         .collect())
 }
 
-/// Drops the document markers the grammar counts as part of a document, since `render_file` writes
-/// its own: the `---` that opens it and the `...` that ends it.
-///
-/// A marker is a line that is exactly that and nothing else. `---foo: bar` is a mapping key, and
-/// `note: ...` is a string; cutting three characters off either would corrupt the very documents
-/// this module exists to hand back untouched. The opening marker is looked for past leading
-/// comments and directives, since `split` gives those to the document that follows them - leaving
-/// it in place would have `render_file` write a second one and open an empty document between.
-///
-/// Cut by byte range rather than by rebuilding from lines: a segment carries whatever line endings
-/// the file was written with, and joining lines back together would silently rewrite them.
-fn strip_markers(segment: &str) -> String {
-    strip_end_marker(&strip_start_marker(segment))
-        .trim()
-        .to_owned()
+/// One past the marker's line terminator, so cutting the marker takes its whole line with it
+/// rather than leaving a blank one behind.
+fn line_end(raw: &str, end: usize) -> usize {
+    let rest = &raw[end..];
+    if rest.starts_with("\r\n") {
+        end + 2
+    } else if rest.starts_with('\n') {
+        end + 1
+    } else {
+        end
+    }
 }
 
-/// Removes the `---` line itself, leaving whatever preceded it in place.
-fn strip_start_marker(s: &str) -> String {
-    let mut offset = 0;
-    for line in s.split_inclusive('\n') {
-        let trimmed = line.trim();
-        if trimmed == "---" {
-            let mut out = String::with_capacity(s.len() - line.len());
-            out.push_str(&s[..offset]);
-            out.push_str(&s[offset + line.len()..]);
-            return out;
-        }
-        // Only comments, directives and blank lines may precede the marker; anything else means
-        // the document has already begun and there is no marker to strip.
-        if !(trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('%')) {
-            break;
-        }
-        offset += line.len();
+/// The segment's text with the document markers inside it removed - `render_file` writes its own.
+/// Everything else survives, including the line endings the file was written with.
+fn without_markers(raw: &str, segment: Range<usize>, markers: &[Range<usize>]) -> String {
+    let mut out = String::with_capacity(segment.len());
+    let mut cursor = segment.start;
+    for marker in markers
+        .iter()
+        .filter(|m| m.start >= segment.start && m.end <= segment.end)
+    {
+        out.push_str(&raw[cursor..marker.start]);
+        cursor = marker.end;
     }
-    s.to_owned()
-}
-
-/// Removes a final `...` line, and only a line that is exactly that.
-fn strip_end_marker(s: &str) -> String {
-    let trimmed_end = s.trim_end();
-    match trimmed_end.rsplit_once('\n') {
-        Some((body, last)) if last.trim() == "..." => body.to_owned(),
-        None if trimmed_end == "..." => String::new(),
-        _ => trimmed_end.to_owned(),
-    }
+    out.push_str(&raw[cursor..segment.end]);
+    out.trim().to_owned()
 }
 
 /// Segments this tool must preserve as-is, in original order.
