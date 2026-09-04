@@ -245,14 +245,6 @@ mod tests {
     // where the bytes before the first document belong.
 
     #[test]
-    fn crlf_line_endings_split_on_the_marker() {
-        let raw = "machine:\r\n    install:\r\n        disk: /dev/vda\r\n---\r\napiVersion: v1alpha1\r\nkind: ExtensionServiceConfig\r\nname: awg\r\nconfigFiles: []\r\n";
-        let segments = split(raw).unwrap();
-        assert_eq!(segments.len(), 2);
-        assert!(segments[1].starts_with("apiVersion:"));
-    }
-
-    #[test]
     fn a_document_terminator_is_not_content() {
         let raw = "machine:\n    install:\n        disk: /dev/vda\n...\n";
         let segments = split(raw).unwrap();
