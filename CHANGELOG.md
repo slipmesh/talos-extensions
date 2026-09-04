@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [0.1.6] - 2026-09-04
+
+### Documentation 📚
+
+- Name the BIRD the extension actually ships
+- Say what the fixtures were captured on, and how 3.3.2 failed
+
 ## [0.1.5] - 2026-09-04
 
 ### Documentation 📚
