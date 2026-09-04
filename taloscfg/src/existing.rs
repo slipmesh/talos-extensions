@@ -41,27 +41,17 @@ impl<'a> FileExistingState<'a> {
     pub fn new(mesh: &'a MeshConfig, patches_dir: &Path) -> Result<Self> {
         let mut awg_by_node = HashMap::new();
 
-        let entries = match std::fs::read_dir(patches_dir) {
-            Ok(entries) => entries,
-            // No directory yet is the from-scratch case, not an error.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self { mesh, awg_by_node });
-            }
-            Err(e) => return Err(e).with_context(|| format!("reading {patches_dir:?}")),
-        };
-
-        for entry in entries {
-            let path = entry
-                .with_context(|| format!("reading {patches_dir:?}"))?
-                .path();
-            if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
-                continue;
-            }
-            let Some(node) = path.file_stem().and_then(|s| s.to_str()) else {
-                continue;
+        // One file per node named in mesh.yaml, and nothing else in the directory: what else lives
+        // there is not this tool's to parse, and refusing to run because of it would be a new way
+        // to fail that reading per node never had.
+        for node in &mesh.nodes {
+            let path = patches_dir.join(format!("{}.yaml", node.name));
+            let raw = match std::fs::read_to_string(&path) {
+                Ok(raw) => raw,
+                // A node with no patch file yet is the from-scratch case.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e).with_context(|| format!("reading {path:?}")),
             };
-            let raw =
-                std::fs::read_to_string(&path).with_context(|| format!("reading {path:?}"))?;
             let Some(segment) = segments::owned_segment(&raw, "awg")
                 .with_context(|| format!("reading {path:?}"))?
             else {
@@ -74,7 +64,7 @@ impl<'a> FileExistingState<'a> {
             };
             let cfg: awg::config::AwgConfig = serde_yaml::from_str(&file.content)
                 .with_context(|| format!("parsing the awg config inside {path:?}"))?;
-            awg_by_node.insert(node.to_owned(), cfg);
+            awg_by_node.insert(node.name.clone(), cfg);
         }
 
         Ok(Self { mesh, awg_by_node })
@@ -249,5 +239,20 @@ roadwarriors:
         let mesh = mesh_with_link();
         let state = FileExistingState::new(&mesh, &dir).unwrap();
         assert_eq!(state.roadwarrior_obfuscation("nonexistent"), None);
+    }
+
+    #[test]
+    fn an_unrelated_yaml_file_in_the_directory_is_not_read() {
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("not-a-node.yaml"),
+            "this: [is not, valid
+",
+        )
+        .unwrap();
+        let mesh = mesh_with_link();
+        // Neither node has a patch file yet; the stray one must not be looked at at all.
+        let state = FileExistingState::new(&mesh, &dir).unwrap();
+        assert!(state.mesh_private_key("a").is_none());
     }
 }
