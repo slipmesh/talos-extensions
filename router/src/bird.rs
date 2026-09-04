@@ -202,7 +202,7 @@ pub struct RenderInputs<'a> {
     /// up only routes installed by other daemons, while `learn all` is `KRT_LEARN_ALL` and also
     /// takes `KRT_SRC_KERNEL` - what the kernel stamps on a connected route derived from an
     /// interface address (`sysdep/unix/krt.h`'s `KRT_LEARN_*`, the `case KRT_SRC_KERNEL` guard in
-    /// `krt.c`, and `krt.Y`'s `kern_learn` grammar, as of the pinned BIRD 2.18). A node's own
+    /// `krt.c`, and `krt.Y`'s `kern_learn` grammar, unchanged as of the pinned BIRD 3.3.2). A node's own
     /// podCIDR route is exactly that under every CNI, so a bare `learn` silently learns nothing
     /// and the node stops announcing its pods. `all` widens the *source* of learnable routes, not
     /// the scope: the import filter still rejects everything outside these prefixes.
@@ -297,7 +297,7 @@ async fn birdc_show(command: &str) -> Result<String> {
     Ok(reply.text)
 }
 
-/// For a BIRD 2.19.1 `strict bind yes` protocol whose local address doesn't exist yet at bind
+/// For a `strict bind yes` protocol whose local address doesn't exist yet at bind
 /// time, `show protocols`' Info column reads exactly `Error: No
 /// listening socket`, a terminal failure state distinct from the normal `Connect`/`Active`/
 /// `OpenSent` states a still-negotiating-but-healthy session passes through - so matching this
@@ -307,7 +307,7 @@ fn has_no_listening_socket(show_protocols_output: &str) -> bool {
 }
 
 /// Every interface name BIRD's OSPF instance has actually attached to, per a real
-/// `birdc show ospf interface <proto>` (verified against BIRD 2.19.1): each configured interface
+/// `birdc show ospf interface <proto>`: each configured interface
 /// prints as a `Interface <name> (<network>)` line, in a block that's entirely absent (just the
 /// `<proto>:` header) when nothing has been attached yet.
 fn ospf_configured_interfaces(show_ospf_interface_output: &str) -> HashSet<&str> {
@@ -697,6 +697,13 @@ mod tests {
     // Fixtures below are real `birdc` output, captured against BIRD 2.19.1 running in a container
     // with a deliberately reproduced "strict bind yes local address not present yet" / "OSPF
     // interface not attached yet" race - not hand-guessed from memory of BIRD's CLI format.
+    //
+    // They still describe BIRD 3.3.2, which is what this daemon now ships against: the three
+    // formats parsed here are byte-identical in 3.3.2's own sources - `nest/proto.c`'s
+    // `cli_msg(-1002, "%-10s %-10s %-10s %-6s %-12s  %s")` with the same header row,
+    // `proto/ospf/iface.c`'s `cli_msg(-1015, "Interface %s (%N)")`, and "No listening socket"
+    // in `proto/bgp/bgp.c`'s `bgp_misc_errors[]`. Only the version in the greeting differs, and
+    // nothing here reads it.
     const SHOW_PROTOCOLS_NO_LISTENING_SOCKET: &str = "\
 BIRD 2.19.1 ready.
 Name       Proto      Table      State  Since         Info

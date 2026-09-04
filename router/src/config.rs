@@ -19,7 +19,7 @@ pub struct RouterConfig {
     pub bgp_peers: Vec<BgpPeerEntry>,
     /// Interface-matching entries fed straight into BIRD's own `interface` clause: an exact name,
     /// a shell-glob pattern (`"mesh-*"`), or a CIDR matching by the interface's address - BIRD
-    /// accepts all three forms in the same list. See `bird.rs::render_ospf_iface` for how each
+    /// accepts all three forms in the same list. See `bird.rs::render_iface_pattern` for how each
     /// entry gets rendered (quoted name/pattern vs. bare CIDR literal).
     #[serde(default)]
     pub ospf_interfaces: Vec<String>,
