@@ -86,24 +86,51 @@ pub fn split(raw: &str) -> Result<Vec<String>> {
 }
 
 /// Drops the document markers the grammar counts as part of a document, since `render_file` writes
-/// its own: a leading `---`, and a trailing `...`.
+/// its own: the `---` that opens it and the `...` that ends it.
 ///
-/// The end marker only counts as one when it stands alone on the last line. `...` is also ordinary
-/// scalar content - `description: ...` ends a document just as well - and cutting three characters
-/// off the end of that would corrupt the very documents this module exists to hand back untouched.
+/// A marker is a line that is exactly that and nothing else. `---foo: bar` is a mapping key, and
+/// `note: ...` is a string; cutting three characters off either would corrupt the very documents
+/// this module exists to hand back untouched. The opening marker is looked for past leading
+/// comments and directives, since `split` gives those to the document that follows them - leaving
+/// it in place would have `render_file` write a second one and open an empty document between.
+///
+/// Cut by byte range rather than by rebuilding from lines: a segment carries whatever line endings
+/// the file was written with, and joining lines back together would silently rewrite them.
 fn strip_markers(segment: &str) -> String {
-    let mut s = segment.trim();
-    if let Some(rest) = s.strip_prefix("---") {
-        s = rest.trim_start();
+    strip_end_marker(&strip_start_marker(segment))
+        .trim()
+        .to_owned()
+}
+
+/// Removes the `---` line itself, leaving whatever preceded it in place.
+fn strip_start_marker(s: &str) -> String {
+    let mut offset = 0;
+    for line in s.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed == "---" {
+            let mut out = String::with_capacity(s.len() - line.len());
+            out.push_str(&s[..offset]);
+            out.push_str(&s[offset + line.len()..]);
+            return out;
+        }
+        // Only comments, directives and blank lines may precede the marker; anything else means
+        // the document has already begun and there is no marker to strip.
+        if !(trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('%')) {
+            break;
+        }
+        offset += line.len();
     }
-    if let Some((body, last)) = s.rsplit_once('\n')
-        && last.trim_end() == "..."
-    {
-        s = body;
-    } else if s.trim_end() == "..." {
-        s = "";
+    s.to_owned()
+}
+
+/// Removes a final `...` line, and only a line that is exactly that.
+fn strip_end_marker(s: &str) -> String {
+    let trimmed_end = s.trim_end();
+    match trimmed_end.rsplit_once('\n') {
+        Some((body, last)) if last.trim() == "..." => body.to_owned(),
+        None if trimmed_end == "..." => String::new(),
+        _ => trimmed_end.to_owned(),
     }
-    s.trim().to_owned()
 }
 
 /// Segments this tool must preserve as-is, in original order.
@@ -272,6 +299,42 @@ mod tests {
 ";
         let segments = split(raw).unwrap();
         assert_eq!(segments, vec!["note: \"--- not a marker\"".to_string()]);
+    }
+
+    #[test]
+    fn a_marker_after_leading_comments_is_still_stripped() {
+        let raw = "# hand-written, keep me\n---\nmachine:\n    install:\n        disk: /dev/vda\n";
+        let segments = split(raw).unwrap();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(
+            segments[0],
+            "# hand-written, keep me\nmachine:\n    install:\n        disk: /dev/vda"
+        );
+    }
+
+    #[test]
+    fn a_comment_then_a_marker_and_nothing_else_leaves_no_empty_document() {
+        let raw = "# just a note\n---\n";
+        let segments = split(raw).unwrap();
+        assert_eq!(segments, vec!["# just a note".to_string()]);
+    }
+
+    #[test]
+    fn three_dashes_glued_to_a_key_are_not_a_marker() {
+        let raw = "---foo: bar\n";
+        let segments = split(raw).unwrap();
+        assert_eq!(segments, vec!["---foo: bar".to_string()]);
+    }
+
+    #[test]
+    fn crlf_inside_a_segment_survives() {
+        let raw = "machine:\r\n    install:\r\n        disk: /dev/vda\r\n";
+        let segments = split(raw).unwrap();
+        assert!(
+            segments[0].contains("\r\n"),
+            "line endings were rewritten: {:?}",
+            segments[0]
+        );
     }
 
     #[test]
