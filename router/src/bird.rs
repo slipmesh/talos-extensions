@@ -202,7 +202,8 @@ pub struct RenderInputs<'a> {
     /// up only routes installed by other daemons, while `learn all` is `KRT_LEARN_ALL` and also
     /// takes `KRT_SRC_KERNEL` - what the kernel stamps on a connected route derived from an
     /// interface address (`sysdep/unix/krt.h`'s `KRT_LEARN_*`, the `case KRT_SRC_KERNEL` guard in
-    /// `krt.c`, and `krt.Y`'s `kern_learn` grammar, unchanged as of the pinned BIRD 3.3.2). A node's own
+    /// `krt.c`, and `krt.Y`'s `kern_learn` grammar, in the pinned BIRD 2.19.2 and unchanged in 3.3.2).
+    /// A node's own
     /// podCIDR route is exactly that under every CNI, so a bare `learn` silently learns nothing
     /// and the node stops announcing its pods. `all` widens the *source* of learnable routes, not
     /// the scope: the import filter still rejects everything outside these prefixes.
@@ -698,12 +699,14 @@ mod tests {
     // with a deliberately reproduced "strict bind yes local address not present yet" / "OSPF
     // interface not attached yet" race - not hand-guessed from memory of BIRD's CLI format.
     //
-    // They still describe BIRD 3.3.2, which is what this daemon now ships against: the three
-    // formats parsed here are byte-identical in 3.3.2's own sources - `nest/proto.c`'s
+    // The extension ships 2.19.2, one patch release on from the capture. They would hold for 3.3.2
+    // as well: all three formats are byte-identical in its sources - `nest/proto.c`'s
     // `cli_msg(-1002, "%-10s %-10s %-10s %-6s %-12s  %s")` with the same header row,
     // `proto/ospf/iface.c`'s `cli_msg(-1015, "Interface %s (%N)")`, and "No listening socket"
     // in `proto/bgp/bgp.c`'s `bgp_misc_errors[]`. Only the version in the greeting differs, and
-    // nothing here reads it.
+    // nothing here reads it. That comparison is kept for whenever 3.x is attempted again: it is
+    // not pinned now, its own filter_test having died with SIGILL in slipmesh/bird's static
+    // build.
     const SHOW_PROTOCOLS_NO_LISTENING_SOCKET: &str = "\
 BIRD 2.19.1 ready.
 Name       Proto      Table      State  Since         Info
