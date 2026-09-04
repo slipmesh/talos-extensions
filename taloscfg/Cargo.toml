@@ -23,6 +23,8 @@ nftables.workspace = true
 router.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
+tree-sitter.workspace = true
+tree-sitter-yaml.workspace = true
 sha2 = "0.10.9"
 similar = "2.7.0"
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }

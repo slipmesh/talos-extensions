@@ -24,7 +24,7 @@ struct ExtensionServiceConfigDoc {
 
 fn load_existing_awg_config(patches_dir: &Path, node_name: &str) -> Option<awg::config::AwgConfig> {
     let raw = std::fs::read_to_string(patches_dir.join(format!("{node_name}.yaml"))).ok()?;
-    let segment = segments::owned_segment(&raw, "awg")?;
+    let segment = segments::owned_segment(&raw, "awg").ok().flatten()?;
     let doc: ExtensionServiceConfigDoc = serde_yaml::from_str(&segment).ok()?;
     serde_yaml::from_str(&doc.config_files.first()?.content).ok()
 }

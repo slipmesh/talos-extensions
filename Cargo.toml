@@ -39,6 +39,13 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 yamlpath = "1.29.0"
 yamlpatch = "1.29.0"
 yaml_serde = "0.10"
+# The parser under yamlpath, taken directly for the one thing yamlpath does not expose: a stream's
+# document boundaries. `taloscfg` has to split a patch file into documents it owns and documents it
+# must return byte for byte, and a text split on a document marker gets that wrong for CRLF, for
+# a `---` inside a block scalar (an nftables ruleset is one), and for `...` terminators. Versions
+# are the ones yamlpath itself depends on, so the tree-sitter grammar is built once, not twice.
+tree-sitter = "0.26.9"
+tree-sitter-yaml = "0.7.2"
 # QR code encoder - de-facto standard for this in Rust (18M+ downloads). Used by `rw-add`/
 # `rw-inspect --qr` to print a scannable client config straight to the terminal.
 qrcode = "0.14.1"

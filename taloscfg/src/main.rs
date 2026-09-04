@@ -363,7 +363,8 @@ fn generate(
 
         let patch_path = patches_dir.join(format!("{node_name}.yaml"));
         let existing_raw = std::fs::read_to_string(&patch_path).unwrap_or_default();
-        let foreign = segments::foreign_segments(&existing_raw);
+        let foreign = segments::foreign_segments(&existing_raw)
+            .with_context(|| format!("reading the existing {patch_path:?}"))?;
         let new_content = segments::render_file(&foreign, &owned);
 
         if diff {
@@ -489,7 +490,7 @@ mod tests {
             "/etc/talos-extensions/nftables.yaml",
             &inner,
         );
-        let found = segments::owned_segment(&doc, "nftables").unwrap();
+        let found = segments::owned_segment(&doc, "nftables").unwrap().unwrap();
         assert!(segments::is_owned(&found));
 
         #[derive(serde::Deserialize)]
@@ -544,9 +545,13 @@ mesh:
         let written = std::fs::read_to_string(patches_dir.join("a.yaml")).unwrap();
         assert!(written.contains("machine:"));
         assert!(written.contains("disk: /dev/vda"));
-        let awg_segment = segments::owned_segment(&written, "awg").unwrap();
+        let awg_segment = segments::owned_segment(&written, "awg").unwrap().unwrap();
         assert!(awg_segment.contains("mesh-"));
-        assert!(segments::owned_segment(&written, "router").is_some());
+        assert!(
+            segments::owned_segment(&written, "router")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

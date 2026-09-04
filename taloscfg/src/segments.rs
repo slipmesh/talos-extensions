@@ -1,10 +1,18 @@
 //! Raw multi-document YAML I/O for `patches/<node>.yaml`: splits a patch file into segments this
 //! tool owns (its own `ExtensionServiceConfig` documents for awg/router/nftables) versus segments
 //! it must never touch (anything else - e.g. `machine.install.disk`, hand-written per node).
-//! Splitting happens on raw text, not full serde parsing of the whole document, so foreign
-//! segments round-trip byte for byte - only `apiVersion`/`kind`/`name` are ever parsed out.
+//! Segments are handed back as raw text, never re-serialized, so a foreign one round-trips byte
+//! for byte - only `apiVersion`/`kind`/`name` are ever parsed out of it.
+//!
+//! Where a document begins comes from the YAML grammar rather than from a search for `---`: a
+//! text split cannot tell a document marker from the same three characters inside a block
+//! scalar, and an nftables ruleset is a block scalar carrying arbitrary text. The parser is
+//! tree-sitter-yaml, already in this build under `yamlpath` - which parses a whole source but
+//! exposes no way to walk the documents of a stream, hence the direct use here.
 
+use anyhow::{Context, Result};
 use serde::Deserialize;
+use tree_sitter::Parser;
 
 /// The `name`s this tool ever writes, under `kind: ExtensionServiceConfig` - the exact ownership
 /// key. Talos itself requires `name` to be unique per `kind`, so this pair is already a sufficient
@@ -28,28 +36,74 @@ pub fn is_owned(segment: &str) -> bool {
 
 /// Splits a patch file's raw text into trimmed segments, in file order. Empty input yields no
 /// segments (a from-scratch file has nothing to preserve).
-pub fn split(raw: &str) -> Vec<String> {
-    let raw = raw.strip_prefix("---\n").unwrap_or(raw);
-    raw.split("\n---\n")
-        .map(str::trim)
+///
+/// The cut points are the byte offsets where the grammar says a document starts; each segment then
+/// runs to the next one, so every byte of the file lands in exactly one segment. Taking each
+/// document node's own span instead would drop whatever the grammar parses as trailing trivia - a
+/// comment after the last key, say - and losing it would corrupt a file this tool promises only to
+/// add to.
+pub fn split(raw: &str) -> Result<Vec<String>> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_yaml::LANGUAGE.into())
+        .context("loading the YAML grammar")?;
+    let tree = parser
+        .parse(raw, None)
+        .context("parsing the patch file as YAML")?;
+    anyhow::ensure!(
+        !tree.root_node().has_error(),
+        "the patch file is not valid YAML - refusing to rewrite it"
+    );
+
+    let mut cursor = tree.root_node().walk();
+    let mut starts: Vec<usize> = tree
+        .root_node()
+        .children(&mut cursor)
+        .filter(|n| n.kind() == "document")
+        .map(|n| n.start_byte())
+        .collect();
+    // Whatever precedes the first document - a leading comment, a `%YAML` directive - belongs to it.
+    if let Some(first) = starts.first_mut() {
+        *first = 0;
+    }
+
+    Ok(starts
+        .iter()
+        .enumerate()
+        .map(|(i, &start)| {
+            let end = starts.get(i + 1).copied().unwrap_or(raw.len());
+            strip_markers(&raw[start..end])
+        })
         .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .collect()
+        .collect())
+}
+
+/// Drops the document markers the grammar counts as part of a document, since `render_file` writes
+/// its own: a leading `---`, and a trailing `...`.
+fn strip_markers(segment: &str) -> String {
+    let mut s = segment.trim();
+    if let Some(rest) = s.strip_prefix("---") {
+        s = rest.trim_start();
+    }
+    if let Some(rest) = s.strip_suffix("...") {
+        s = rest;
+    }
+    s.trim().to_owned()
 }
 
 /// Segments this tool must preserve as-is, in original order.
-pub fn foreign_segments(raw: &str) -> Vec<String> {
-    split(raw).into_iter().filter(|s| !is_owned(s)).collect()
+pub fn foreign_segments(raw: &str) -> Result<Vec<String>> {
+    Ok(split(raw)?.into_iter().filter(|s| !is_owned(s)).collect())
 }
 
 /// The single owned segment for a specific `name` (`"awg"`/`"router"`/`"nftables"`), if present -
 /// used to read back a previous run's output for the idempotency tiers in `render.rs`.
-pub fn owned_segment(raw: &str, name: &str) -> Option<String> {
-    split(raw).into_iter().find(|s| {
+pub fn owned_segment(raw: &str, name: &str) -> Result<Option<String>> {
+    Ok(split(raw)?.into_iter().find(|s| {
         let header: SegmentHeader = serde_yaml::from_str(s).unwrap_or_default();
         header.kind.as_deref() == Some("ExtensionServiceConfig")
             && header.name.as_deref() == Some(name)
-    })
+    }))
 }
 
 /// Rebuilds a patch file: foreign segments (original order) first, then the freshly-rendered owned
@@ -91,7 +145,7 @@ mod tests {
     #[test]
     fn splits_multi_document_file_preserving_order() {
         let raw = "machine:\n    install:\n        disk: /dev/vda\n---\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles: []\n";
-        let segments = split(raw);
+        let segments = split(raw).unwrap();
         assert_eq!(segments.len(), 2);
         assert!(segments[0].starts_with("machine:"));
         assert!(segments[1].starts_with("apiVersion:"));
@@ -99,13 +153,13 @@ mod tests {
 
     #[test]
     fn split_of_empty_file_is_empty() {
-        assert!(split("").is_empty());
+        assert!(split("").unwrap().is_empty());
     }
 
     #[test]
     fn foreign_segments_excludes_owned_and_preserves_order() {
         let raw = "machine:\n    install:\n        disk: /dev/vda\n---\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles: []\n---\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: router\nconfigFiles: []\n";
-        let foreign = foreign_segments(raw);
+        let foreign = foreign_segments(raw).unwrap();
         assert_eq!(foreign.len(), 1);
         assert!(foreign[0].starts_with("machine:"));
     }
@@ -114,14 +168,14 @@ mod tests {
     fn foreign_segments_of_file_with_no_foreign_content_is_empty() {
         let raw =
             "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles: []\n";
-        assert!(foreign_segments(raw).is_empty());
+        assert!(foreign_segments(raw).unwrap().is_empty());
     }
 
     #[test]
     fn foreign_segment_round_trips_byte_for_byte() {
         let disk_segment = "machine:\n    install:\n        disk: /dev/vda";
         let raw = format!("{disk_segment}\n");
-        let foreign = foreign_segments(&raw);
+        let foreign = foreign_segments(&raw).unwrap();
         assert_eq!(foreign, vec![disk_segment.to_string()]);
     }
 
@@ -142,14 +196,51 @@ mod tests {
     #[test]
     fn owned_segment_finds_the_named_segment() {
         let raw = "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles: []\n---\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: router\nconfigFiles: [x]\n";
-        let found = owned_segment(raw, "router").unwrap();
+        let found = owned_segment(raw, "router").unwrap().unwrap();
         assert!(found.contains("configFiles: [x]"));
     }
 
     #[test]
     fn owned_segment_returns_none_when_absent() {
         let raw = "machine:\n    install:\n        disk: /dev/vda\n";
-        assert!(owned_segment(raw, "awg").is_none());
+        assert!(owned_segment(raw, "awg").unwrap().is_none());
+    }
+
+    // What a text split on the document marker gets wrong, and what this module decides on top
+    // of the grammar: which markers to strip, what to do with a file that will not parse, and
+    // where the bytes before the first document belong.
+
+    #[test]
+    fn crlf_line_endings_split_on_the_marker() {
+        let raw = "machine:\r\n    install:\r\n        disk: /dev/vda\r\n---\r\napiVersion: v1alpha1\r\nkind: ExtensionServiceConfig\r\nname: awg\r\nconfigFiles: []\r\n";
+        let segments = split(raw).unwrap();
+        assert_eq!(segments.len(), 2);
+        assert!(segments[1].starts_with("apiVersion:"));
+    }
+
+    #[test]
+    fn a_document_terminator_is_not_content() {
+        let raw = "machine:\n    install:\n        disk: /dev/vda\n...\n";
+        let segments = split(raw).unwrap();
+        assert_eq!(
+            segments,
+            vec!["machine:\n    install:\n        disk: /dev/vda".to_string()]
+        );
+    }
+
+    #[test]
+    fn invalid_yaml_is_refused_rather_than_split() {
+        let raw = "machine:\n  install:\n   disk: [unterminated\n";
+        assert!(split(raw).is_err());
+    }
+
+    #[test]
+    fn a_comment_before_the_first_document_is_kept_with_it() {
+        let raw =
+            "# hand-written, do not lose me\nmachine:\n    install:\n        disk: /dev/vda\n";
+        let segments = split(raw).unwrap();
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0].starts_with("# hand-written"));
     }
 
     #[test]
