@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["common", "awg", "router", "nftables", "patches"]
+members = ["common", "awg", "router", "nftables", "taloscfg"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,10 +10,13 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/slipmesh/talos-extensions"
 
 [workspace.dependencies]
-common = { path = "common" }
-awg = { path = "awg" }
-router = { path = "router" }
-nftables = { path = "nftables" }
+# default-features = false throughout: the netlink-backed halves are opt-in, so `taloscfg` - which
+# needs the config types alone - builds off Linux. The daemons re-enable them through their own
+# `runtime` feature, which is on by default for each of them.
+common = { path = "common", default-features = false }
+awg = { path = "awg", default-features = false }
+router = { path = "router", default-features = false }
+nftables = { path = "nftables", default-features = false }
 
 anyhow = "1.0.104"
 clap = { version = "4.5.51", features = ["derive"] }
@@ -29,7 +32,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 # Comment/format-preserving YAML patch operations - part of zizmor (github.com/zizmorcore/zizmor),
-# MIT. `patches`' rw-add/rw-del use this instead of a hand-rolled text scan to add/remove one
+# MIT. `taloscfg`' rw-add/rw-del use this instead of a hand-rolled text scan to add/remove one
 # roadwarriors client entry in mesh.yaml without disturbing the rest of that hand-edited file
 # (comments, existing flow-style entries). Pinned to the latest stable (not the 1.30.0-rc1
 # prerelease) since the two crates version in lockstep with each other, not with zizmor itself.

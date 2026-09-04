@@ -12,6 +12,7 @@
 //! Route/link types are imported via `rtnetlink::packet_route::...`, not a separate top-level
 //! `netlink-packet-route` dependency - see this workspace's root `Cargo.toml` comment on why.
 
+use crate::cidr::parse_cidr;
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
 use rtnetlink::packet_route::link::InfoKind;
@@ -46,25 +47,6 @@ fn to_remove<A: PartialEq + Copy>(current: &[A], desired: &[A]) -> Vec<A> {
         .copied()
         .filter(|a| !desired.contains(a))
         .collect()
-}
-
-/// Parses `"<addr>/<prefix>"` for either address family.
-pub fn parse_cidr(cidr: &str) -> Result<(IpAddr, u8)> {
-    let (addr, prefix) = cidr
-        .split_once('/')
-        .with_context(|| format!("{cidr:?} is not a CIDR (missing '/')"))?;
-    let addr: IpAddr = addr
-        .parse()
-        .with_context(|| format!("invalid address in {cidr:?}"))?;
-    let prefix: u8 = prefix
-        .parse()
-        .with_context(|| format!("invalid prefix length in {cidr:?}"))?;
-    let max = if addr.is_ipv4() { 32 } else { 128 };
-    anyhow::ensure!(
-        prefix <= max,
-        "invalid prefix length in {cidr:?}: {prefix} > {max}"
-    );
-    Ok((addr, prefix))
 }
 
 impl RtClient {
@@ -591,32 +573,5 @@ mod tests {
         let mut removed = to_remove(&[global, link_local, stale], &[global, link_local]);
         removed.sort();
         assert_eq!(removed, vec![stale]);
-    }
-
-    #[test]
-    fn parse_cidr_accepts_ipv4() {
-        assert_eq!(
-            parse_cidr("10.0.0.1/24").unwrap(),
-            (IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 24)
-        );
-    }
-
-    #[test]
-    fn parse_cidr_accepts_ipv6() {
-        assert_eq!(
-            parse_cidr("fe80::1/64").unwrap(),
-            (IpAddr::V6("fe80::1".parse().unwrap()), 64)
-        );
-    }
-
-    #[test]
-    fn parse_cidr_rejects_prefix_over_family_max() {
-        assert!(parse_cidr("10.0.0.1/33").is_err());
-        assert!(parse_cidr("fe80::1/129").is_err());
-    }
-
-    #[test]
-    fn parse_cidr_rejects_missing_slash() {
-        assert!(parse_cidr("10.0.0.1").is_err());
     }
 }

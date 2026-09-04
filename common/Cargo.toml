@@ -11,14 +11,26 @@ description = "Netlink helpers (rtnetlink + amneziawg genl) and small utilities 
 anyhow.workspace = true
 base64.workspace = true
 futures.workspace = true
-genetlink.workspace = true
-netlink-packet-amnezia-wireguard.workspace = true
-netlink-packet-core.workspace = true
-netlink-packet-generic.workspace = true
-rtnetlink.workspace = true
+genetlink = { workspace = true, optional = true }
+netlink-packet-amnezia-wireguard = { workspace = true, optional = true }
+netlink-packet-core = { workspace = true, optional = true }
+netlink-packet-generic = { workspace = true, optional = true }
+rtnetlink = { workspace = true, optional = true }
 serde.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 tracing.workspace = true
 
 [dev-dependencies]
 serde_yaml.workspace = true
+
+[features]
+default = ["netlink"]
+# The netlink stack is Linux-only. `taloscfg` needs this crate for Obfuscation and CIDR parsing
+# alone, and has to build wherever it is run, so the daemons keep the default and it opts out.
+netlink = [
+    "dep:genetlink",
+    "dep:netlink-packet-amnezia-wireguard",
+    "dep:netlink-packet-core",
+    "dep:netlink-packet-generic",
+    "dep:rtnetlink",
+]

@@ -9,7 +9,7 @@ their config.
 | `awg` | `awg` | on the node, as `ext-awg` | brings up AmneziaWG interfaces and peers over netlink |
 | `router` | `router` | on the node, as `ext-router` | renders BIRD config (OSPFv3 + iBGP), supervises `bird` |
 | `nftables` | `nftables` | on the node, as `ext-nftables` | applies an nftables ruleset and keeps it applied |
-| `patches` | `slipmesh-patches` | on your workstation | renders every node's config from one `mesh.yaml` |
+| `taloscfg` | `slipmesh-taloscfg` | on your workstation | renders every node's config from one `mesh.yaml` |
 | `common` | — | — | netlink, obfuscation types, shared route tagging |
 
 This repository produces plain binaries and nothing else. Packaging each daemon into a Talos
@@ -109,7 +109,7 @@ Whoever renders the machine config is responsible for giving a node its own per-
 placing the same key in every node's config when a single shared identity is needed (e.g. so a
 roaming client sees one consistent server identity no matter which node it's currently connected
 to). This is a config-authoring concern, not something `awg` decides. The same applies to
-`header_protection_key`. `patches` (below) is one such config author.
+`header_protection_key`. `taloscfg` (below) is one such config author.
 
 **Every AmneziaWG obfuscation parameter is exposed**, through 3.1, not just the original nine
 (jc/jmin/jmax/s1/s2/h1-h4) - confirmed field-by-field against the current kernel module's
@@ -147,7 +147,7 @@ only routes carrying that exact tag are ever treated as "ours".
 ### Metrics
 
 With a `metrics` section in the config, `awg` serves `GET /metrics` on that address; without one it
-opens nothing, because a node not set up for scraping should not open a port on a default. `patches`
+opens nothing, because a node not set up for scraping should not open a port on a default. `taloscfg`
 (below) renders the section from `cluster.metrics_port`, binding it to the node's own v4 mesh
 loopback - the address kubelet reports as `InternalIP`, so Prometheus reaches it through node
 discovery plus a port relabel, exactly the way node-exporter is reached. That address belongs to
@@ -238,7 +238,7 @@ Whoever authors `router.yaml` is responsible for `bypass.exclude` covering this 
 every peer's) public endpoint - a blackholed endpoint takes the mesh link down with it. There is no
 cluster-wide node list a static per-node file could consult, so this is the same
 config-authoring-is-a-human-responsibility pattern documented above for `awg`'s private keys.
-`patches` handles it for you when the topology comes from `mesh.yaml`.
+`taloscfg` handles it for you when the topology comes from `mesh.yaml`.
 
 ---
 
@@ -286,9 +286,9 @@ is a statically-linked binary built from source rather than the dynamically-link
 
 ---
 
-## `patches`: one topology file, every node's config
+## `taloscfg`: one topology file, every node's config
 
-`slipmesh-patches` is the only crate here that doesn't run on a node. It reads a single
+`slipmesh-taloscfg` is the only crate here that doesn't run on a node. It reads a single
 `mesh.yaml` describing the whole mesh - links, ports, obfuscation, BGP AS, road-warrior pools,
 bypass lists, nftables ruleset - and writes `patches/<node>.yaml` for every node in it, each
 holding the `awg`/`router`/`nftables` `ExtensionServiceConfig` documents that
@@ -303,9 +303,9 @@ daemon's own `validate()` - the daemons are depended on as libraries here, so th
 implementation to drift.
 
 ```sh
-slipmesh-patches generate                      # every node, into ./patches
-slipmesh-patches generate --node node-a --diff # one node, print what would change, write nothing
-slipmesh-patches generate --check              # validate only
+slipmesh-taloscfg generate                      # every node, into ./patches
+slipmesh-taloscfg generate --node node-a --diff # one node, print what would change, write nothing
+slipmesh-taloscfg generate --check              # validate only
 ```
 
 Two properties worth knowing before you point it at a directory:
@@ -319,9 +319,9 @@ Two properties worth knowing before you point it at a directory:
   hand-maintained topology file stays hand-readable:
 
 ```sh
-slipmesh-patches rw-add --if plain --name laptop --allowed-ips 10.62.253.5/32 --export --qr
-slipmesh-patches rw-inspect --if plain --name laptop --qr   # re-render, change nothing
-slipmesh-patches rw-del --if plain --name laptop
+slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 10.62.253.5/32 --export --qr
+slipmesh-taloscfg rw-inspect --if plain --name laptop --qr   # re-render, change nothing
+slipmesh-taloscfg rw-del --if plain --name laptop
 ```
 
 `rw-add` generates the client's keypair and prints a ready-to-import config (optionally as a
@@ -331,7 +331,7 @@ terminal QR code), keeping only the public half. Client private keys are never p
 The same generated `<node>.yaml` also drives [routeros](https://github.com/slipmesh/routeros),
 which converges a MikroTik device into the mesh from it - a mesh member need not be a Talos node.
 
-Install it with `cargo install --path patches`.
+Install it with `cargo install --path taloscfg`.
 
 ---
 
@@ -344,8 +344,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 No mocking framework - pure logic (`config::validate`, `interface::diff_peers`,
-`rt::{to_remove,parse_cidr}`, all of `patches`' rendering) is unit-tested directly; netlink I/O is
-a thin, not-unit-tested shim around it (see `common/src/netlink/`). Exercising `awg` end-to-end
+`rt::to_remove`, `cidr::parse_cidr`, all of `taloscfg`'s rendering) is unit-tested directly;
+netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`). Exercising `awg` end-to-end
 needs a real Linux host with the `amneziawg` kernel module loaded and `CAP_NET_ADMIN` - see
 `talos-awg-extension`'s `docs/extension-services.md` for a local smoke-test recipe.
 

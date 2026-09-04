@@ -12,9 +12,10 @@
 
 use crate::config::{InterfaceEntry, PeerEntry};
 use anyhow::{Context, Result};
+use common::cidr::parse_cidr;
 use common::keys::decode_key;
 use common::netlink::awg::{AwgClient, push_obfuscation_attrs};
-use common::netlink::rt::{RtClient, parse_cidr};
+use common::netlink::rt::RtClient;
 use netlink_packet_amnezia_wireguard::{
     AmneziaWireguardAddressFamily, AmneziaWireguardAllowedIp, AmneziaWireguardAllowedIpAttr,
     AmneziaWireguardAttribute, AmneziaWireguardPeer, AmneziaWireguardPeerAttribute,

@@ -6,7 +6,7 @@
 
 use crate::resolver::BypassSourceEntry;
 use anyhow::Result;
-use common::netlink::rt::parse_cidr as parse_dual_family_cidr;
+use common::cidr::parse_cidr as parse_dual_family_cidr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};
@@ -85,7 +85,7 @@ fn default_bypass_refresh_interval_secs() -> u64 {
 
 /// Parses a loopback-identity address: `"<addr>/<prefix>"`, or a bare address (defaults to `/32`
 /// for IPv4, `/128` for IPv6 - the whole point of a loopback identity is that it has no host
-/// bits). Delegates to `common::netlink::rt::parse_cidr` (already used by `awg` for the same
+/// bits). Delegates to `common::cidr::parse_cidr` (already used by `awg` for the same
 /// dual-family CIDR shape) whenever a prefix is present, so both parsers agree on what's valid.
 pub fn parse_loopback_address(s: &str) -> Result<(IpAddr, u8)> {
     if s.contains('/') {

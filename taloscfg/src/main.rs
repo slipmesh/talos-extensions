@@ -304,7 +304,6 @@ fn generate(
     let mesh: mesh_config::MeshConfig =
         serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
     mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
-    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
 
     if let Some(n) = node {
         anyhow::ensure!(

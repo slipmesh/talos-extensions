@@ -1,6 +1,6 @@
 //! X25519 key generation for this offline tool only - the opposite trust boundary from
 //! `common::keys` (wire-format decode only, deliberately no generation, since a live daemon must
-//! never generate its own keys - see that module's doc comment). `patches` runs offline/CI-invoked,
+//! never generate its own keys - see that module's doc comment). `taloscfg` runs offline/CI-invoked,
 //! analogous to a human once running `wg genkey` by hand.
 
 use anyhow::Result;

@@ -179,15 +179,13 @@ pub fn resolve_secrets(mesh: &MeshConfig, existing: &impl ExistingState) -> Reso
 }
 
 fn parse_loopback_networks(mesh: &MeshConfig) -> Result<(Ipv4Addr, u8, Ipv6Addr, u8)> {
-    let (v4_addr, v4_prefix) =
-        common::netlink::rt::parse_cidr(&mesh.cluster.loopback_networks.ipv4)
-            .context("cluster.loopback_networks.ipv4")?;
+    let (v4_addr, v4_prefix) = common::cidr::parse_cidr(&mesh.cluster.loopback_networks.ipv4)
+        .context("cluster.loopback_networks.ipv4")?;
     let IpAddr::V4(v4) = v4_addr else {
         anyhow::bail!("cluster.loopback_networks.ipv4 must be an IPv4 CIDR");
     };
-    let (v6_addr, v6_prefix) =
-        common::netlink::rt::parse_cidr(&mesh.cluster.loopback_networks.ipv6)
-            .context("cluster.loopback_networks.ipv6")?;
+    let (v6_addr, v6_prefix) = common::cidr::parse_cidr(&mesh.cluster.loopback_networks.ipv6)
+        .context("cluster.loopback_networks.ipv6")?;
     let IpAddr::V6(v6) = v6_addr else {
         anyhow::bail!("cluster.loopback_networks.ipv6 must be an IPv6 CIDR");
     };
@@ -199,12 +197,12 @@ fn parse_tunnel_networks(mesh: &MeshConfig) -> Result<Option<(Ipv4Addr, u8, Ipv6
         return Ok(None);
     };
     let (v4_addr, v4_prefix) =
-        common::netlink::rt::parse_cidr(&tn.ipv4).context("cluster.tunnel_networks.ipv4")?;
+        common::cidr::parse_cidr(&tn.ipv4).context("cluster.tunnel_networks.ipv4")?;
     let IpAddr::V4(v4) = v4_addr else {
         anyhow::bail!("cluster.tunnel_networks.ipv4 must be an IPv4 CIDR");
     };
     let (v6_addr, v6_prefix) =
-        common::netlink::rt::parse_cidr(&tn.ipv6).context("cluster.tunnel_networks.ipv6")?;
+        common::cidr::parse_cidr(&tn.ipv6).context("cluster.tunnel_networks.ipv6")?;
     let IpAddr::V6(v6) = v6_addr else {
         anyhow::bail!("cluster.tunnel_networks.ipv6 must be an IPv6 CIDR");
     };
@@ -422,7 +420,7 @@ fn mesh_interfaces_for(
     resolved: &ResolvedSecrets,
 ) -> Result<Vec<InterfaceEntry>> {
     let (_, own_loopback) = node_loopbacks(mesh, node_name)?;
-    let own_link_local = router::bird::link_local_from_loopback(own_loopback);
+    let own_link_local = router::cidr::link_local_from_loopback(own_loopback);
     let own_tunnel = node_tunnel_addresses(mesh, node_name)?;
     // When `tunnel_networks` is configured, its IPv6 half does double duty as the interface's sole
     // scope-link address, replacing the loopback-derived one - both are equally valid SCOPE_LINK

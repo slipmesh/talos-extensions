@@ -10,6 +10,8 @@ description = "Talos extension service: converges AmneziaWG interfaces (mesh lin
 [[bin]]
 name = "awg"
 path = "src/main.rs"
+# The daemon is netlink-backed; a config-only build of this crate builds the library alone.
+required-features = ["runtime"]
 
 [dependencies]
 anyhow.workspace = true
@@ -19,13 +21,23 @@ bytes.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
-netlink-packet-amnezia-wireguard.workspace = true
-netlink-packet-core.workspace = true
+netlink-packet-amnezia-wireguard = { workspace = true, optional = true }
+netlink-packet-core = { workspace = true, optional = true }
 prometheus-client.workspace = true
-rtnetlink.workspace = true
+rtnetlink = { workspace = true, optional = true }
 serde.workspace = true
 serde_yaml.workspace = true
 socket2.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[features]
+default = ["runtime"]
+# Everything but `config`: the modules that talk netlink, and the binary over them.
+runtime = [
+    "common/netlink",
+    "dep:netlink-packet-amnezia-wireguard",
+    "dep:netlink-packet-core",
+    "dep:rtnetlink",
+]

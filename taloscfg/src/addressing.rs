@@ -1,6 +1,6 @@
 //! Deterministic address/name derivation from a node's `node_id` (an IPv4-address-shaped identity,
 //! see `mesh_config::NodeEntry`) - ported from the old k8s-CRD system's `slipmesh-core::ipv6`
-//! (`network | node_id`), not reused as a dependency: `patches` deliberately has no dependency on
+//! (`network | node_id`), not reused as a dependency: `taloscfg` deliberately has no dependency on
 //! the legacy Kubernetes-based crate, since the whole point of this tool is the migration away
 //! from it. Same formulas, same test vectors, reimplemented standalone.
 

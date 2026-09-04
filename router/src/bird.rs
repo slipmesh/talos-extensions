@@ -138,7 +138,7 @@ impl SanitizedRoute {
 /// `ospf_interfaces` doc comment) - if CIDR-by-address matching turns out not to work the way this
 /// assumes, falling back to name/glob-only entries doesn't change anything else in this module.
 fn render_iface_pattern(entry: &str) -> String {
-    if common::netlink::rt::parse_cidr(entry).is_ok() {
+    if common::cidr::parse_cidr(entry).is_ok() {
         entry.to_string()
     } else {
         format!("\"{}\"", sanitize_quoted(entry))
@@ -153,9 +153,7 @@ pub fn exact_iface_names(ospf_interfaces: &[String]) -> Vec<String> {
     ospf_interfaces
         .iter()
         .filter(|entry| {
-            !entry.contains('*')
-                && !entry.contains('?')
-                && common::netlink::rt::parse_cidr(entry).is_err()
+            !entry.contains('*') && !entry.contains('?') && common::cidr::parse_cidr(entry).is_err()
         })
         .cloned()
         .collect()
@@ -372,28 +370,6 @@ pub async fn force_reconfigure() -> Result<()> {
     run_birdc_configure().await
 }
 
-/// This node's deterministic IPv6 link-local address for `router-lo`, derived from the low 32
-/// bits of its own configured `ipv6_loopback` (`fe80::<hex>`, e.g. `fd00::a1b2c3d4` ->
-/// `fe80::a1b2:c3d4`) - not a separately-configured `node_id` the way the k8s original derived it
-/// (that concept doesn't exist here; `router.yaml` gives each node's loopbacks directly, see
-/// `RouterIdentity`'s doc comment), just reusing the same digits already unique to this node by
-/// construction (they're a real, config-supplied loopback address).
-///
-/// `pub`, not just used internally by `ensure_loopback`: the `patches` crate (a separate crate
-/// from this lib target, generating the `ipv6_loopback` this daemon reads rather than reading it)
-/// calls this too, for its mesh-interface link-locals - it computes an `ipv6_loopback`-shaped
-/// value from a node's `node_id` first (see `patches::addressing::ipv6_loopback`), whose low 32
-/// bits are `node_id`'s bits by construction, so this same function derives the identical
-/// `fe80::<hex node_id>` the old k8s system computed directly from `node_id`.
-pub fn link_local_from_loopback(ipv6_loopback: Ipv6Addr) -> Ipv6Addr {
-    let bits = u128::from(ipv6_loopback) as u32;
-    let mut segments = [0u16; 8];
-    segments[0] = 0xfe80;
-    segments[6] = (bits >> 16) as u16;
-    segments[7] = bits as u16;
-    Ipv6Addr::from(segments)
-}
-
 /// Ensures the dedicated router loopback (`router-lo`, a dummy interface) exists and carries this
 /// node's IPv4 loopback /32, IPv6 loopback /128, and a deterministic IPv6 link-local - all three
 /// in one `ensure_addresses` call (unlike the k8s original's separate `ensure_address`/
@@ -424,7 +400,7 @@ pub async fn ensure_loopback(
     ipv6_loopback: Ipv6Addr,
 ) -> Result<()> {
     let (index, _created) = rt.ensure_link(ROUTER_LOOPBACK_IFACE, "dummy").await?;
-    let link_local = link_local_from_loopback(ipv6_loopback);
+    let link_local = crate::cidr::link_local_from_loopback(ipv6_loopback);
     rt.ensure_addresses(
         index,
         &[
@@ -685,14 +661,6 @@ mod tests {
             "10.99.0.0/24".to_string(),
         ];
         assert_eq!(exact_iface_names(&entries), vec!["mesh-fra".to_string()]);
-    }
-
-    #[test]
-    fn link_local_from_loopback_derives_fe80_from_low_32_bits() {
-        assert_eq!(
-            link_local_from_loopback("fd00::a1b2:c3d4".parse().unwrap()).to_string(),
-            "fe80::a1b2:c3d4"
-        );
     }
 
     // Fixtures below are real `birdc` output, captured against BIRD 2.19.1 running in a container

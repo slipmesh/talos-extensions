@@ -1,4 +1,8 @@
+pub mod cidr;
 pub mod keys;
+/// Gated so that `taloscfg`, which only needs the config types, builds without the netlink stack -
+/// it is Linux-only, and the generator has to build wherever it is run.
+#[cfg(feature = "netlink")]
 pub mod netlink;
 pub mod obfuscation;
 
@@ -16,5 +20,6 @@ pub use obfuscation::Obfuscation;
 /// else on the same interface (a routing daemon, a static route) is left alone, and a route this
 /// daemon installed in a *previous* run (before the config change that triggered this restart)
 /// is still recognizable as ours even though no in-memory state survived the restart.
+#[cfg(feature = "netlink")]
 pub const ROUTE_PROTOCOL: rtnetlink::packet_route::route::RouteProtocol =
     rtnetlink::packet_route::route::RouteProtocol::Other(200);
