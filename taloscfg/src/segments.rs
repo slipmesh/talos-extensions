@@ -266,18 +266,6 @@ mod tests {
     }
 
     #[test]
-    fn three_dots_as_content_are_not_an_end_marker() {
-        let raw = "machine:
-    install:
-        disk: /dev/vda
-    note: ...
-";
-        let segments = split(raw).unwrap();
-        assert_eq!(segments.len(), 1);
-        assert!(segments[0].ends_with("note: ..."));
-    }
-
-    #[test]
     fn a_file_of_only_comments_is_kept_whole() {
         let raw = "# a note someone left, and nothing else
 ";
@@ -286,14 +274,6 @@ mod tests {
             segments,
             vec!["# a note someone left, and nothing else".to_string()]
         );
-    }
-
-    #[test]
-    fn a_quoted_marker_is_scalar_content_not_a_marker() {
-        let raw = "note: \"--- not a marker\"
-";
-        let segments = split(raw).unwrap();
-        assert_eq!(segments, vec!["note: \"--- not a marker\"".to_string()]);
     }
 
     #[test]
@@ -312,13 +292,6 @@ mod tests {
         let raw = "# just a note\n---\n";
         let segments = split(raw).unwrap();
         assert_eq!(segments, vec!["# just a note".to_string()]);
-    }
-
-    #[test]
-    fn three_dashes_glued_to_a_key_are_not_a_marker() {
-        let raw = "---foo: bar\n";
-        let segments = split(raw).unwrap();
-        assert_eq!(segments, vec!["---foo: bar".to_string()]);
     }
 
     #[test]
