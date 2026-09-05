@@ -312,10 +312,7 @@ fn generate(
         );
     }
 
-    let existing_state = existing::FileExistingState {
-        mesh: &mesh,
-        patches_dir: patches_dir.to_path_buf(),
-    };
+    let existing_state = existing::FileExistingState::new(&mesh, patches_dir)?;
     let resolved = render::resolve_secrets(&mesh, &existing_state);
 
     let target_nodes: Vec<&str> = match node {
@@ -362,8 +359,16 @@ fn generate(
         }
 
         let patch_path = patches_dir.join(format!("{node_name}.yaml"));
-        let existing_raw = std::fs::read_to_string(&patch_path).unwrap_or_default();
-        let foreign = segments::foreign_segments(&existing_raw);
+        // A missing file is the from-scratch case; anything else - a permission, an encoding, a
+        // half-written file - must not read as "there was nothing here", which would drop every
+        // foreign document in it and write the file anyway.
+        let existing_raw = match std::fs::read_to_string(&patch_path) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e).with_context(|| format!("reading {patch_path:?}")),
+        };
+        let foreign = segments::foreign_segments(&existing_raw)
+            .with_context(|| format!("reading the existing {patch_path:?}"))?;
         let new_content = segments::render_file(&foreign, &owned);
 
         if diff {
@@ -461,6 +466,9 @@ mod tests {
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir =
             std::env::temp_dir().join(format!("patches-main-test-{}-{id}", std::process::id()));
+        // Start from an empty directory: the name is only unique per process id, which the OS
+        // hands out again, and a leftover file from an earlier run would be read as this run's.
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -489,7 +497,7 @@ mod tests {
             "/etc/talos-extensions/nftables.yaml",
             &inner,
         );
-        let found = segments::owned_segment(&doc, "nftables").unwrap();
+        let found = segments::owned_segment(&doc, "nftables").unwrap().unwrap();
         assert!(segments::is_owned(&found));
 
         #[derive(serde::Deserialize)]
@@ -544,9 +552,13 @@ mesh:
         let written = std::fs::read_to_string(patches_dir.join("a.yaml")).unwrap();
         assert!(written.contains("machine:"));
         assert!(written.contains("disk: /dev/vda"));
-        let awg_segment = segments::owned_segment(&written, "awg").unwrap();
+        let awg_segment = segments::owned_segment(&written, "awg").unwrap().unwrap();
         assert!(awg_segment.contains("mesh-"));
-        assert!(segments::owned_segment(&written, "router").is_some());
+        assert!(
+            segments::owned_segment(&written, "router")
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]

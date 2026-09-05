@@ -1941,6 +1941,8 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "similar",
+ "tree-sitter",
+ "tree-sitter-yaml",
  "x25519-dalek",
  "yaml_serde",
  "yamlpatch",
