@@ -71,15 +71,15 @@ pub fn split(raw: &str) -> Result<Vec<String>> {
             continue;
         }
         starts.push(document.start_byte());
-        let mut after_directive = false;
         for child in document.children(&mut inside) {
-            if child.kind().ends_with("_directive") {
-                after_directive = true;
-                continue;
-            }
-            // A `---` that follows a directive is not a separator this module writes back - it is
-            // what terminates the directives, and a document that loses it stops being YAML.
-            if child.kind() == "---" && after_directive {
+            // A `---` right after a directive is not a separator this module writes back - it is
+            // what terminates the directive, and a document that loses it stops being YAML. The
+            // tree says which one it is, so there is no state to carry through the loop.
+            if child.kind() == "---"
+                && child
+                    .prev_sibling()
+                    .is_some_and(|prev| prev.kind().ends_with("_directive"))
+            {
                 continue;
             }
             // The markers are anonymous tokens: the grammar has already decided that this `---`
