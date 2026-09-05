@@ -40,11 +40,14 @@ pub fn is_owned(segment: &str) -> bool {
 /// Splits a patch file's raw text into trimmed segments, in file order. Empty input yields no
 /// segments (a from-scratch file has nothing to preserve).
 ///
-/// The cut points are the byte offsets where the grammar says a document starts; each segment then
-/// runs to the next one, so every byte of the file lands in exactly one segment. Taking each
-/// document node's own span instead would drop whatever the grammar parses as trailing trivia - a
-/// comment after the last key, say - and losing it would corrupt a file this tool promises only to
-/// add to.
+/// The cut points are the byte offsets where the grammar says a document starts, and each segment
+/// runs to the next one, so the cuts leave no gaps: nothing in the file falls between two segments.
+/// Taking each document node's own span instead would leave such gaps, since the grammar parses a
+/// comment after the last key as trailing trivia outside the node, and losing it would corrupt a
+/// file this tool promises only to add to.
+///
+/// What each segment then drops is its markers and the whitespace around it - see `render_file`,
+/// which writes those back.
 pub fn split(raw: &str) -> Result<Vec<String>> {
     let mut parser = Parser::new();
     parser
