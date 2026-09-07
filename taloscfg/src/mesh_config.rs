@@ -46,7 +46,13 @@ pub struct MeshConfig {
     pub nftables: Option<NftablesTopology>,
 }
 
+/// Strict, unlike the documents this generator writes: those are read by daemons that may be
+/// older than the field they are given, so they ignore what they do not know. This one is read
+/// only here, by a tool versioned with it - a name that no longer exists is a mistake, and
+/// silently ignoring it is how a renamed field turns into a listener that quietly stops being
+/// rendered on every node at once.
 #[derive(Deserialize, Debug, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ClusterConfig {
     #[serde(default)]
     pub bgp_as: u32,
