@@ -249,7 +249,14 @@ pub fn render(identity: RouterIdentity, as_number: u32, inputs: &RenderInputs) -
         ospf_interfaces: inputs
             .ospf_interfaces
             .iter()
-            .map(|s| render_iface_pattern(s))
+            .map(|s| RenderedOspfIface {
+                // The loopback is in this list too, and OSPF runs on it - but there is no
+                // neighbour on a dummy interface, so a BFD session there could only ever sit
+                // down. Asking for one would put a permanently-dead entry in `show bfd sessions`
+                // and teach whoever reads it to ignore that column.
+                bfd: inputs.bfd.is_some() && s != ROUTER_LOOPBACK_IFACE,
+                pattern: render_iface_pattern(s),
+            })
             .collect(),
         bgp_peers: rendered_peers,
         bypass: SanitizedRoute::from_routes(inputs.bypass),
@@ -272,6 +279,12 @@ struct RenderedDirectIface {
     pattern: String,
 }
 
+/// One `ospf_interfaces` entry, rendered, plus whether BFD is asked for on it.
+struct RenderedOspfIface {
+    pattern: String,
+    bfd: bool,
+}
+
 #[derive(askama::Template)]
 #[template(path = "bird.conf", escape = "none")]
 struct BirdConfigTemplate {
@@ -279,7 +292,7 @@ struct BirdConfigTemplate {
     ipv6_loopback: Ipv6Addr,
     as_number: u32,
     router_loopback_iface: &'static str,
-    ospf_interfaces: Vec<String>,
+    ospf_interfaces: Vec<RenderedOspfIface>,
     bgp_peers: Vec<RenderedBgpPeer>,
     bypass: Vec<SanitizedRoute>,
     announce: Vec<SanitizedRoute>,
@@ -472,7 +485,13 @@ mod tests {
     /// unconditionally would put control traffic through every tunnel of every mesh.
     #[test]
     fn bfd_is_configured_and_requested_only_when_the_mesh_asks_for_it() {
-        let ifaces = vec!["mesh-*".to_string()];
+        // The loopback is in `ospf_interfaces` on every real node, and a CIDR entry renders
+        // unquoted - both shapes have to come out right in the BFD block as well as the OSPF one.
+        let ifaces = vec![
+            "mesh-*".to_string(),
+            "10.99.0.0/24".to_string(),
+            "router-lo".to_string(),
+        ];
         let settings = crate::config::BfdSettings {
             min_rx_ms: 500,
             ..Default::default()
@@ -487,7 +506,21 @@ mod tests {
         assert!(on.contains("min tx interval 300 ms"));
         assert!(on.contains("multiplier 5;"));
         assert!(on.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
+        assert!(on.contains("interface 10.99.0.0/24 { type ptp; bfd on; };"));
         assert!(on.contains("interface \"router-lo\" { stub yes; };"));
+        // No neighbour on a dummy interface, so no session to ask for.
+        assert!(on.contains("interface \"router-lo\" { type ptp; };"));
+        let bfd_block = on.split("protocol bfd {").nth(1).unwrap();
+        let bfd_block = bfd_block
+            .split(
+                "
+}",
+            )
+            .next()
+            .unwrap();
+        assert!(bfd_block.contains("interface \"mesh-*\""));
+        assert!(bfd_block.contains("interface 10.99.0.0/24"));
+        assert!(!bfd_block.contains("router-lo"));
 
         let off = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
         assert!(!off.contains("bfd"));
