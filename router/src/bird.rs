@@ -456,6 +456,22 @@ mod tests {
         }
     }
 
+    /// BFD is what makes a dead mesh link detectable in seconds rather than at OSPF's 40s dead
+    /// timer: the tunnels are WireGuard, so the interface never goes down and there is no
+    /// link-state event to react to - only a timer. Asserted together because either half alone
+    /// is inert: a `protocol bfd` nothing requests sessions from, or `bfd on` with no protocol
+    /// to serve it.
+    #[test]
+    fn bfd_is_configured_and_requested_on_every_mesh_interface_but_not_the_loopback_stub() {
+        let ifaces = vec!["mesh-*".to_string()];
+        let out = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
+
+        assert!(out.contains("protocol bfd"));
+        assert!(out.contains("min rx interval 300 ms"));
+        assert!(out.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
+        assert!(out.contains("interface \"router-lo\" { stub yes; };"));
+    }
+
     #[test]
     fn render_kernel_export_filter_installs_announce_locally_but_not_bypass() {
         let bypass = vec![BypassRoute {
@@ -499,8 +515,8 @@ mod tests {
     fn render_includes_ospf_interfaces_as_names_and_cidrs() {
         let ifaces = ["mesh-*".to_string(), "10.99.0.0/24".to_string()];
         let out = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
-        assert!(out.contains("interface \"mesh-*\" { type ptp; };"));
-        assert!(out.contains("interface 10.99.0.0/24 { type ptp; };"));
+        assert!(out.contains("interface \"mesh-*\" { type ptp;"));
+        assert!(out.contains("interface 10.99.0.0/24 { type ptp;"));
         assert!(out.contains("interface \"router-lo\" { stub yes; };"));
     }
 
