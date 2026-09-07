@@ -64,7 +64,7 @@ struct RouterState {
     ospf_interfaces: Vec<String>,
     direct_interfaces: Vec<String>,
     bgp_peers: Vec<bird::BgpPeer>,
-    bfd: bool,
+    bfd: Option<config::BfdSettings>,
     announce: Vec<bird::AnnounceRoute>,
     learn: Vec<String>,
     bypass_cfg: Option<config::BypassConfig>,
@@ -203,7 +203,7 @@ fn render_inputs<'a>(
         announce: &ctx.announce,
         learn: &ctx.learn,
         direct_interfaces: &ctx.direct_interfaces,
-        bfd: ctx.bfd,
+        bfd: ctx.bfd.as_ref(),
     }
 }
 

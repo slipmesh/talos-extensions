@@ -213,11 +213,11 @@ pub struct RenderInputs<'a> {
     /// separate component - see `slipmesh/cni-config`) is the motivating case, but this field
     /// doesn't know or care what the interface is for.
     pub direct_interfaces: &'a [String],
-    /// Requests BFD sessions on every OSPF link. A WireGuard interface stays up whether or not
-    /// packets still cross it, so without BFD a dead path is only noticed when OSPF's dead timer
-    /// expires; the cost is constant control traffic through every tunnel, which is why this is
-    /// a `mesh.yaml` switch rather than always on.
-    pub bfd: bool,
+    /// Requests BFD sessions on every OSPF link, with the intervals the mesh chose. A WireGuard
+    /// interface stays up whether or not packets still cross it, so without BFD a dead path is
+    /// only noticed when OSPF's dead timer expires; the cost is constant control traffic through
+    /// every tunnel, which is why this is a `mesh.yaml` switch rather than always on.
+    pub bfd: Option<&'a crate::config::BfdSettings>,
 }
 
 /// Rendered via `templates/bird.conf` (askama) - `escape = "none"` since this is plain BIRD
@@ -255,7 +255,7 @@ pub fn render(identity: RouterIdentity, as_number: u32, inputs: &RenderInputs) -
         bypass: SanitizedRoute::from_routes(inputs.bypass),
         announce: SanitizedRoute::from_routes(inputs.announce),
         learn: learn_patterns,
-        bfd: inputs.bfd,
+        bfd: inputs.bfd.cloned(),
         direct_interfaces,
     }
     .render()
@@ -285,7 +285,7 @@ struct BirdConfigTemplate {
     announce: Vec<SanitizedRoute>,
     learn: Vec<String>,
     direct_interfaces: Vec<RenderedDirectIface>,
-    bfd: bool,
+    bfd: Option<crate::config::BfdSettings>,
 }
 
 /// Name of this daemon's rendered OSPFv3 protocol block - see `render()`.
@@ -460,7 +460,7 @@ mod tests {
             announce,
             learn,
             direct_interfaces,
-            bfd: false,
+            bfd: None,
         }
     }
 
@@ -473,12 +473,19 @@ mod tests {
     #[test]
     fn bfd_is_configured_and_requested_only_when_the_mesh_asks_for_it() {
         let ifaces = vec!["mesh-*".to_string()];
+        let settings = crate::config::BfdSettings {
+            min_rx_ms: 500,
+            ..Default::default()
+        };
         let mut with = inputs(&ifaces, &[], &[], &[], &[]);
-        with.bfd = true;
+        with.bfd = Some(&settings);
         let on = render(identity(), 64512, &with).unwrap();
 
         assert!(on.contains("protocol bfd"));
-        assert!(on.contains("min rx interval 300 ms"));
+        // The chosen interval reaches the file, rather than a constant baked into the template.
+        assert!(on.contains("min rx interval 500 ms"));
+        assert!(on.contains("min tx interval 300 ms"));
+        assert!(on.contains("multiplier 5;"));
         assert!(on.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
         assert!(on.contains("interface \"router-lo\" { stub yes; };"));
 

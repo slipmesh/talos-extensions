@@ -9,6 +9,7 @@
 //! `render.rs`'s module doc comment for exactly what changed and why.
 
 use common::Obfuscation;
+use router::config::BfdSettings;
 use serde::Deserialize;
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
@@ -17,6 +18,10 @@ use std::net::Ipv4Addr;
 pub struct BfdConfig {
     #[serde(default)]
     pub enable: bool,
+    /// Flattened, so `bfd:` in mesh.yaml reads as one block: `enable`, then any of `min_rx_ms`,
+    /// `min_tx_ms`, `multiplier`. Omitted settings take the defaults stated on `BfdSettings`.
+    #[serde(default, flatten)]
+    pub settings: BfdSettings,
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq)]
