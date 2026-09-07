@@ -382,6 +382,13 @@ netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`
 needs a real Linux host with the `amneziawg` kernel module loaded and `CAP_NET_ADMIN` - see
 `talos-awg-extension`'s `docs/extension-services.md` for a local smoke-test recipe.
 
+### Releasing
+
+`[workspace.package] version` and the tag are the same number, and the release commit moves both:
+every crate here inherits that one version, and it is what an installed `slipmesh-taloscfg`
+reports for itself. Bumping only the tag leaves a binary that misnames its own version, which is
+how it read `0.1.0` at tag `v0.1.6`.
+
 Building a release artifact (cross-compiling a daemon and baking it into a Talos system extension)
 happens in the packaging repositories, not here - this repo only needs to produce a plain binary:
 
