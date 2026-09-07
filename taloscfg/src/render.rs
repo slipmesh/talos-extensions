@@ -25,7 +25,9 @@ use anyhow::{Context, Result};
 use awg::config::{AwgConfig, InterfaceEntry, MetricsConfig, PeerEntry};
 use common::Obfuscation;
 use nftables::config::NftablesConfig;
-use router::config::{AnnounceEntry, BgpPeerEntry, BypassConfig, NodeIdentity, RouterConfig};
+use router::config::{
+    AnnounceEntry, BgpPeerEntry, BirdExporterConfig, BypassConfig, NodeIdentity, RouterConfig,
+};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -405,6 +407,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         learn: learn_for(mesh),
         announce: announce_for(mesh),
         bypass: bypass_for(mesh, node_name),
+        bird_exporter: bird_exporter_for(mesh, node_name)?,
     })
 }
 
@@ -563,6 +566,22 @@ fn metrics_for(mesh: &MeshConfig, node_name: &str) -> Result<Option<MetricsConfi
     );
     let (v4, _v6) = node_loopbacks(mesh, node_name)?;
     Ok(Some(MetricsConfig {
+        listen: format!("{v4}:{port}"),
+    }))
+}
+
+/// Where this node's `bird_exporter` listens, when `cluster.bird_exporter_port` says it runs at
+/// all. Derived exactly like `metrics_for` above, and for the same reason.
+fn bird_exporter_for(mesh: &MeshConfig, node_name: &str) -> Result<Option<BirdExporterConfig>> {
+    let Some(port) = mesh.cluster.bird_exporter_port else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        port != 0,
+        "cluster.bird_exporter_port is 0 - remove the field to run no exporter"
+    );
+    let (v4, _v6) = node_loopbacks(mesh, node_name)?;
+    Ok(Some(BirdExporterConfig {
         listen: format!("{v4}:{port}"),
     }))
 }
@@ -1197,6 +1216,44 @@ mesh:
 
         let rw_iface = cfg.interfaces.iter().find(|i| i.name == "rw-eu").unwrap();
         assert_eq!(rw_iface.peers[0].name.as_deref(), Some("alice"));
+    }
+
+    /// Same three states the metrics port has, on the router side: absent runs nothing, a port
+    /// binds this node's own v4 loopback, and zero is a mistake caught where it was written
+    /// rather than on every node at once.
+    #[test]
+    fn render_router_config_runs_the_exporter_only_on_a_configured_port() {
+        let base = mesh_and_roadwarriors_yaml();
+        let mesh: MeshConfig = serde_yaml::from_str(base).unwrap();
+        assert_eq!(
+            render_router_config(&mesh, "a").unwrap().bird_exporter,
+            None
+        );
+
+        let yaml = base.replace(
+            "  bgp_as: 64512",
+            "  bgp_as: 64512
+  bird_exporter_port: 9324",
+        );
+        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let listen = render_router_config(&mesh, "a")
+            .unwrap()
+            .bird_exporter
+            .unwrap()
+            .listen;
+        assert!(listen.ends_with(":9324"), "unexpected listen {listen}");
+        assert!(
+            listen.starts_with(&node_loopbacks(&mesh, "a").unwrap().0.to_string()),
+            "listen {listen} is not this node's own v4 loopback"
+        );
+
+        let yaml = base.replace(
+            "  bgp_as: 64512",
+            "  bgp_as: 64512
+  bird_exporter_port: 0",
+        );
+        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert!(render_router_config(&mesh, "a").is_err());
     }
 
     #[test]

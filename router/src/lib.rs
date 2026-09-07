@@ -13,4 +13,7 @@ pub mod bird;
 pub mod birdc;
 pub mod cidr;
 pub mod config;
+/// Spawns a child process, which `taloscfg` has no business doing.
+#[cfg(feature = "runtime")]
+pub mod exporter;
 pub mod resolver;

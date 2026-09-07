@@ -144,6 +144,19 @@ Routes this daemon installs are tagged with a dedicated `RouteProtocol` value
 to mark their own routes. This is what makes route bookkeeping correct across a restart (see below):
 only routes carrying that exact tag are ever treated as "ours".
 
+### BIRD metrics
+
+`cluster.bird_exporter_port` makes `ext-router` run [`bird_exporter`] beside BIRD, reading the
+same control socket for protocol state - session up/down, uptime, prefix counts, BFD sessions.
+The address is derived the same way `awg`'s is, from the node's own v4 loopback, so the two
+cannot drift; unset means no node runs it. It needs no `IP_FREEBIND` counterpart, because
+`ext-router` brings that address up itself before it starts either child.
+
+Unlike `bird` exiting, the exporter exiting is not fatal: it is restarted in place, since a
+failed scrape is not a reason to restart the container and tear down every adjacency.
+
+[`bird_exporter`]: https://github.com/czerwonk/bird_exporter
+
 ### Metrics
 
 With a `metrics` section in the config, `awg` serves `GET /metrics` on that address; without one it

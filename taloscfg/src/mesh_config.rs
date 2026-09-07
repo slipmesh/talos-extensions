@@ -61,6 +61,12 @@ pub struct ClusterConfig {
     /// has to look up. Unset means no node listens - `awg` opens nothing it wasn't told to.
     #[serde(default)]
     pub metrics_port: Option<u16>,
+    /// Same arrangement for `bird_exporter`, which `ext-router` runs beside BIRD and which reads
+    /// BIRD's control socket for protocol state - session up/down, uptime, prefix counts. A port
+    /// of its own rather than sharing `metrics_port`: two processes cannot bind one port, and
+    /// they answer for different things. Unset means no node runs it.
+    #[serde(default)]
+    pub bird_exporter_port: Option<u16>,
     /// Interfaces every node's `router.yaml` should treat as `protocol direct` sources (see
     /// `router::config::RouterConfig::direct_interfaces`'s own doc comment) - global, not per-node,
     /// since the interface naming is the same on every node by construction. `protocol direct` is

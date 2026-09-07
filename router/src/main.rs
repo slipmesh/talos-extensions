@@ -1,4 +1,4 @@
-use router::{bird, config, resolver};
+use router::{bird, config, exporter, resolver};
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
@@ -65,6 +65,7 @@ struct RouterState {
     direct_interfaces: Vec<String>,
     bgp_peers: Vec<bird::BgpPeer>,
     bfd: Option<config::BfdSettings>,
+    bird_exporter: Option<config::BirdExporterConfig>,
     announce: Vec<bird::AnnounceRoute>,
     learn: Vec<String>,
     bypass_cfg: Option<config::BypassConfig>,
@@ -132,6 +133,7 @@ async fn run() -> Result<()> {
         announce,
         learn: cfg.learn,
         bypass_cfg: cfg.bypass,
+        bird_exporter: cfg.bird_exporter,
         bypass_cache: Mutex::new(None),
         render_lock: Mutex::new(()),
     });
@@ -173,6 +175,15 @@ async fn run() -> Result<()> {
         tokio::spawn(bypass_refresh_loop(ctx.clone()));
     }
     tokio::spawn(bird_health_watchdog(ctx.clone()));
+
+    // After the control socket exists, since that is what the exporter reads - and after bird,
+    // whose exit stays the only fatal one here.
+    if let Some(cfg) = &ctx.bird_exporter {
+        tokio::spawn(exporter::supervise(
+            bird::BIRD_CONTROL_SOCKET.to_string(),
+            cfg.listen.clone(),
+        ));
+    }
 
     // `router` treats "bird exited" as its own fatal condition, the same way `awg` treats any
     // exit from its handshake loop as fatal: `extension-services/router.yaml`'s `restart: always`
