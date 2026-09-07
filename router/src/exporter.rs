@@ -35,10 +35,10 @@ pub async fn supervise(socket: String, listen: String) {
     loop {
         match Command::new(BIN).args(args(&socket, &listen)).spawn() {
             Ok(mut child) => match child.wait().await {
-                Ok(status) => eprintln!("bird_exporter exited ({status}), restarting"),
-                Err(e) => eprintln!("failed to wait on bird_exporter: {e}"),
+                Ok(status) => tracing::warn!(%status, "bird_exporter exited, restarting"),
+                Err(e) => tracing::error!(error = %e, "failed to wait on bird_exporter"),
             },
-            Err(e) => eprintln!("failed to spawn {BIN}: {e}"),
+            Err(e) => tracing::error!(error = %e, bin = BIN, "failed to spawn bird_exporter"),
         }
         tokio::time::sleep(RESTART_DELAY).await;
     }
