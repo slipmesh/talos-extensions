@@ -65,7 +65,7 @@ struct RouterState {
     direct_interfaces: Vec<String>,
     bgp_peers: Vec<bird::BgpPeer>,
     bfd: Option<config::BfdSettings>,
-    bird_exporter: Option<config::BirdExporterConfig>,
+    metrics: Option<common::MetricsConfig>,
     announce: Vec<bird::AnnounceRoute>,
     learn: Vec<String>,
     bypass_cfg: Option<config::BypassConfig>,
@@ -133,7 +133,7 @@ async fn run() -> Result<()> {
         announce,
         learn: cfg.learn,
         bypass_cfg: cfg.bypass,
-        bird_exporter: cfg.bird_exporter,
+        metrics: cfg.metrics,
         bypass_cache: Mutex::new(None),
         render_lock: Mutex::new(()),
     });
@@ -178,7 +178,7 @@ async fn run() -> Result<()> {
 
     // After the control socket exists, since that is what the exporter reads - and after bird,
     // whose exit stays the only fatal one here.
-    if let Some(cfg) = &ctx.bird_exporter {
+    if let Some(cfg) = &ctx.metrics {
         tokio::spawn(exporter::supervise(
             bird::BIRD_CONTROL_SOCKET.to_string(),
             cfg.listen.clone(),

@@ -146,7 +146,7 @@ only routes carrying that exact tag are ever treated as "ours".
 
 ### BIRD metrics
 
-`cluster.bird_exporter_port` makes `ext-router` run [`bird_exporter`] beside BIRD, reading the
+`cluster.router_metrics_port` makes `ext-router` run [`bird_exporter`] beside BIRD, reading the
 same control socket for protocol state - session up/down, uptime, prefix counts, BFD sessions.
 The address is derived the same way `awg`'s is, from the node's own v4 loopback, so the two
 cannot drift; unset means no node runs it. It needs no `IP_FREEBIND` counterpart, because
@@ -161,7 +161,7 @@ failed scrape is not a reason to restart the container and tear down every adjac
 
 With a `metrics` section in the config, `awg` serves `GET /metrics` on that address; without one it
 opens nothing, because a node not set up for scraping should not open a port on a default. `taloscfg`
-(below) renders the section from `cluster.metrics_port`, binding it to the node's own v4 mesh
+(below) renders the section from `cluster.awg_metrics_port`, binding it to the node's own v4 mesh
 loopback - the address kubelet reports as `InternalIP`, so Prometheus reaches it through node
 discovery plus a port relabel, exactly the way node-exporter is reached. That address belongs to
 `ext-router`, and Talos does not order extension startup, so the socket is bound with `IP_FREEBIND`

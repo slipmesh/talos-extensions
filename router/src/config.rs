@@ -6,6 +6,7 @@
 
 use crate::resolver::BypassSourceEntry;
 use anyhow::Result;
+use common::MetricsConfig;
 use common::cidr::parse_cidr as parse_dual_family_cidr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -53,15 +54,6 @@ impl Default for BfdSettings {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
-pub struct BirdExporterConfig {
-    /// `ip:port` - this node's own v4 loopback, never `0.0.0.0`: that address exists only inside
-    /// the overlay, so the endpoint is unreachable from outside without depending on a firewall
-    /// rule being in place first. The same reasoning, and the same derivation, as `awg`'s own
-    /// metrics listener.
-    pub listen: String,
-}
-
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct RouterConfig {
     pub node: NodeIdentity,
@@ -95,9 +87,11 @@ pub struct RouterConfig {
     pub announce: Vec<AnnounceEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bypass: Option<BypassConfig>,
-    /// Present when this node should run `bird_exporter` beside BIRD, absent otherwise.
+    /// Present when this node serves BIRD's protocol state to Prometheus, absent otherwise.
+    /// Served by `bird_exporter`, which this daemon runs beside BIRD - an implementation detail
+    /// of the daemon, not of this document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bird_exporter: Option<BirdExporterConfig>,
+    pub metrics: Option<MetricsConfig>,
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]

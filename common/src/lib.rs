@@ -8,6 +8,18 @@ pub mod obfuscation;
 
 pub use obfuscation::Obfuscation;
 
+/// Where a daemon serves its Prometheus endpoint. Shared rather than restated per daemon: the
+/// address is the same kind of thing in each, and `taloscfg` derives every one of them the same
+/// way from the node's own loopback.
+#[derive(serde::Deserialize, serde::Serialize, Debug, PartialEq, Clone)]
+pub struct MetricsConfig {
+    /// `ip:port` - the node's own v4 mesh loopback, never `0.0.0.0`: that address exists only
+    /// inside the overlay, so the endpoint is unreachable from outside without depending on a
+    /// firewall rule being in place first. IPv4 because that is the address kubelet reports as
+    /// `InternalIP`, which is how Prometheus discovers it.
+    pub listen: String,
+}
+
 /// The `RouteProtocol` value every route this project's `awg` daemon installs is tagged with -
 /// same mechanism BIRD/other routing daemons already use on this stack to mark their own routes
 /// (`RouteProtocol::Bird`, `::Ospf`, `::Bgp`, ...). `200` sits outside every value the
