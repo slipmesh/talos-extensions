@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-09-07
+
+### Added ✨
+
+- Detect a dead mesh link with BFD instead of OSPF's dead timer
+- Put BFD behind a mesh.yaml switch
+- Let the mesh set the BFD intervals
+- Run bird_exporter beside bird, on the node's own loopback
+
+### Changed 🔧
+
+- Build the generator without netlink, and name it taloscfg
+- Cut markers by their node range, not by rules about text
+- Ask the tree which marker terminates a directive
+- Name a metrics port by whose it is, not by what serves it
+
+### Documentation 📚
+
+- Finish the rename in the manifests
+- Say what the cut guarantees, not what it does not
+- Say what the rename breaks, and put the BIRD metrics with the router
+
+### Fixed 🐛
+
+- Import parse_cidr where it is still called
+- Import parse_cidr in the last place that took it from rt
+- Validate mesh.yaml once, not twice
+- Split patch files by the YAML grammar, not by a text scan
+- Read existing keys eagerly, and strip only a real end marker
+- Keep a file the grammar finds no document in
+- Strip only a line that is a document marker
+- Take the marker's span from the tree, and read the crate's contract
+- Read the patch files of nodes, not of the directory
+- Keep the marker that terminates a directive
+- Keep BFD off the loopback, which has no neighbour to check
+- Validate the metrics listener, and log through the daemon's own logger
+
+### Miscellaneous 🧹
+
+- Raise the workspace version to 0.2.0
+
+### Tests ✅
+
+- Drop the three that only exercised the parser
+- Drop the one no mutation could kill
+- Cover the read failing loudly, and stop reusing a dirty temp dir
+
 ## [0.1.6] - 2026-09-04
 
 ### Documentation 📚
