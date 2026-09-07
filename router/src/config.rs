@@ -6,6 +6,7 @@
 
 use crate::resolver::BypassSourceEntry;
 use anyhow::Result;
+use common::MetricsConfig;
 use common::cidr::parse_cidr as parse_dual_family_cidr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -86,6 +87,11 @@ pub struct RouterConfig {
     pub announce: Vec<AnnounceEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bypass: Option<BypassConfig>,
+    /// Present when this node serves BIRD's protocol state to Prometheus, absent otherwise.
+    /// Served by `bird_exporter`, which this daemon runs beside BIRD - an implementation detail
+    /// of the daemon, not of this document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<MetricsConfig>,
 }
 
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
@@ -176,6 +182,10 @@ pub fn validate(cfg: &RouterConfig) -> Result<()> {
         v6_count == 1,
         "node.loopback_addresses must contain exactly one IPv6 address, found {v6_count}"
     );
+
+    if let Some(metrics) = &cfg.metrics {
+        metrics.validate("metrics.listen")?;
+    }
 
     if let Some(bfd) = &cfg.bfd {
         // A zero here renders a bird.conf BIRD refuses, which this daemon would only discover
@@ -284,6 +294,22 @@ node:
   loopback_addresses: ["10.62.0.1/32", "fd00::1/128"]
 bgp_as: 64512
 "#
+    }
+
+    /// The rule itself lives on `MetricsConfig` and `awg`'s own tests cover it; what this
+    /// guards is that `router` still asks for it. A wildcard listener would put BIRD's protocol
+    /// state on every interface the node has, public ones included.
+    #[test]
+    fn validate_rejects_a_wildcard_metrics_listener() {
+        let yaml = format!(
+            "{}metrics:
+  listen: 0.0.0.0:9324
+",
+            minimal_yaml()
+        );
+        let cfg: RouterConfig = serde_yaml::from_str(&yaml).unwrap();
+        let err = validate(&cfg).unwrap_err().to_string();
+        assert!(err.contains("wildcard"), "unexpected error: {err}");
     }
 
     /// A zero interval renders a bird.conf BIRD refuses, and this daemon would only find out

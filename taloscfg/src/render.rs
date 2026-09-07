@@ -22,7 +22,8 @@ use crate::keys;
 use crate::mesh_config::{BypassSourceEntry, MeshConfig};
 use crate::obfuscation_gen;
 use anyhow::{Context, Result};
-use awg::config::{AwgConfig, InterfaceEntry, MetricsConfig, PeerEntry};
+use awg::config::{AwgConfig, InterfaceEntry, PeerEntry};
+use common::MetricsConfig;
 use common::Obfuscation;
 use nftables::config::NftablesConfig;
 use router::config::{AnnounceEntry, BgpPeerEntry, BypassConfig, NodeIdentity, RouterConfig};
@@ -405,6 +406,12 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         learn: learn_for(mesh),
         announce: announce_for(mesh),
         bypass: bypass_for(mesh, node_name),
+        metrics: metrics_for(
+            mesh,
+            node_name,
+            mesh.cluster.router_metrics_port,
+            "router_metrics_port",
+        )?,
     })
 }
 
@@ -542,24 +549,34 @@ pub fn render_awg_config(
     interfaces.extend(roadwarrior_interfaces_for(mesh, node_name, resolved));
     Ok(AwgConfig {
         interfaces,
-        metrics: metrics_for(mesh, node_name)?,
+        metrics: metrics_for(
+            mesh,
+            node_name,
+            mesh.cluster.awg_metrics_port,
+            "awg_metrics_port",
+        )?,
     })
 }
 
-/// The metrics listener for this node, when `cluster.metrics_port` says there is one. The address
-/// is derived, never configured: it comes from the same `node_loopbacks` call that renders
-/// `node.loopback_addresses` for `ext-router`, so the address `awg` binds cannot drift from the
-/// one `ext-router` actually brings up on `router-lo`.
-fn metrics_for(mesh: &MeshConfig, node_name: &str) -> Result<Option<MetricsConfig>> {
-    let Some(port) = mesh.cluster.metrics_port else {
+/// A metrics listener for this node, when the given port says there is one. The address is
+/// derived, never configured: it comes from the same `node_loopbacks` call that renders
+/// `node.loopback_addresses` for `ext-router`, so no daemon's listener can drift from the address
+/// `ext-router` actually brings up on `router-lo`.
+fn metrics_for(
+    mesh: &MeshConfig,
+    node_name: &str,
+    port: Option<u16>,
+    field: &str,
+) -> Result<Option<MetricsConfig>> {
+    let Some(port) = port else {
         return Ok(None);
     };
-    // Caught here rather than left to `awg::config::validate` on the node: unset already means
-    // "serve nothing", so `metrics_port: 0` is never anything but a mistake, and it should fail
-    // where it was written instead of on five nodes at once.
+    // Caught here rather than left to the daemon's own validate on the node: unset already means
+    // "serve nothing", so a port of 0 is never anything but a mistake, and it should fail where it
+    // was written instead of on five nodes at once.
     anyhow::ensure!(
         port != 0,
-        "cluster.metrics_port is 0 - remove the field to serve no metrics"
+        "cluster.{field} is 0 - remove the field to serve no metrics"
     );
     let (v4, _v6) = node_loopbacks(mesh, node_name)?;
     Ok(Some(MetricsConfig {
@@ -1199,10 +1216,45 @@ mesh:
         assert_eq!(rw_iface.peers[0].name.as_deref(), Some("alice"));
     }
 
+    /// Same three states the metrics port has, on the router side: absent runs nothing, a port
+    /// binds this node's own v4 loopback, and zero is a mistake caught where it was written
+    /// rather than on every node at once.
     #[test]
-    fn render_awg_config_refuses_metrics_port_zero() {
+    fn render_router_config_runs_the_exporter_only_on_a_configured_port() {
+        let base = mesh_and_roadwarriors_yaml();
+        let mesh: MeshConfig = serde_yaml::from_str(base).unwrap();
+        assert_eq!(render_router_config(&mesh, "a").unwrap().metrics, None);
+
+        let yaml = base.replace(
+            "  bgp_as: 64512",
+            "  bgp_as: 64512
+  router_metrics_port: 9324",
+        );
+        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let listen = render_router_config(&mesh, "a")
+            .unwrap()
+            .metrics
+            .unwrap()
+            .listen;
+        assert!(listen.ends_with(":9324"), "unexpected listen {listen}");
+        assert!(
+            listen.starts_with(&node_loopbacks(&mesh, "a").unwrap().0.to_string()),
+            "listen {listen} is not this node's own v4 loopback"
+        );
+
+        let yaml = base.replace(
+            "  bgp_as: 64512",
+            "  bgp_as: 64512
+  router_metrics_port: 0",
+        );
+        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert!(render_router_config(&mesh, "a").is_err());
+    }
+
+    #[test]
+    fn render_awg_config_refuses_a_metrics_port_of_zero() {
         let yaml = mesh_and_roadwarriors_yaml()
-            .replace("  bgp_as: 64512", "  bgp_as: 64512\n  metrics_port: 0");
+            .replace("  bgp_as: 64512", "  bgp_as: 64512\n  awg_metrics_port: 0");
         let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
         let resolved = resolved_for(&mesh);
         assert!(render_awg_config(&mesh, "a", &resolved).is_err());
@@ -1218,8 +1270,10 @@ mesh:
 
     #[test]
     fn render_awg_config_binds_metrics_to_this_node_s_own_v4_loopback() {
-        let yaml = mesh_and_roadwarriors_yaml()
-            .replace("  bgp_as: 64512", "  bgp_as: 64512\n  metrics_port: 9586");
+        let yaml = mesh_and_roadwarriors_yaml().replace(
+            "  bgp_as: 64512",
+            "  bgp_as: 64512\n  awg_metrics_port: 9586",
+        );
         let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
         let resolved = resolved_for(&mesh);
 

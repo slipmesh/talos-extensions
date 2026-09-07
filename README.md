@@ -148,7 +148,7 @@ only routes carrying that exact tag are ever treated as "ours".
 
 With a `metrics` section in the config, `awg` serves `GET /metrics` on that address; without one it
 opens nothing, because a node not set up for scraping should not open a port on a default. `taloscfg`
-(below) renders the section from `cluster.metrics_port`, binding it to the node's own v4 mesh
+(below) renders the section from `cluster.awg_metrics_port`, binding it to the node's own v4 mesh
 loopback - the address kubelet reports as `InternalIP`, so Prometheus reaches it through node
 discovery plus a port relabel, exactly the way node-exporter is reached. That address belongs to
 `ext-router`, and Talos does not order extension startup, so the socket is bound with `IP_FREEBIND`
@@ -242,6 +242,19 @@ config-authoring-is-a-human-responsibility pattern documented above for `awg`'s 
 
 ---
 
+### BIRD metrics
+
+`cluster.router_metrics_port` makes `ext-router` run [`bird_exporter`] beside BIRD, reading the
+same control socket for protocol state - session up/down, uptime, prefix counts, BFD sessions.
+The address is derived the same way `awg`'s is, from the node's own v4 loopback, so the two
+cannot drift; unset means no node runs it. It needs no `IP_FREEBIND` counterpart, because
+`ext-router` brings that address up itself before it starts either child.
+
+Unlike `bird` exiting, the exporter exiting is not fatal: it is restarted in place, since a
+failed scrape is not a reason to restart the container and tear down every adjacency.
+
+[`bird_exporter`]: https://github.com/czerwonk/bird_exporter
+
 ## `nftables`: ruleset loader with a table-loss watchdog
 
 Applies `/etc/talos-extensions/nftables.yaml`'s `ruleset:` once at startup, the same way
@@ -331,6 +344,26 @@ terminal QR code), keeping only the public half. Client private keys are never p
 The same generated `<node>.yaml` also drives [routeros](https://github.com/slipmesh/routeros),
 which converges a MikroTik device into the mesh from it - a mesh member need not be a Talos node.
 
+### Breaking changes
+
+`cluster:` refuses a field it does not know, so a name that changed fails where it is written
+rather than being ignored into a listener that silently stops being rendered:
+
+```text
+cluster: unknown field `metrics_port`, expected one of `bgp_as`, `loopback_networks`,
+`bypass_refresh_interval_secs`, `awg_metrics_port`, `router_metrics_port`, `direct_interfaces`,
+... at line 15 column 3
+```
+
+Renamed so far, each needing the same edit in `mesh.yaml` and nothing else:
+
+| was | is | since |
+| --- | --- | --- |
+| `cluster.metrics_port` | `cluster.awg_metrics_port` | v0.2.0 |
+
+No aliases are kept. This is a 0.x generator versioned with the file it reads, and a name that
+means one thing in the tool and another in the file is worse than a build that stops.
+
 Install it with `cargo install --path taloscfg`.
 
 ---
@@ -348,6 +381,13 @@ No mocking framework - pure logic (`config::validate`, `interface::diff_peers`,
 netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`). Exercising `awg` end-to-end
 needs a real Linux host with the `amneziawg` kernel module loaded and `CAP_NET_ADMIN` - see
 `talos-awg-extension`'s `docs/extension-services.md` for a local smoke-test recipe.
+
+### Releasing
+
+`[workspace.package] version` and the tag are the same number, and the release commit moves both:
+every crate here inherits that one version, and it is what an installed `slipmesh-taloscfg`
+reports for itself. Bumping only the tag leaves a binary that misnames its own version, which is
+how it read `0.1.0` at tag `v0.1.6`.
 
 Building a release artifact (cross-compiling a daemon and baking it into a Talos system extension)
 happens in the packaging repositories, not here - this repo only needs to produce a plain binary:

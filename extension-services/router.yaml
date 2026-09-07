@@ -21,6 +21,8 @@ depends:
 # Perpetual daemon, not one-shot: it never intentionally exits (main.rs's run() only returns once
 # the bundled `bird` child process exits, which is always treated as fatal - see main.rs's own
 # doc comment). `always` restarts the whole container - both `router` and `bird` fresh - regardless
-# of exit reason, matching ext-awg's `restart: always`.
+# of exit reason, matching ext-awg's `restart: always`. `bird_exporter`, when configured, is the
+# exception: it is restarted in-process instead, since losing metrics is no reason to tear down
+# every adjacency bird holds.
 restart: always
 logToConsole: true
