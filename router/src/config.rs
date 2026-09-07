@@ -11,12 +11,59 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};
 
+/// BIRD's own defaults (`min tx 100 ms`, multiplier 5) declare a session dead after ~500 ms.
+/// These links cannot honour that: every mesh interface is an obfuscated WireGuard tunnel,
+/// several of them intercontinental, where a brief stall is normal and a flap costs more than
+/// slow convergence. 300 ms with the default multiplier detects in ~1.5s, against OSPF's 40s.
+pub const BFD_DEFAULT_MIN_RX_MS: u32 = 300;
+pub const BFD_DEFAULT_MIN_TX_MS: u32 = 300;
+pub const BFD_DEFAULT_MULTIPLIER: u8 = 5;
+
+fn default_bfd_min_rx_ms() -> u32 {
+    BFD_DEFAULT_MIN_RX_MS
+}
+fn default_bfd_min_tx_ms() -> u32 {
+    BFD_DEFAULT_MIN_TX_MS
+}
+fn default_bfd_multiplier() -> u8 {
+    BFD_DEFAULT_MULTIPLIER
+}
+
+/// Only what both BIRD and RouterOS accept. BIRD alone also offers `idle tx interval`, `passive`
+/// and packet authentication, and MikroTik has none of the three - stating one here would leave
+/// the two ends of a link configured differently, which is the opposite of what a shared
+/// document is for. Authentication is moot regardless: these packets travel inside WireGuard.
+#[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
+pub struct BfdSettings {
+    #[serde(default = "default_bfd_min_rx_ms")]
+    pub min_rx_ms: u32,
+    #[serde(default = "default_bfd_min_tx_ms")]
+    pub min_tx_ms: u32,
+    #[serde(default = "default_bfd_multiplier")]
+    pub multiplier: u8,
+}
+
+impl Default for BfdSettings {
+    fn default() -> Self {
+        Self {
+            min_rx_ms: BFD_DEFAULT_MIN_RX_MS,
+            min_tx_ms: BFD_DEFAULT_MIN_TX_MS,
+            multiplier: BFD_DEFAULT_MULTIPLIER,
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, PartialEq)]
 pub struct RouterConfig {
     pub node: NodeIdentity,
     pub bgp_as: u32,
     #[serde(default)]
     pub bgp_peers: Vec<BgpPeerEntry>,
+    /// Present when the mesh asked for BFD on its OSPF links, absent otherwise. `routeros` reads
+    /// this same field to configure the MikroTik side, which is why it lives here rather than in
+    /// either consumer - and why it carries only the three settings both ends can honour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bfd: Option<BfdSettings>,
     /// Interface-matching entries fed straight into BIRD's own `interface` clause: an exact name,
     /// a shell-glob pattern (`"mesh-*"`), or a CIDR matching by the interface's address - BIRD
     /// accepts all three forms in the same list. See `bird.rs::render_iface_pattern` for how each
@@ -130,6 +177,18 @@ pub fn validate(cfg: &RouterConfig) -> Result<()> {
         "node.loopback_addresses must contain exactly one IPv6 address, found {v6_count}"
     );
 
+    if let Some(bfd) = &cfg.bfd {
+        // A zero here renders a bird.conf BIRD refuses, which this daemon would only discover
+        // when `birdc configure` fails on the node - long past where a typo in mesh.yaml should
+        // have been caught. BIRD's own documentation puts the practical floor at tens of
+        // milliseconds, so this checks for the meaningless value rather than for a good one.
+        anyhow::ensure!(
+            bfd.min_rx_ms > 0 && bfd.min_tx_ms > 0,
+            "bfd: min_rx_ms and min_tx_ms must be greater than 0"
+        );
+        anyhow::ensure!(bfd.multiplier > 0, "bfd: multiplier must be greater than 0");
+    }
+
     let mut seen_names = HashSet::new();
     for peer in &cfg.bgp_peers {
         anyhow::ensure!(!peer.name.is_empty(), "bgp_peers: name must not be empty");
@@ -225,6 +284,23 @@ node:
   loopback_addresses: ["10.62.0.1/32", "fd00::1/128"]
 bgp_as: 64512
 "#
+    }
+
+    /// A zero interval renders a bird.conf BIRD refuses, and this daemon would only find out
+    /// when `birdc configure` fails on the node.
+    #[test]
+    fn validate_rejects_a_bfd_interval_of_zero() {
+        let yaml = format!(
+            "{}bfd:
+  min_rx_ms: 0
+  min_tx_ms: 300
+",
+            minimal_yaml()
+        );
+        let cfg: RouterConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(cfg.bfd.as_ref().unwrap().multiplier, BFD_DEFAULT_MULTIPLIER);
+        let err = validate(&cfg).unwrap_err().to_string();
+        assert!(err.contains("min_rx_ms"), "unexpected error: {err}");
     }
 
     #[test]

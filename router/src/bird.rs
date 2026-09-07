@@ -213,6 +213,11 @@ pub struct RenderInputs<'a> {
     /// separate component - see `slipmesh/cni-config`) is the motivating case, but this field
     /// doesn't know or care what the interface is for.
     pub direct_interfaces: &'a [String],
+    /// Requests BFD sessions on every OSPF link, with the intervals the mesh chose. A WireGuard
+    /// interface stays up whether or not packets still cross it, so without BFD a dead path is
+    /// only noticed when OSPF's dead timer expires; the cost is constant control traffic through
+    /// every tunnel, which is why this is a `mesh.yaml` switch rather than always on.
+    pub bfd: Option<&'a crate::config::BfdSettings>,
 }
 
 /// Rendered via `templates/bird.conf` (askama) - `escape = "none"` since this is plain BIRD
@@ -244,12 +249,20 @@ pub fn render(identity: RouterIdentity, as_number: u32, inputs: &RenderInputs) -
         ospf_interfaces: inputs
             .ospf_interfaces
             .iter()
-            .map(|s| render_iface_pattern(s))
+            .map(|s| RenderedOspfIface {
+                // The loopback is in this list too, and OSPF runs on it - but there is no
+                // neighbour on a dummy interface, so a BFD session there could only ever sit
+                // down. Asking for one would put a permanently-dead entry in `show bfd sessions`
+                // and teach whoever reads it to ignore that column.
+                bfd: inputs.bfd.is_some() && s != ROUTER_LOOPBACK_IFACE,
+                pattern: render_iface_pattern(s),
+            })
             .collect(),
         bgp_peers: rendered_peers,
         bypass: SanitizedRoute::from_routes(inputs.bypass),
         announce: SanitizedRoute::from_routes(inputs.announce),
         learn: learn_patterns,
+        bfd: inputs.bfd.cloned(),
         direct_interfaces,
     }
     .render()
@@ -266,6 +279,12 @@ struct RenderedDirectIface {
     pattern: String,
 }
 
+/// One `ospf_interfaces` entry, rendered, plus whether BFD is asked for on it.
+struct RenderedOspfIface {
+    pattern: String,
+    bfd: bool,
+}
+
 #[derive(askama::Template)]
 #[template(path = "bird.conf", escape = "none")]
 struct BirdConfigTemplate {
@@ -273,12 +292,13 @@ struct BirdConfigTemplate {
     ipv6_loopback: Ipv6Addr,
     as_number: u32,
     router_loopback_iface: &'static str,
-    ospf_interfaces: Vec<String>,
+    ospf_interfaces: Vec<RenderedOspfIface>,
     bgp_peers: Vec<RenderedBgpPeer>,
     bypass: Vec<SanitizedRoute>,
     announce: Vec<SanitizedRoute>,
     learn: Vec<String>,
     direct_interfaces: Vec<RenderedDirectIface>,
+    bfd: Option<crate::config::BfdSettings>,
 }
 
 /// Name of this daemon's rendered OSPFv3 protocol block - see `render()`.
@@ -453,7 +473,57 @@ mod tests {
             announce,
             learn,
             direct_interfaces,
+            bfd: None,
         }
+    }
+
+    /// BFD is what makes a dead mesh link detectable in seconds rather than at OSPF's 40s dead
+    /// timer: the tunnels are WireGuard, so the interface never goes down and there is no
+    /// link-state event to react to - only a timer. Both halves are asserted together because
+    /// either alone is inert: a `protocol bfd` nothing requests sessions from, or `bfd on` with
+    /// no protocol to serve it. Both states of the switch are asserted because leaving it on
+    /// unconditionally would put control traffic through every tunnel of every mesh.
+    #[test]
+    fn bfd_is_configured_and_requested_only_when_the_mesh_asks_for_it() {
+        // The loopback is in `ospf_interfaces` on every real node, and a CIDR entry renders
+        // unquoted - both shapes have to come out right in the BFD block as well as the OSPF one.
+        let ifaces = vec![
+            "mesh-*".to_string(),
+            "10.99.0.0/24".to_string(),
+            "router-lo".to_string(),
+        ];
+        let settings = crate::config::BfdSettings {
+            min_rx_ms: 500,
+            ..Default::default()
+        };
+        let mut with = inputs(&ifaces, &[], &[], &[], &[]);
+        with.bfd = Some(&settings);
+        let on = render(identity(), 64512, &with).unwrap();
+
+        assert!(on.contains("protocol bfd"));
+        // The chosen interval reaches the file, rather than a constant baked into the template.
+        assert!(on.contains("min rx interval 500 ms"));
+        assert!(on.contains("min tx interval 300 ms"));
+        assert!(on.contains("multiplier 5;"));
+        assert!(on.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
+        assert!(on.contains("interface 10.99.0.0/24 { type ptp; bfd on; };"));
+        assert!(on.contains("interface \"router-lo\" { stub yes; };"));
+        // No neighbour on a dummy interface, so no session to ask for.
+        assert!(on.contains("interface \"router-lo\" { type ptp; };"));
+        let bfd_block = on.split("protocol bfd {").nth(1).unwrap();
+        let bfd_block = bfd_block
+            .split(
+                "
+}",
+            )
+            .next()
+            .unwrap();
+        assert!(bfd_block.contains("interface \"mesh-*\""));
+        assert!(bfd_block.contains("interface 10.99.0.0/24"));
+        assert!(!bfd_block.contains("router-lo"));
+
+        let off = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
+        assert!(!off.contains("bfd"));
     }
 
     #[test]
@@ -499,8 +569,8 @@ mod tests {
     fn render_includes_ospf_interfaces_as_names_and_cidrs() {
         let ifaces = ["mesh-*".to_string(), "10.99.0.0/24".to_string()];
         let out = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
-        assert!(out.contains("interface \"mesh-*\" { type ptp; };"));
-        assert!(out.contains("interface 10.99.0.0/24 { type ptp; };"));
+        assert!(out.contains("interface \"mesh-*\" { type ptp;"));
+        assert!(out.contains("interface 10.99.0.0/24 { type ptp;"));
         assert!(out.contains("interface \"router-lo\" { stub yes; };"));
     }
 

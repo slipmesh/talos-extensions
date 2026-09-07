@@ -399,6 +399,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         },
         bgp_as: mesh.cluster.bgp_as,
         bgp_peers: bgp_peers_for(mesh, node_name)?,
+        bfd: mesh.bfd.enable.then(|| mesh.bfd.settings.clone()),
         ospf_interfaces: OSPF_INTERFACES.iter().map(|s| s.to_string()).collect(),
         direct_interfaces,
         learn: learn_for(mesh),
