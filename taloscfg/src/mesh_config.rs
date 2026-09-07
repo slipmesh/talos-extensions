@@ -14,8 +14,19 @@ use std::collections::HashSet;
 use std::net::Ipv4Addr;
 
 #[derive(Deserialize, Debug, Default, PartialEq)]
+pub struct BfdConfig {
+    #[serde(default)]
+    pub enable: bool,
+}
+
+#[derive(Deserialize, Debug, Default, PartialEq)]
 pub struct MeshConfig {
     pub cluster: ClusterConfig,
+    /// Off unless asked for: BFD trades constant control traffic on every mesh link for
+    /// detecting a dead one in seconds instead of at OSPF's dead timer, which is worth it only
+    /// where the links actually fail. See `router`'s `bird.conf` template for the intervals.
+    #[serde(default)]
+    pub bfd: BfdConfig,
     #[serde(default)]
     pub obfuscation: Obfuscation,
     #[serde(default)]

@@ -17,6 +17,11 @@ pub struct RouterConfig {
     pub bgp_as: u32,
     #[serde(default)]
     pub bgp_peers: Vec<BgpPeerEntry>,
+    /// Request BFD sessions on the OSPF links. Off by default so a mesh that has not asked for
+    /// it keeps the previous behaviour; `routeros` reads this same field to configure the
+    /// MikroTik side, which is why it lives here rather than in either consumer.
+    #[serde(default)]
+    pub bfd: bool,
     /// Interface-matching entries fed straight into BIRD's own `interface` clause: an exact name,
     /// a shell-glob pattern (`"mesh-*"`), or a CIDR matching by the interface's address - BIRD
     /// accepts all three forms in the same list. See `bird.rs::render_iface_pattern` for how each

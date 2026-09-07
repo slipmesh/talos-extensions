@@ -213,6 +213,11 @@ pub struct RenderInputs<'a> {
     /// separate component - see `slipmesh/cni-config`) is the motivating case, but this field
     /// doesn't know or care what the interface is for.
     pub direct_interfaces: &'a [String],
+    /// Requests BFD sessions on every OSPF link. A WireGuard interface stays up whether or not
+    /// packets still cross it, so without BFD a dead path is only noticed when OSPF's dead timer
+    /// expires; the cost is constant control traffic through every tunnel, which is why this is
+    /// a `mesh.yaml` switch rather than always on.
+    pub bfd: bool,
 }
 
 /// Rendered via `templates/bird.conf` (askama) - `escape = "none"` since this is plain BIRD
@@ -250,6 +255,7 @@ pub fn render(identity: RouterIdentity, as_number: u32, inputs: &RenderInputs) -
         bypass: SanitizedRoute::from_routes(inputs.bypass),
         announce: SanitizedRoute::from_routes(inputs.announce),
         learn: learn_patterns,
+        bfd: inputs.bfd,
         direct_interfaces,
     }
     .render()
@@ -279,6 +285,7 @@ struct BirdConfigTemplate {
     announce: Vec<SanitizedRoute>,
     learn: Vec<String>,
     direct_interfaces: Vec<RenderedDirectIface>,
+    bfd: bool,
 }
 
 /// Name of this daemon's rendered OSPFv3 protocol block - see `render()`.
@@ -453,23 +460,30 @@ mod tests {
             announce,
             learn,
             direct_interfaces,
+            bfd: false,
         }
     }
 
     /// BFD is what makes a dead mesh link detectable in seconds rather than at OSPF's 40s dead
     /// timer: the tunnels are WireGuard, so the interface never goes down and there is no
-    /// link-state event to react to - only a timer. Asserted together because either half alone
-    /// is inert: a `protocol bfd` nothing requests sessions from, or `bfd on` with no protocol
-    /// to serve it.
+    /// link-state event to react to - only a timer. Both halves are asserted together because
+    /// either alone is inert: a `protocol bfd` nothing requests sessions from, or `bfd on` with
+    /// no protocol to serve it. Both states of the switch are asserted because leaving it on
+    /// unconditionally would put control traffic through every tunnel of every mesh.
     #[test]
-    fn bfd_is_configured_and_requested_on_every_mesh_interface_but_not_the_loopback_stub() {
+    fn bfd_is_configured_and_requested_only_when_the_mesh_asks_for_it() {
         let ifaces = vec!["mesh-*".to_string()];
-        let out = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
+        let mut with = inputs(&ifaces, &[], &[], &[], &[]);
+        with.bfd = true;
+        let on = render(identity(), 64512, &with).unwrap();
 
-        assert!(out.contains("protocol bfd"));
-        assert!(out.contains("min rx interval 300 ms"));
-        assert!(out.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
-        assert!(out.contains("interface \"router-lo\" { stub yes; };"));
+        assert!(on.contains("protocol bfd"));
+        assert!(on.contains("min rx interval 300 ms"));
+        assert!(on.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
+        assert!(on.contains("interface \"router-lo\" { stub yes; };"));
+
+        let off = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
+        assert!(!off.contains("bfd"));
     }
 
     #[test]
