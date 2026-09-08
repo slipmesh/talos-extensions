@@ -5,13 +5,12 @@
 
 use anyhow::Result;
 use base64::Engine;
-use rand::rngs::OsRng;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 /// Generates a fresh X25519 private key, base64-encoded - the same wire format
 /// `common::keys::decode_key` expects to read back.
 pub fn generate_private_key() -> String {
-    let secret = StaticSecret::random_from_rng(OsRng);
+    let secret = StaticSecret::random();
     base64::engine::general_purpose::STANDARD.encode(secret.to_bytes())
 }
 

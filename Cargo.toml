@@ -19,10 +19,10 @@ router = { path = "router", default-features = false }
 nftables = { path = "nftables", default-features = false }
 
 anyhow = "1.0.104"
-clap = { version = "4.5.51", features = ["derive"] }
-askama = { version = "0.16.0", default-features = false, features = ["derive", "alloc"] }
+clap = { version = "4.6.6", features = ["derive"] }
+askama = { version = "0.16.1", default-features = false, features = ["derive", "alloc"] }
 base64 = "0.23.1"
-futures = "0.3.33"
+futures = "0.3.34"
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -36,15 +36,15 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # roadwarriors client entry in mesh.yaml without disturbing the rest of that hand-edited file
 # (comments, existing flow-style entries). Pinned to the latest stable (not the 1.30.0-rc1
 # prerelease) since the two crates version in lockstep with each other, not with zizmor itself.
-yamlpath = "1.29.0"
-yamlpatch = "1.29.0"
+yamlpath = "1.30.0"
+yamlpatch = "1.30.0"
 yaml_serde = "0.10"
 # The parser under yamlpath, taken directly for the one thing yamlpath does not expose: a stream's
 # document boundaries. `taloscfg` has to split a patch file into documents it owns and documents it
 # must return byte for byte, and a text split on a document marker gets that wrong for CRLF, for
 # a `---` inside a block scalar (an nftables ruleset is one), and for `...` terminators. Versions
 # are the ones yamlpath itself depends on, so the tree-sitter grammar is built once, not twice.
-tree-sitter = "0.26.9"
+tree-sitter = "0.26.13"
 tree-sitter-yaml = "0.7.2"
 # QR code encoder - de-facto standard for this in Rust (18M+ downloads). Used by `rw-add`/
 # `rw-inspect --qr` to print a scannable client config straight to the terminal.
@@ -54,9 +54,9 @@ qrcode = "0.14.1"
 # already pulls hyper/hyper-util/http-body-util into this workspace, so this only turns on hyper's
 # `server` feature over crates that are already built and already audited here. One route, no TLS,
 # no routing - but request-line parsing, malformed input and half-close are not worth re-deriving.
-hyper = { version = "1.11.0", features = ["server", "http1"] }
+hyper = { version = "1.11.1", features = ["server", "http1"] }
 hyper-util = { version = "0.1.20", features = ["tokio"] }
-http-body-util = "0.1.4"
+http-body-util = "0.1.5"
 # Hyper's own body type; already in the lock graph via the same reqwest dependency.
 bytes = "1.12.1"
 # Prometheus exposition. Used by building a fresh `Registry` per scrape rather than through the
@@ -64,7 +64,7 @@ bytes = "1.12.1"
 # values come from - a per-scrape registry also means a peer removed from the config is simply
 # never registered, with no state carried between scrapes. Brings escaping, HELP/TYPE, counter
 # `_total` handling and family grouping, which is precisely what a hand-written encoder gets wrong.
-prometheus-client = "0.25.0"
+prometheus-client = "0.25.1"
 # `IP_FREEBIND` has no tokio API (see `awg::metrics::bind`), so the listening socket is configured
 # through socket2 before `bind()`. Already in the lock graph at this version via tokio's own `net`
 # feature - a manifest line, not a new crate.
@@ -85,6 +85,11 @@ genetlink = "0.2.7"
 # added AmneziaWG 3.1's WGDEVICE_A_RANDOM_TRAILERS and WGDEVICE_A_DISABLE_COOKIES; nothing is
 # published to crates.io, so a rev is the only pin available.
 netlink-packet-amnezia-wireguard = { git = "https://github.com/frkn-dev/netlink-packet-amnezia-wireguard", rev = "b8b5fcc75adbc0c63cac0a9b30fdecbe783efd6c" }
+# Held at what the pinned amneziawg crate above is built against, not at the newest release: its
+# types implement the traits from *these* versions, and a newer netlink-packet-core/-generic makes
+# them stop satisfying `GenlFamily`/`Nla`/`Emitable` - the whole awg module then fails to compile.
+# Moving this stack means updating that crate first, and it is the only one that speaks AmneziaWG's
+# genl family ("amneziawg", version 3 - not mainline WireGuard's "wireguard", version 1).
 netlink-packet-core = "0.8.2"
 netlink-packet-generic = "0.4.0"
 rtnetlink = "0.21.0"
