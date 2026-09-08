@@ -8,7 +8,7 @@
 //! ends of a link, which a per-node independent random draw cannot guarantee on its own.
 
 use common::Obfuscation;
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 /// WireGuard's own reserved message-type values (`MessageInitiation`=1, `MessageResponse`=2,
 /// `MessageCookieReply`=3, `MessageTransport`=4) - avoided when picking h1-h4, same as
@@ -18,7 +18,7 @@ const RESERVED_MESSAGE_TYPES: [u32; 4] = [1, 2, 3, 4];
 fn random_magic_headers(rng: &mut impl Rng) -> [u32; 4] {
     let mut values = Vec::with_capacity(4);
     while values.len() < 4 {
-        let candidate = rng.gen_range(5..=u32::MAX);
+        let candidate = rng.random_range(5..=u32::MAX);
         if !RESERVED_MESSAGE_TYPES.contains(&candidate) && !values.contains(&candidate) {
             values.push(candidate);
         }
@@ -27,16 +27,16 @@ fn random_magic_headers(rng: &mut impl Rng) -> [u32; 4] {
 }
 
 pub fn generate() -> Obfuscation {
-    let mut rng = rand::thread_rng();
-    let jmin: u16 = rng.gen_range(10..=100);
-    let jmax: u16 = jmin + rng.gen_range(1..=900);
+    let mut rng = rand::rng();
+    let jmin: u16 = rng.random_range(10..=100);
+    let jmax: u16 = jmin + rng.random_range(1..=900);
     let [h1, h2, h3, h4] = random_magic_headers(&mut rng);
     Obfuscation {
-        jc: Some(rng.gen_range(3..=10)),
+        jc: Some(rng.random_range(3..=10)),
         jmin: Some(jmin),
         jmax: Some(jmax),
-        s1: Some(rng.gen_range(0..=1280)),
-        s2: Some(rng.gen_range(0..=1280)),
+        s1: Some(rng.random_range(0..=1280)),
+        s2: Some(rng.random_range(0..=1280)),
         h1: Some(h1),
         h2: Some(h2),
         h3: Some(h3),
