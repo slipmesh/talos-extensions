@@ -81,10 +81,10 @@ genetlink = "0.3.0"
 # likely also break parsing GetDevice responses, since the kernel echoes H1 back as raw u64 bytes
 # that are not valid UTF-8. This exact fix (H1Range/H2Range/H3Range/H4Range as packed u64) landed
 # upstream the day before the kernel commit we're pinned to, but was never published to crates.io -
-# see push_obfuscation_attrs in netlink/awg.rs for the call site. The fork is ours because the
-# upstream one stayed on netlink-packet-core 0.8, which held this whole stack a major behind; it
-# carries that same AmneziaWG 3.1 work rebased onto netlink-packet-wireguard 0.5.0. Nothing is
-# published to crates.io, so a rev is the only pin available.
+# push_obfuscation_attrs, in common/src/netlink/awg.rs, is what emits them. The fork is ours
+# because the upstream one stayed on netlink-packet-core 0.8, which held this whole stack a
+# major behind; it carries that same AmneziaWG 3.1 work rebased onto netlink-packet-wireguard
+# 0.5.0. Nothing is published to crates.io, so a rev is the only pin available.
 netlink-packet-amnezia-wireguard = { git = "https://github.com/slipmesh/netlink-packet-amnezia-wireguard", rev = "09dd198a73e145aecae0f1306ba767cdcf132109" }
 # These four move as one unit, and the amneziawg crate above is the fifth: its types implement
 # `GenlFamily`/`Nla`/`Emitable` from *these* major versions, so a mismatch anywhere here stops the
