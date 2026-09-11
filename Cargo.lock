@@ -128,7 +128,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "awg"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "common"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -1127,7 +1127,7 @@ dependencies = [
 
 [[package]]
 name = "nftables"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "common",
@@ -1484,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "router"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "askama",
@@ -1897,7 +1897,7 @@ dependencies = [
 
 [[package]]
 name = "taloscfg"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "awg",
