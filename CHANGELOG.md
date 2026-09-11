@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] - 2026-09-11
+
+### Build system 🛠️
+
+- Move the netlink stack onto our own amneziawg fork
+
+### Documentation 📚
+
+- Name the file that emits the packed H1..H4 attributes
+
 ## [0.2.1] - 2026-09-11
 
 ### Fixed 🐛
