@@ -581,6 +581,14 @@ mod tests {
         assert!(!out.contains("protocol direct direct_"));
     }
 
+    /// bird_exporter reads a protocol's "Since" field to compute uptime, and only understands
+    /// this format - without it, every protocol reports zero uptime.
+    #[test]
+    fn render_sets_the_timeformat_bird_exporter_needs_for_uptime() {
+        let out = render(identity(), 64512, &inputs(&[], &[], &[], &[], &[])).unwrap();
+        assert!(out.contains("timeformat protocol iso long;"));
+    }
+
     #[test]
     fn render_includes_a_protocol_direct_block_per_direct_interface() {
         let direct_interfaces = ["cni0".to_string()];
