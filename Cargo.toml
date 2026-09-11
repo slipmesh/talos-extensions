@@ -70,7 +70,7 @@ prometheus-client = "0.25.1"
 # feature - a manifest line, not a new crate.
 socket2 = { version = "0.6.5", features = ["all"] }
 
-genetlink = "0.2.7"
+genetlink = "0.3.0"
 # Pinned to a specific rev, not crates.io's 0.1.2: the amneziawg kernel module we build against
 # (see talos-awg-extension's versions.env) speaks genl family version 3, which changed
 # WGDEVICE_A_H1..H4 from a NUL-terminated
@@ -81,18 +81,19 @@ genetlink = "0.2.7"
 # likely also break parsing GetDevice responses, since the kernel echoes H1 back as raw u64 bytes
 # that are not valid UTF-8. This exact fix (H1Range/H2Range/H3Range/H4Range as packed u64) landed
 # upstream the day before the kernel commit we're pinned to, but was never published to crates.io -
-# see push_obfuscation_attrs in netlink/awg.rs for the call site. The rev is now the one that
-# added AmneziaWG 3.1's WGDEVICE_A_RANDOM_TRAILERS and WGDEVICE_A_DISABLE_COOKIES; nothing is
+# see push_obfuscation_attrs in netlink/awg.rs for the call site. The fork is ours because the
+# upstream one stayed on netlink-packet-core 0.8, which held this whole stack a major behind; it
+# carries that same AmneziaWG 3.1 work rebased onto netlink-packet-wireguard 0.5.0. Nothing is
 # published to crates.io, so a rev is the only pin available.
-netlink-packet-amnezia-wireguard = { git = "https://github.com/frkn-dev/netlink-packet-amnezia-wireguard", rev = "b8b5fcc75adbc0c63cac0a9b30fdecbe783efd6c" }
-# Held at what the pinned amneziawg crate above is built against, not at the newest release: its
-# types implement the traits from *these* versions, and a newer netlink-packet-core/-generic makes
-# them stop satisfying `GenlFamily`/`Nla`/`Emitable` - the whole awg module then fails to compile.
-# Moving this stack means updating that crate first, and it is the only one that speaks AmneziaWG's
-# genl family ("amneziawg", version 3 - not mainline WireGuard's "wireguard", version 1).
-netlink-packet-core = "0.8.2"
-netlink-packet-generic = "0.4.0"
-rtnetlink = "0.21.0"
+netlink-packet-amnezia-wireguard = { git = "https://github.com/slipmesh/netlink-packet-amnezia-wireguard", rev = "09dd198a73e145aecae0f1306ba767cdcf132109" }
+# These four move as one unit, and the amneziawg crate above is the fifth: its types implement
+# `GenlFamily`/`Nla`/`Emitable` from *these* major versions, so a mismatch anywhere here stops the
+# awg module compiling. It is also the only crate that speaks AmneziaWG's genl family
+# ("amneziawg", version 3 - not mainline WireGuard's "wireguard", version 1), so it is what the
+# other four have to agree with, in either direction.
+netlink-packet-core = "0.9.0"
+netlink-packet-generic = "0.5.0"
+rtnetlink = "0.23.0"
 # Deliberately no direct `netlink-packet-route` dependency: rtnetlink re-exports its own pinned
 # version as `rtnetlink::packet_route`, and importing route/link types through that path (not a
 # separate top-level `netlink_packet_route` dependency) avoids two possibly-mismatched copies of

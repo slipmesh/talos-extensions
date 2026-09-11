@@ -19,6 +19,7 @@ use common::netlink::rt::RtClient;
 use netlink_packet_amnezia_wireguard::{
     AmneziaWireguardAddressFamily, AmneziaWireguardAllowedIp, AmneziaWireguardAllowedIpAttr,
     AmneziaWireguardAttribute, AmneziaWireguardPeer, AmneziaWireguardPeerAttribute,
+    AmneziaWireguardPeerFlags,
 };
 use netlink_packet_core::DefaultNla;
 use std::net::{IpAddr, SocketAddr};
@@ -32,15 +33,6 @@ use std::time::Duration;
 /// the process never exits for `restart: always` to get a chance to retry it.
 const ENDPOINT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// See amneziawg-linux-kernel-module's uapi/wireguard.h `enum wg_peer_flag`.
-const WGPEER_F_REMOVE_ME: u32 = 1 << 0;
-const WGPEER_F_REPLACE_ALLOWEDIPS: u32 = 1 << 1;
-/// Signals "this update explicitly sets AdvancedSecurity" (as opposed to leaving it untouched) -
-/// distinct from the `WGPEER_A_ADVANCED_SECURITY` attribute below, which signals the *value*.
-/// amneziawg-tools' own `ipc-linux.h` always sets this bit whenever its config file mentions
-/// `AdvancedSecurity` at all, true or false - our config always has a definite value (`#[serde
-/// (default)]`), so we always set this bit too, every peer sync.
-const WGPEER_F_HAS_ADVANCED_SECURITY: u32 = 1 << 3;
 /// `wgpeer_attribute` has no crate support (as of the pinned rev) for this one - confirmed absent
 /// from `netlink-packet-amnezia-wireguard`'s `peer.rs`, unlike everything else in this file, which
 /// does have a typed variant. Built manually via `Other(DefaultNla::new(...))`. `NLA_FLAG`: an
@@ -255,10 +247,11 @@ async fn sync_peers(
                 if skip {
                     continue;
                 }
-                let flags = WGPEER_F_REPLACE_ALLOWEDIPS | WGPEER_F_HAS_ADVANCED_SECURITY;
                 let mut attrs = vec![
                     AmneziaWireguardPeerAttribute::PublicKey(decoded),
-                    AmneziaWireguardPeerAttribute::Flags(flags),
+                    AmneziaWireguardPeerAttribute::Flags(
+                        AmneziaWireguardPeerFlags::ReplaceAllowedIps,
+                    ),
                     AmneziaWireguardPeerAttribute::AllowedIps(allowed_ips),
                 ];
                 if peer.advanced_security {
@@ -290,7 +283,7 @@ async fn sync_peers(
             None => {
                 wg_peers.push(AmneziaWireguardPeer(vec![
                     AmneziaWireguardPeerAttribute::PublicKey(decoded),
-                    AmneziaWireguardPeerAttribute::Flags(WGPEER_F_REMOVE_ME),
+                    AmneziaWireguardPeerAttribute::Flags(AmneziaWireguardPeerFlags::RemoveMe),
                 ]));
             }
         }
