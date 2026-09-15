@@ -10,5 +10,6 @@ pub mod mesh_config;
 pub mod obfuscation_gen;
 pub mod render;
 pub mod roadwarrior;
+pub mod secrets;
 pub mod segments;
 pub mod slipmesh_file;
