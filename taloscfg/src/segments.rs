@@ -6,16 +6,11 @@
 //! of it. Not byte for byte, though - surrounding blank lines and the document markers themselves
 //! are dropped here, because `render_file` writes those back itself.
 //!
-//! Where a document begins comes from the YAML grammar rather than from a search for `---`: a
-//! text split cannot tell a document marker from the same three characters inside a block
-//! scalar, and an nftables ruleset is a block scalar carrying arbitrary text. The parser is
-//! tree-sitter-yaml, already in this build under `yamlpath` - which parses a whole source but
-//! exposes no way to walk the documents of a stream, hence the direct use here.
+//! Where one document ends and the next begins is `document.rs`'s to decide, not this module's.
 
-use anyhow::{Context, Result};
+use crate::document::split;
+use anyhow::Result;
 use serde::Deserialize;
-use std::ops::Range;
-use tree_sitter::Parser;
 
 /// The `name`s this tool ever writes, under `kind: ExtensionServiceConfig` - the exact ownership
 /// key. Talos itself requires `name` to be unique per `kind`, so this pair is already a sufficient
@@ -35,107 +30,6 @@ pub fn is_owned(segment: &str) -> bool {
             .name
             .as_deref()
             .is_some_and(|n| OWNED_NAMES.contains(&n))
-}
-
-/// Splits a patch file's raw text into trimmed segments, in file order. Empty input yields no
-/// segments (a from-scratch file has nothing to preserve).
-///
-/// The cut points are the byte offsets where the grammar says a document starts, and each segment
-/// runs to the next one, so the cuts leave no gaps: nothing in the file falls between two segments.
-/// Taking each document node's own span instead would leave such gaps, since the grammar parses a
-/// comment after the last key as trailing trivia outside the node, and losing it would corrupt a
-/// file this tool promises only to add to.
-///
-/// What each segment then drops is its markers and the whitespace around it - see `render_file`,
-/// which writes those back.
-pub fn split(raw: &str) -> Result<Vec<String>> {
-    let mut parser = Parser::new();
-    parser
-        .set_language(&tree_sitter_yaml::LANGUAGE.into())
-        .context("loading the YAML grammar")?;
-    // `parse` returns None only when the parser has no language, which the line above just gave
-    // it - not for malformed input, which comes back as a tree with error nodes in it instead.
-    let tree = parser
-        .parse(raw, None)
-        .context("the YAML grammar did not load")?;
-    anyhow::ensure!(
-        !tree.root_node().has_error(),
-        "the patch file is not valid YAML - refusing to rewrite it"
-    );
-
-    let mut starts: Vec<usize> = Vec::new();
-    let mut markers: Vec<Range<usize>> = Vec::new();
-    // One cursor per level, reused across nodes: `children` resets it to the node it is given, and
-    // the crate asks for exactly this rather than a fresh cursor per call.
-    let mut documents = tree.root_node().walk();
-    let mut inside = tree.root_node().walk();
-    for document in tree.root_node().children(&mut documents) {
-        if document.kind() != "document" {
-            continue;
-        }
-        starts.push(document.start_byte());
-        for child in document.children(&mut inside) {
-            // A `---` right after a directive is not a separator this module writes back - it is
-            // what terminates the directive, and a document that loses it stops being YAML. The
-            // tree says which one it is, so there is no state to carry through the loop.
-            if child.kind() == "---"
-                && child
-                    .prev_sibling()
-                    .is_some_and(|prev| prev.kind().ends_with("_directive"))
-            {
-                continue;
-            }
-            // The markers are anonymous tokens: the grammar has already decided that this `---`
-            // opens a document and that `---foo` is a mapping key, which is not a distinction to
-            // re-derive from the text.
-            if matches!(child.kind(), "---" | "...") {
-                // Up to whatever the parser found next: that swallows the rest of the marker's
-                // line - trailing spaces, the newline - without this module deciding what those
-                // are, and stops at a comment written beside the marker, which is content.
-                let end = child
-                    .next_sibling()
-                    .map_or(child.end_byte(), |next| next.start_byte());
-                markers.push(child.start_byte()..end);
-            }
-        }
-    }
-
-    match starts.first_mut() {
-        // Whatever precedes the first document - a comment, a directive - is a sibling of the
-        // documents rather than part of one, and belongs to the document it introduces.
-        Some(first) => *first = 0,
-        // A file the grammar finds no document in is not necessarily empty: one of nothing but
-        // comments parses to no documents at all, and dropping it would delete someone's note.
-        // There is nothing to split, so the whole of it is one segment; an actually empty file
-        // still yields none, since that segment trims away to nothing.
-        None => starts.push(0),
-    }
-
-    Ok(starts
-        .iter()
-        .enumerate()
-        .map(|(i, &start)| {
-            let end = starts.get(i + 1).copied().unwrap_or(raw.len());
-            without_markers(raw, start..end, &markers)
-        })
-        .filter(|s| !s.is_empty())
-        .collect())
-}
-
-/// The segment's text with the document markers inside it removed - `render_file` writes its own.
-/// Everything else survives, including the line endings the file was written with.
-fn without_markers(raw: &str, segment: Range<usize>, markers: &[Range<usize>]) -> String {
-    let mut out = String::with_capacity(segment.len());
-    let mut cursor = segment.start;
-    for marker in markers
-        .iter()
-        .filter(|m| m.start >= segment.start && m.end <= segment.end)
-    {
-        out.push_str(&raw[cursor..marker.start]);
-        cursor = marker.end;
-    }
-    out.push_str(&raw[cursor..segment.end]);
-    out.trim().to_owned()
 }
 
 /// Segments this tool must preserve as-is, in original order.
@@ -190,20 +84,6 @@ mod tests {
     }
 
     #[test]
-    fn splits_multi_document_file_preserving_order() {
-        let raw = "machine:\n    install:\n        disk: /dev/vda\n---\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles: []\n";
-        let segments = split(raw).unwrap();
-        assert_eq!(segments.len(), 2);
-        assert!(segments[0].starts_with("machine:"));
-        assert!(segments[1].starts_with("apiVersion:"));
-    }
-
-    #[test]
-    fn split_of_empty_file_is_empty() {
-        assert!(split("").unwrap().is_empty());
-    }
-
-    #[test]
     fn foreign_segments_excludes_owned_and_preserves_order() {
         let raw = "machine:\n    install:\n        disk: /dev/vda\n---\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles: []\n---\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: router\nconfigFiles: []\n";
         let foreign = foreign_segments(raw).unwrap();
@@ -253,37 +133,6 @@ mod tests {
         assert!(owned_segment(raw, "awg").unwrap().is_none());
     }
 
-    // What a text split on the document marker gets wrong, and what this module decides on top
-    // of the grammar: which markers to strip, what to do with a file that will not parse, and
-    // where the bytes before the first document belong.
-
-    #[test]
-    fn a_document_terminator_is_not_content() {
-        let raw = "machine:\n    install:\n        disk: /dev/vda\n...\n";
-        let segments = split(raw).unwrap();
-        assert_eq!(
-            segments,
-            vec!["machine:\n    install:\n        disk: /dev/vda".to_string()]
-        );
-    }
-
-    #[test]
-    fn a_marker_line_with_trailing_spaces_leaves_no_blank_line() {
-        let raw = "# note\n---   \nmachine: x\n";
-        let segments = split(raw).unwrap();
-        assert_eq!(segments, vec!["# note\nmachine: x".to_string()]);
-    }
-
-    #[test]
-    fn a_comment_written_beside_a_marker_survives_it() {
-        let raw = "# note\n--- # why this document exists\nmachine: x\n";
-        let segments = split(raw).unwrap();
-        assert_eq!(
-            segments,
-            vec!["# note\n# why this document exists\nmachine: x".to_string()]
-        );
-    }
-
     #[test]
     fn a_directive_survives_a_round_trip_as_valid_yaml() {
         // The `---` after a directive is what terminates it, not a separator to be rewritten:
@@ -292,7 +141,7 @@ mod tests {
         let rebuilt = render_file(&split(raw).unwrap(), &[]);
         assert!(rebuilt.contains("%YAML 1.2\n---\n"), "rebuilt: {rebuilt:?}");
 
-        let mut parser = Parser::new();
+        let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_yaml::LANGUAGE.into())
             .unwrap();
@@ -301,61 +150,6 @@ mod tests {
             !tree.root_node().has_error(),
             "rebuilding produced invalid YAML: {rebuilt:?}"
         );
-    }
-
-    #[test]
-    fn a_file_of_only_comments_is_kept_whole() {
-        let raw = "# a note someone left, and nothing else
-";
-        let segments = split(raw).unwrap();
-        assert_eq!(
-            segments,
-            vec!["# a note someone left, and nothing else".to_string()]
-        );
-    }
-
-    #[test]
-    fn a_marker_after_leading_comments_is_still_stripped() {
-        let raw = "# hand-written, keep me\n---\nmachine:\n    install:\n        disk: /dev/vda\n";
-        let segments = split(raw).unwrap();
-        assert_eq!(segments.len(), 1);
-        assert_eq!(
-            segments[0],
-            "# hand-written, keep me\nmachine:\n    install:\n        disk: /dev/vda"
-        );
-    }
-
-    #[test]
-    fn a_comment_then_a_marker_and_nothing_else_leaves_no_empty_document() {
-        let raw = "# just a note\n---\n";
-        let segments = split(raw).unwrap();
-        assert_eq!(segments, vec!["# just a note".to_string()]);
-    }
-
-    #[test]
-    fn crlf_inside_a_segment_survives() {
-        let raw = "machine:\r\n    install:\r\n        disk: /dev/vda\r\n";
-        let segments = split(raw).unwrap();
-        assert!(
-            segments[0].contains("\r\n"),
-            "line endings were rewritten: {:?}",
-            segments[0]
-        );
-    }
-
-    #[test]
-    fn invalid_yaml_is_refused_rather_than_split() {
-        let raw = "machine:\n  install:\n   disk: [unterminated\n";
-        assert!(split(raw).is_err());
-    }
-
-    #[test]
-    fn a_comment_before_the_first_document_is_kept_with_it() {
-        let raw =
-            "# hand-written, do not lose me\nmachine:\n    install:\n        disk: /dev/vda\n";
-        let segments = split(raw).unwrap();
-        assert_eq!(segments.len(), 1);
-        assert!(segments[0].starts_with("# hand-written"));
     }
 
     #[test]

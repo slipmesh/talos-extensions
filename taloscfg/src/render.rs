@@ -49,7 +49,7 @@ pub struct ResolvedSecrets {
 }
 
 /// Canonical, order-independent key for a mesh link's maps (`pair`'s two names, sorted).
-fn link_key(pair: &[String; 2]) -> String {
+pub fn link_key(pair: &[String; 2]) -> String {
     let mut sorted = pair.clone();
     sorted.sort();
     format!("{}|{}", sorted[0], sorted[1])

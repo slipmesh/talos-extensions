@@ -1,32 +1,27 @@
-//! `patches generate`: reads `mesh.yaml`, computes every target node's `awg`/`router`/`nftables`
-//! config, validates each through the real daemon's own `validate()` (not a re-implementation -
-//! see the lib-target refactor this crate depends on), and writes the result into
-//! `patches/<node>.yaml` as `ExtensionServiceConfig` documents - preserving any segment this tool
-//! doesn't own (see `segments.rs`). `--check`/`--diff` both stop short of writing; `--diff` also
-//! prints what would change.
+//! `generate`: reads `slipmesh.yaml`, settles the topology's secrets against
+//! `slipmesh-secrets.yaml`, computes every target node's `awg`/`router`/`nftables` config,
+//! validates each through the real daemon's own `validate()` (not a re-implementation - see the
+//! lib-target refactor this crate depends on), and writes `patches/<node>.yaml`: the `patch`
+//! documents aimed at that node, then the generated `ExtensionServiceConfig` documents. A patch
+//! file is output only - nothing in it is read back. `--check`/`--diff` both stop short of
+//! writing; `--diff` also prints what would change.
 //!
 //! `validate`/`diff`/`apply` are deliberately not separate subcommands: `generate`'s own
 //! `--check`/`--diff` flags already cover them.
-
-mod addressing;
-mod existing;
-mod keys;
-mod mesh_config;
-mod obfuscation_gen;
-mod render;
-mod roadwarrior;
-mod segments;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use taloscfg::secrets::SecretsFile;
+use taloscfg::slipmesh_file::SlipmeshFile;
+use taloscfg::{document, mesh_config, render, roadwarrior, segments};
 
 #[derive(Parser)]
 #[command(
     name = "patches",
     version,
-    about = "Generates Talos machine-config patches for awg/router/nftables from mesh.yaml"
+    about = "Generates Talos machine-config patches for awg/router/nftables from slipmesh.yaml"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -35,9 +30,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Compute and write patches/<node>.yaml for one or every node in mesh.yaml.
+    /// Compute and write patches/<node>.yaml for one or every node in slipmesh.yaml.
     Generate {
-        /// Only this node, instead of every node in mesh.yaml's `nodes`.
+        /// Only this node's patch file, instead of every node's. Secrets are still settled for
+        /// the whole topology: a link's two ends need the same ones.
         #[arg(long)]
         node: Option<String>,
         /// Validate only, don't write anything to disk.
@@ -46,14 +42,16 @@ enum Command {
         /// Validate and print a unified diff of what would change, don't write.
         #[arg(long)]
         diff: bool,
-        #[arg(long, default_value = "mesh.yaml")]
+        #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
+        #[arg(long, default_value = "slipmesh-secrets.yaml")]
+        secrets: PathBuf,
         #[arg(long, default_value = "patches")]
         patches_dir: PathBuf,
     },
-    /// Add a client to a `roadwarriors:` pool in mesh.yaml.
+    /// Add a client to a roadwarriors pool in slipmesh.yaml.
     RwAdd {
-        /// Which roadwarriors pool (mesh.yaml's `roadwarriors[].name`, e.g. `plain`).
+        /// Which roadwarriors pool (its document's `name`, e.g. `plain`).
         #[arg(long = "if")]
         if_: String,
         /// Client name (must not already exist in the pool).
@@ -66,7 +64,7 @@ enum Command {
         #[arg(long = "public-key")]
         public_key: Option<String>,
         /// Which of the pool's node_hostnames to put first as the live Endpoint (default: the
-        /// first one in mesh.yaml's own order) - the rest still appear as commented #Endpoint =.
+        /// first one in the pool's own order) - the rest still appear as commented #Endpoint =.
         #[arg(long)]
         endpoint: Option<String>,
         /// Print a ready-to-import client config to stdout.
@@ -81,21 +79,21 @@ enum Command {
         /// scanner rejects that, while AmneziaWG's and a plain camera don't care either way.
         #[arg(long)]
         invert: bool,
-        #[arg(long, default_value = "mesh.yaml")]
+        #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
-        #[arg(long, default_value = "patches")]
-        patches_dir: PathBuf,
+        #[arg(long, default_value = "slipmesh-secrets.yaml")]
+        secrets: PathBuf,
     },
-    /// Remove a client from a `roadwarriors:` pool in mesh.yaml.
+    /// Remove a client from a roadwarriors pool in slipmesh.yaml.
     RwDel {
         #[arg(long = "if")]
         if_: String,
         #[arg(long)]
         name: String,
-        #[arg(long, default_value = "mesh.yaml")]
+        #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
     },
-    /// Re-render an existing client's config/QR without changing mesh.yaml.
+    /// Re-render an existing client's config/QR without changing slipmesh.yaml.
     RwInspect {
         #[arg(long = "if")]
         if_: String,
@@ -106,7 +104,7 @@ enum Command {
         #[arg(long = "private-key")]
         private_key: Option<String>,
         /// Which of the pool's node_hostnames to put first as the live Endpoint (default: the
-        /// first one in mesh.yaml's own order) - the rest still appear as commented #Endpoint =.
+        /// first one in the pool's own order) - the rest still appear as commented #Endpoint =.
         #[arg(long)]
         endpoint: Option<String>,
         #[arg(long)]
@@ -119,10 +117,10 @@ enum Command {
         /// scanner rejects that, while AmneziaWG's and a plain camera don't care either way.
         #[arg(long)]
         invert: bool,
-        #[arg(long, default_value = "mesh.yaml")]
+        #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
-        #[arg(long, default_value = "patches")]
-        patches_dir: PathBuf,
+        #[arg(long, default_value = "slipmesh-secrets.yaml")]
+        secrets: PathBuf,
     },
 }
 
@@ -134,8 +132,16 @@ fn main() -> Result<()> {
             check,
             diff,
             config,
+            secrets,
             patches_dir,
-        } => generate(node.as_deref(), check, diff, &config, &patches_dir),
+        } => generate(
+            node.as_deref(),
+            check,
+            diff,
+            &config,
+            &secrets,
+            &patches_dir,
+        ),
         Command::RwAdd {
             if_,
             name,
@@ -146,7 +152,7 @@ fn main() -> Result<()> {
             qr,
             invert,
             config,
-            patches_dir,
+            secrets,
         } => rw_add(
             &if_,
             &name,
@@ -157,7 +163,7 @@ fn main() -> Result<()> {
             qr,
             invert,
             &config,
-            &patches_dir,
+            &secrets,
         ),
         Command::RwDel { if_, name, config } => rw_del(&if_, &name, &config),
         Command::RwInspect {
@@ -169,7 +175,7 @@ fn main() -> Result<()> {
             qr,
             invert,
             config,
-            patches_dir,
+            secrets,
         } => rw_inspect(
             &if_,
             &name,
@@ -179,7 +185,7 @@ fn main() -> Result<()> {
             qr,
             invert,
             &config,
-            &patches_dir,
+            &secrets,
         ),
     }
 }
@@ -195,18 +201,19 @@ fn rw_add(
     qr: bool,
     invert: bool,
     config_path: &Path,
-    patches_dir: &Path,
+    secrets_path: &Path,
 ) -> Result<()> {
-    let raw_mesh =
-        std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
-    let mesh: mesh_config::MeshConfig =
-        serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
-    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
+    let (raw, file) = read_slipmesh(config_path)?;
+    let topology = file.topology()?;
+    let span = pool_document(&file, &topology, if_)?;
+    // Settled and recorded before the client is added: a pool key minted for the exported config
+    // has to be the one `generate` puts on the wire, not a key that dies with this process.
+    let secrets = settle_secrets(&file, secrets_path, false)?;
 
-    let (updated, client_config) = roadwarrior::add(
-        &mesh,
-        &raw_mesh,
-        patches_dir,
+    let (updated_pool, client_config) = roadwarrior::add(
+        &topology,
+        &raw[span.clone()],
+        &secrets,
         if_,
         name,
         allowed_ips,
@@ -215,8 +222,7 @@ fn rw_add(
         export,
         qr,
     )?;
-
-    std::fs::write(config_path, &updated).with_context(|| format!("writing {config_path:?}"))?;
+    write_edited(config_path, &raw, span, &updated_pool)?;
     println!(
         "added {name:?} to roadwarriors pool {if_:?} in {}",
         config_path.display()
@@ -234,15 +240,12 @@ fn rw_add(
 }
 
 fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
-    let raw_mesh =
-        std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
-    let mesh: mesh_config::MeshConfig =
-        serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
-    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
+    let (raw, file) = read_slipmesh(config_path)?;
+    let topology = file.topology()?;
+    let span = pool_document(&file, &topology, if_)?;
 
-    let (updated, public_key) = roadwarrior::del(&mesh, &raw_mesh, if_, name)?;
-
-    std::fs::write(config_path, &updated).with_context(|| format!("writing {config_path:?}"))?;
+    let (updated_pool, public_key) = roadwarrior::del(&topology, &raw[span.clone()], if_, name)?;
+    write_edited(config_path, &raw, span, &updated_pool)?;
     println!(
         "removed {name:?} (public_key {public_key:?}) from roadwarriors pool {if_:?} in {}",
         config_path.display()
@@ -260,15 +263,13 @@ fn rw_inspect(
     qr: bool,
     invert: bool,
     config_path: &Path,
-    patches_dir: &Path,
+    secrets_path: &Path,
 ) -> Result<()> {
-    let raw_mesh =
-        std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
-    let mesh: mesh_config::MeshConfig =
-        serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
-    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
+    let (_, file) = read_slipmesh(config_path)?;
+    let topology = file.topology()?;
+    let secrets = settle_secrets(&file, secrets_path, true)?;
 
-    let text = roadwarrior::inspect(&mesh, patches_dir, if_, name, private_key, endpoint)?;
+    let text = roadwarrior::inspect(&topology, &secrets, if_, name, private_key, endpoint)?;
 
     // Inspecting is pointless with no output at all - default to --export if neither flag was
     // given, unlike rw-add (where registering a client without ever displaying it is legitimate).
@@ -282,6 +283,40 @@ fn rw_inspect(
     Ok(())
 }
 
+fn read_slipmesh(config_path: &Path) -> Result<(String, SlipmeshFile)> {
+    let raw = std::fs::read_to_string(config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let file =
+        SlipmeshFile::parse(&raw).with_context(|| format!("reading {}", config_path.display()))?;
+    Ok((raw, file))
+}
+
+/// The bytes of pool `name`'s document, erring with the pools there are.
+fn pool_document(
+    file: &SlipmeshFile,
+    topology: &mesh_config::MeshConfig,
+    name: &str,
+) -> Result<std::ops::Range<usize>> {
+    roadwarrior::find_pool(topology, name)?;
+    file.pool_span(name)
+        .with_context(|| format!("pool {name:?} is in the topology but in no document"))
+}
+
+/// Writes `raw` with the document at `span` replaced by `edited` - once the result still reads as
+/// a valid `slipmesh.yaml`, so a bad edit is refused instead of written.
+fn write_edited(
+    config_path: &Path,
+    raw: &str,
+    span: std::ops::Range<usize>,
+    edited: &str,
+) -> Result<()> {
+    let updated = document::splice(raw, span, edited);
+    SlipmeshFile::parse(&updated)
+        .context("the edited slipmesh.yaml does not read back - not written")?;
+    std::fs::write(config_path, &updated)
+        .with_context(|| format!("writing {}", config_path.display()))
+}
+
 /// Renders one owned `ExtensionServiceConfig` document: `name`/`mountPath` fixed by convention,
 /// `inner_yaml` (the daemon's own already-serialized config) nested under `content: |`, indented
 /// so it parses back as a YAML literal block scalar.
@@ -292,102 +327,189 @@ fn render_extension_service_document(name: &str, mount_path: &str, inner_yaml: &
     )
 }
 
+/// What opens every patch file this tool writes.
+const HEADER: &str =
+    "# Generated by slipmesh-taloscfg from slipmesh.yaml - edit that file, not this one.\n";
+
+/// One host's patch file: what is on disk now, and what it would become.
+struct HostFile {
+    host: String,
+    path: PathBuf,
+    before: String,
+    after: String,
+}
+
 fn generate(
     node: Option<&str>,
     check: bool,
     diff: bool,
     config_path: &Path,
+    secrets_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
-    let raw_mesh =
-        std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
-    let mesh: mesh_config::MeshConfig =
-        serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
-    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
+    let raw = std::fs::read_to_string(config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let file =
+        SlipmeshFile::parse(&raw).with_context(|| format!("reading {}", config_path.display()))?;
+    let targets = match node {
+        Some(n) => {
+            anyhow::ensure!(file.hosts().contains(&n), "unknown node {n:?}");
+            vec![n]
+        }
+        None => file.hosts(),
+    };
 
-    if let Some(n) = node {
-        anyhow::ensure!(
-            mesh.nodes.iter().any(|entry| entry.name == n),
-            "unknown node {n:?}"
+    let resolved = settle_secrets(&file, secrets_path, check || diff)?;
+    // Every host is rendered and validated before any is written, so a host that fails leaves
+    // the patch files as a set rather than half of them new.
+    let hosts = render_hosts(&file, &resolved, &targets, patches_dir)?;
+
+    for host in &hosts {
+        if diff {
+            print_diff(&host.host, &host.before, &host.after);
+        } else if check {
+            println!("{}: ok", host.host);
+        }
+    }
+    if check || diff {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(patches_dir)
+        .with_context(|| format!("creating {}", patches_dir.display()))?;
+    for host in &hosts {
+        if host.before == host.after {
+            println!("{}: no changes", host.host);
+            continue;
+        }
+        std::fs::write(&host.path, &host.after)
+            .with_context(|| format!("writing {}", host.path.display()))?;
+        println!("wrote {}", host.path.display());
+    }
+    Ok(())
+}
+
+/// Resolves the whole topology's secrets against the secrets file. On a write run, whatever that
+/// minted is recorded first; on a dry run, needing to mint anything is an error, since a minted
+/// value that is never written would differ on the next run.
+fn settle_secrets(
+    file: &SlipmeshFile,
+    secrets_path: &Path,
+    dry_run: bool,
+) -> Result<render::ResolvedSecrets> {
+    let secrets = SecretsFile::read(secrets_path)?;
+    let topology = file.topology()?;
+    for orphan in secrets.orphans(&topology) {
+        eprintln!(
+            "warning: {orphan} in {} belongs to nothing in slipmesh.yaml - kept; delete it by \
+             hand if it is gone for good",
+            secrets_path.display()
         );
     }
 
-    let existing_state = existing::FileExistingState::new(&mesh, patches_dir)?;
-    let resolved = render::resolve_secrets(&mesh, &existing_state);
-
-    let target_nodes: Vec<&str> = match node {
-        Some(n) => vec![n],
-        None => mesh.nodes.iter().map(|n| n.name.as_str()).collect(),
-    };
-
-    for node_name in target_nodes {
-        let awg_cfg = render::render_awg_config(&mesh, node_name, &resolved)
-            .with_context(|| format!("rendering awg config for node {node_name:?}"))?;
-        awg::config::validate(&awg_cfg)
-            .with_context(|| format!("rendered awg config for node {node_name:?} is invalid"))?;
-
-        let router_cfg = render::render_router_config(&mesh, node_name)
-            .with_context(|| format!("rendering router config for node {node_name:?}"))?;
-        router::config::validate(&router_cfg)
-            .with_context(|| format!("rendered router config for node {node_name:?} is invalid"))?;
-
-        let nftables_cfg = render::render_nftables_config(&mesh);
-        if let Some(cfg) = &nftables_cfg {
-            nftables::config::validate(cfg).with_context(|| {
-                format!("rendered nftables config for node {node_name:?} is invalid")
-            })?;
-        }
-
-        let mut owned = vec![
-            render_extension_service_document(
-                "awg",
-                "/etc/talos-extensions/awg.yaml",
-                &serde_yaml::to_string(&awg_cfg)?,
-            ),
-            render_extension_service_document(
-                "router",
-                "/etc/talos-extensions/router.yaml",
-                &serde_yaml::to_string(&router_cfg)?,
-            ),
-        ];
-        if let Some(cfg) = &nftables_cfg {
-            owned.push(render_extension_service_document(
-                "nftables",
-                "/etc/talos-extensions/nftables.yaml",
-                &serde_yaml::to_string(cfg)?,
-            ));
-        }
-
-        let patch_path = patches_dir.join(format!("{node_name}.yaml"));
-        // A missing file is the from-scratch case; anything else - a permission, an encoding, a
-        // half-written file - must not read as "there was nothing here", which would drop every
-        // foreign document in it and write the file anyway.
-        let existing_raw = match std::fs::read_to_string(&patch_path) {
-            Ok(raw) => raw,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-            Err(e) => return Err(e).with_context(|| format!("reading {patch_path:?}")),
-        };
-        let foreign = segments::foreign_segments(&existing_raw)
-            .with_context(|| format!("reading the existing {patch_path:?}"))?;
-        let new_content = segments::render_file(&foreign, &owned);
-
-        if diff {
-            print_diff(node_name, &existing_raw, &new_content);
-            continue;
-        }
-        if check {
-            println!("{node_name}: ok");
-            continue;
-        }
-
-        std::fs::create_dir_all(patches_dir)
-            .with_context(|| format!("creating {}", patches_dir.display()))?;
-        std::fs::write(&patch_path, &new_content)
-            .with_context(|| format!("writing {}", patch_path.display()))?;
-        println!("wrote {}", patch_path.display());
+    let resolved = render::resolve_secrets(&topology, &secrets);
+    let additions = secrets.additions(&topology, &resolved)?;
+    if additions.is_empty() {
+        return Ok(resolved);
     }
+    let routes = additions.routes().join(", ");
+    anyhow::ensure!(
+        !dry_run,
+        "{} lacks {routes} - run `slipmesh-taloscfg generate` to mint and record them",
+        secrets_path.display()
+    );
 
-    Ok(())
+    write_replacing(secrets_path, &secrets.with(&additions)?)?;
+    println!("recorded {routes} in {}", secrets_path.display());
+    Ok(resolved)
+}
+
+/// Writes `content` to a sibling file and renames it over `path`, so an interrupted write cannot
+/// leave the secrets file half-written - a key lost that way is an identity rotated.
+fn write_replacing(path: &Path, content: &str) -> Result<()> {
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(".tmp");
+    let temporary = PathBuf::from(temporary);
+    std::fs::write(&temporary, content)
+        .with_context(|| format!("writing {}", temporary.display()))?;
+    std::fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))
+}
+
+/// Every target host's patch file, rendered and validated in memory.
+fn render_hosts(
+    file: &SlipmeshFile,
+    resolved: &render::ResolvedSecrets,
+    targets: &[&str],
+    patches_dir: &Path,
+) -> Result<Vec<HostFile>> {
+    targets
+        .iter()
+        .map(|&host| {
+            let model = file.effective_for(host)?;
+            let awg_cfg = render::render_awg_config(&model, host, resolved)
+                .with_context(|| format!("rendering awg config for node {host:?}"))?;
+            awg::config::validate(&awg_cfg)
+                .with_context(|| format!("rendered awg config for node {host:?} is invalid"))?;
+            let router_cfg = render::render_router_config(&model, host)
+                .with_context(|| format!("rendering router config for node {host:?}"))?;
+            router::config::validate(&router_cfg)
+                .with_context(|| format!("rendered router config for node {host:?} is invalid"))?;
+            let nftables_cfg = render::render_nftables_config(&model);
+            if let Some(cfg) = &nftables_cfg {
+                nftables::config::validate(cfg).with_context(|| {
+                    format!("rendered nftables config for node {host:?} is invalid")
+                })?;
+            }
+
+            let mut patches = Vec::new();
+            for patch in file.patches_for(host)? {
+                if patch.sources > 1 {
+                    eprintln!(
+                        "{host}: {} is merged from {} documents and written re-serialized - \
+                         their comments do not carry over",
+                        patch.identity, patch.sources
+                    );
+                }
+                patches.push(patch.text);
+            }
+
+            let mut generated = vec![
+                render_extension_service_document(
+                    "awg",
+                    "/etc/talos-extensions/awg.yaml",
+                    &serde_yaml::to_string(&awg_cfg)?,
+                ),
+                render_extension_service_document(
+                    "router",
+                    "/etc/talos-extensions/router.yaml",
+                    &serde_yaml::to_string(&router_cfg)?,
+                ),
+            ];
+            if let Some(cfg) = &nftables_cfg {
+                generated.push(render_extension_service_document(
+                    "nftables",
+                    "/etc/talos-extensions/nftables.yaml",
+                    &serde_yaml::to_string(cfg)?,
+                ));
+            }
+
+            let path = patches_dir.join(format!("{host}.yaml"));
+            // A missing file is the from-scratch case; anything else must not read as "there was
+            // nothing here", or the diff would show a whole file where one line changed.
+            let before = match std::fs::read_to_string(&path) {
+                Ok(raw) => raw,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+            };
+            let after = format!("{HEADER}{}", segments::render_file(&patches, &generated));
+            Ok(HostFile {
+                host: host.to_owned(),
+                path,
+                before,
+                after,
+            })
+        })
+        .collect()
 }
 
 const RED: &str = "\x1b[31m";
@@ -515,108 +637,500 @@ mod tests {
         assert_eq!(cfg.ruleset, "table inet x {}");
     }
 
-    fn write_mesh_yaml(dir: &Path) -> PathBuf {
-        let path = dir.join("mesh.yaml");
-        std::fs::write(
-            &path,
-            r#"
+    const SLIPMESH: &str = r#"slipmesh:
+  kind: network
 cluster:
   bgp_as: 64512
   loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
 nodes:
-  - {name: a, node_id: "10.62.0.1"}
-  - {name: b, node_id: "10.62.0.2"}
+  - {name: a, node_id: "10.62.0.1", endpoint: "192.0.2.10"}
+  - {name: b, node_id: "10.62.0.2", endpoint: "192.0.2.11"}
+  - {name: c, node_id: "10.62.0.3"}
+  - {name: d, node_id: "10.62.0.4"}
 mesh:
   links:
     - {pair: [a, b], port: 51820}
-"#,
-        )
-        .unwrap();
-        path
+---
+slipmesh:
+  kind: patch
+  include: [a]
+apiVersion: v1alpha1
+kind: UnattendedInstallConfig
+installer:
+    disk: /dev/vda
+"#;
+
+    struct Paths {
+        config: PathBuf,
+        secrets: PathBuf,
+        patches: PathBuf,
+    }
+
+    impl Paths {
+        fn generate(&self, node: Option<&str>, check: bool, diff: bool) -> Result<()> {
+            generate(
+                node,
+                check,
+                diff,
+                &self.config,
+                &self.secrets,
+                &self.patches,
+            )
+        }
+
+        fn patch(&self, host: &str) -> Option<String> {
+            std::fs::read_to_string(self.patches.join(format!("{host}.yaml"))).ok()
+        }
+
+        /// Every file a run could have written, with what it holds.
+        fn snapshot(&self) -> Vec<(PathBuf, Option<String>)> {
+            let mut paths = vec![self.secrets.clone()];
+            paths.extend(["a", "b", "c", "d"].map(|h| self.patches.join(format!("{h}.yaml"))));
+            paths
+                .into_iter()
+                .map(|p| {
+                    let content = std::fs::read_to_string(&p).ok();
+                    (p, content)
+                })
+                .collect()
+        }
+    }
+
+    fn setup(extra_documents: &str) -> Paths {
+        let dir = temp_dir();
+        let config = dir.join("slipmesh.yaml");
+        std::fs::write(&config, format!("{SLIPMESH}{extra_documents}")).unwrap();
+        Paths {
+            config,
+            secrets: dir.join("slipmesh-secrets.yaml"),
+            patches: dir.join("patches"),
+        }
     }
 
     #[test]
-    fn generate_writes_a_valid_owned_segment_and_preserves_foreign_content() {
-        let dir = temp_dir();
-        let config_path = write_mesh_yaml(&dir);
-        let patches_dir = dir.join("patches");
-        std::fs::create_dir_all(&patches_dir).unwrap();
-        std::fs::write(
-            patches_dir.join("a.yaml"),
-            "machine:\n    install:\n        disk: /dev/vda\n",
-        )
-        .unwrap();
+    fn generate_writes_each_host_its_patches_and_its_generated_documents() {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
 
-        generate(Some("a"), false, false, &config_path, &patches_dir).unwrap();
+        let a = paths.patch("a").unwrap();
+        assert!(a.contains("disk: /dev/vda"), "{a}");
+        let awg = segments::owned_segment(&a, "awg").unwrap().unwrap();
+        assert!(awg.contains("mesh-b"), "{awg}");
+        assert!(segments::owned_segment(&a, "router").unwrap().is_some());
+        assert!(!paths.patch("b").unwrap().contains("disk:"));
+    }
 
-        let written = std::fs::read_to_string(patches_dir.join("a.yaml")).unwrap();
-        assert!(written.contains("machine:"));
-        assert!(written.contains("disk: /dev/vda"));
-        let awg_segment = segments::owned_segment(&written, "awg").unwrap().unwrap();
-        assert!(awg_segment.contains("mesh-"));
-        assert!(
-            segments::owned_segment(&written, "router")
+    #[test]
+    fn every_written_file_opens_with_the_header() {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
+        for host in ["a", "b", "c", "d"] {
+            assert!(paths.patch(host).unwrap().starts_with(HEADER), "{host}");
+        }
+    }
+
+    #[test]
+    fn a_dry_run_that_would_mint_a_secret_fails_and_writes_nothing() {
+        for (check, diff) in [(true, false), (false, true)] {
+            let paths = setup("");
+            let err = paths.generate(None, check, diff).unwrap_err();
+            assert!(format!("{err:#}").contains("generate"), "{err:#}");
+            assert!(!paths.secrets.exists());
+            assert!(!paths.patches.exists());
+        }
+    }
+
+    #[test]
+    fn a_check_after_a_full_run_passes_and_writes_nothing() {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
+        let before = paths.snapshot();
+        paths.generate(None, true, false).unwrap();
+        paths.generate(None, false, true).unwrap();
+        assert_eq!(paths.snapshot(), before);
+    }
+
+    #[test]
+    fn two_dry_runs_render_the_same() {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
+        let file = SlipmeshFile::parse(&std::fs::read_to_string(&paths.config).unwrap()).unwrap();
+        let render = || {
+            let resolved = settle_secrets(&file, &paths.secrets, true).unwrap();
+            render_hosts(&file, &resolved, &["a", "b", "c", "d"], &paths.patches)
                 .unwrap()
-                .is_some()
+                .into_iter()
+                .map(|h| h.after)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(render(), render());
+    }
+
+    #[test]
+    fn a_second_run_changes_nothing() {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
+        let first = paths.snapshot();
+        paths.generate(None, false, false).unwrap();
+        assert_eq!(paths.snapshot(), first);
+    }
+
+    #[test]
+    fn regenerating_one_host_from_scratch_twice_changes_nothing() {
+        // A key used to be read back only from its own host's patch file, so rendering one host
+        // before its peer had a file minted the peer a new key on every run. Secrets are settled
+        // for the whole topology now, whichever host is rendered.
+        let paths = setup("");
+        paths.generate(Some("a"), false, false).unwrap();
+        let first = paths.snapshot();
+        paths.generate(Some("a"), false, false).unwrap();
+        assert_eq!(paths.snapshot(), first);
+        assert!(paths.patch("b").is_none());
+    }
+
+    #[test]
+    fn a_host_that_fails_validation_leaves_every_host_unwritten() {
+        let paths = setup(
+            "---\nslipmesh:\n  kind: nftables\n  include: [d]\nruleset: |\n  table inet t { {{ bogus }} }\n",
         );
-    }
-
-    #[test]
-    fn generate_check_does_not_write_anything() {
-        let dir = temp_dir();
-        let config_path = write_mesh_yaml(&dir);
-        let patches_dir = dir.join("patches");
-
-        generate(Some("a"), true, false, &config_path, &patches_dir).unwrap();
-
-        assert!(!patches_dir.join("a.yaml").exists());
-    }
-
-    #[test]
-    fn generate_second_run_is_idempotent_for_mesh_private_keys() {
-        // Bootstrap every node first (the normal workflow: `generate` with no `--node` filter
-        // writes every node's file in one pass) - a peer's identity can only stay stable across
-        // runs once that peer's own patch file exists to read it back from.
-        let dir = temp_dir();
-        let config_path = write_mesh_yaml(&dir);
-        let patches_dir = dir.join("patches");
-
-        generate(None, false, false, &config_path, &patches_dir).unwrap();
-        let first = std::fs::read_to_string(patches_dir.join("a.yaml")).unwrap();
-        generate(Some("a"), false, false, &config_path, &patches_dir).unwrap();
-        let second = std::fs::read_to_string(patches_dir.join("a.yaml")).unwrap();
-
-        assert_eq!(first, second);
-    }
-
-    #[test]
-    fn generate_without_bootstrapping_the_peer_first_does_not_stay_idempotent() {
-        // Documents the real limitation this exposed: regenerating only one node, when its peer's
-        // own patch file was never written, can't recover the peer's identity from anywhere -
-        // there's nothing on disk yet to read it back from, so the peer's derived public key
-        // drifts between runs. Not a bug to fix here; a reason `generate`'s own docs (and this
-        // test) should say "bootstrap with no --node filter first".
-        let dir = temp_dir();
-        let config_path = write_mesh_yaml(&dir);
-        let patches_dir = dir.join("patches");
-
-        generate(Some("a"), false, false, &config_path, &patches_dir).unwrap();
-        let first = std::fs::read_to_string(patches_dir.join("a.yaml")).unwrap();
-        generate(Some("a"), false, false, &config_path, &patches_dir).unwrap();
-        let second = std::fs::read_to_string(patches_dir.join("a.yaml")).unwrap();
-
-        assert_ne!(
-            first, second,
-            "expected peer b's never-persisted key to drift"
-        );
+        let err = paths.generate(None, false, false).unwrap_err();
+        assert!(format!("{err:#}").contains("\"d\""), "{err:#}");
+        for host in ["a", "b", "c", "d"] {
+            assert!(paths.patch(host).is_none(), "{host} was written");
+        }
     }
 
     #[test]
     fn generate_rejects_an_unknown_node() {
-        let dir = temp_dir();
-        let config_path = write_mesh_yaml(&dir);
-        let patches_dir = dir.join("patches");
+        let paths = setup("");
+        assert!(paths.generate(Some("nonexistent"), false, false).is_err());
+    }
 
-        assert!(generate(Some("nonexistent"), true, false, &config_path, &patches_dir).is_err());
+    const POOLS: &str = r#"---
+slipmesh:
+  kind: roadwarriors
+name: first
+node_hostnames: [a]
+address: "198.51.100.1/24"
+listen_port: 51900
+clients: []
+---
+slipmesh:
+  kind: roadwarriors
+name: second
+node_hostnames: [b]
+address: "203.0.113.1/24"
+listen_port: 51901
+clients:
+  - {name: carol, public_key: "CCC=", allowed_ips: ["203.0.113.22/32"]}
+"#;
+
+    fn pool_span(paths: &Paths, pool: &str) -> (String, std::ops::Range<usize>) {
+        let raw = std::fs::read_to_string(&paths.config).unwrap();
+        let span = SlipmeshFile::parse(&raw).unwrap().pool_span(pool).unwrap();
+        (raw, span)
+    }
+
+    #[test]
+    fn rw_add_edits_only_the_pools_own_document() {
+        let paths = setup(POOLS);
+        let (before, span) = pool_span(&paths, "first");
+
+        rw_add(
+            "first",
+            "dave",
+            "198.51.100.99",
+            Some("DDD="),
+            None,
+            false,
+            false,
+            false,
+            &paths.config,
+            &paths.secrets,
+        )
+        .unwrap();
+
+        let after = std::fs::read_to_string(&paths.config).unwrap();
+        assert!(after.starts_with(&before[..span.start]), "{after}");
+        assert!(after.ends_with(&before[span.end..]), "{after}");
+        let (_, new_span) = pool_span(&paths, "first");
+        assert!(after[new_span].contains("name: dave"), "{after}");
+    }
+
+    #[test]
+    fn rw_del_edits_only_the_pools_own_document() {
+        let paths = setup(POOLS);
+        let (before, span) = pool_span(&paths, "second");
+
+        rw_del("second", "carol", &paths.config).unwrap();
+
+        let after = std::fs::read_to_string(&paths.config).unwrap();
+        assert!(after.starts_with(&before[..span.start]), "{after}");
+        assert!(!after.contains("carol"), "{after}");
+    }
+
+    #[test]
+    fn rw_add_to_an_unknown_pool_names_the_pools_there_are() {
+        let paths = setup(POOLS);
+        let err = rw_add(
+            "third",
+            "dave",
+            "198.51.100.99",
+            Some("DDD="),
+            None,
+            false,
+            false,
+            false,
+            &paths.config,
+            &paths.secrets,
+        )
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("first") && err.contains("second"), "{err}");
+    }
+
+    #[test]
+    fn rw_add_records_the_pool_key_its_exported_config_was_built_with() {
+        // The key used to be generated for the exported config and then thrown away, so the next
+        // `generate` minted a different one and the exported config never connected.
+        let paths = setup(POOLS);
+        rw_add(
+            "first",
+            "dave",
+            "198.51.100.99",
+            None,
+            None,
+            true,
+            false,
+            false,
+            &paths.config,
+            &paths.secrets,
+        )
+        .unwrap();
+
+        let secrets = SecretsFile::read(&paths.secrets).unwrap();
+        use render::ExistingState;
+        assert!(secrets.roadwarrior_private_key("first").is_some());
+        paths.generate(None, true, false).unwrap();
+    }
+
+    #[test]
+    fn rw_inspect_needs_the_pool_key_to_be_recorded_already() {
+        let paths = setup(POOLS);
+        let inspect = || {
+            rw_inspect(
+                "second",
+                "carol",
+                None,
+                None,
+                true,
+                false,
+                false,
+                &paths.config,
+                &paths.secrets,
+            )
+        };
+        let err = inspect().unwrap_err();
+        assert!(format!("{err:#}").contains("generate"), "{err:#}");
+        assert!(!paths.secrets.exists());
+
+        paths.generate(None, false, false).unwrap();
+        inspect().unwrap();
+    }
+
+    /// The shape of a real repository, with nothing real in it: six hosts, one of them not a Talos
+    /// node, two booting from different disks, three plain links, a plain pool with its key written
+    /// out, an obfuscated pool with all nine fields written out, and a ruleset carrying a `---` line
+    /// and a line with a trailing space.
+    fn legacy_mesh_yaml() -> String {
+        let plain_key = taloscfg::keys::generate_private_key();
+        let obfuscated_key = taloscfg::keys::generate_private_key();
+        format!(
+            r#"bfd:
+  enable: true
+
+cluster:
+  bgp_as: 64512
+  loopback_networks: {{ipv4: "10.62.0.0/24", ipv6: "fd00:62::/120"}}
+  # the metrics ports every node listens on
+  awg_metrics_port: 9586
+
+nodes:
+  - {{name: node-a, node_id: "10.62.0.1", endpoint: "192.0.2.1"}}
+  - {{name: node-b, node_id: "10.62.0.2", endpoint: "192.0.2.2"}}
+  - {{name: node-c, node_id: "10.62.0.3", endpoint: "192.0.2.3"}}
+  - {{name: node-d, node_id: "10.62.0.4", endpoint: "192.0.2.4"}}
+  - {{name: node-e, node_id: "10.62.0.5"}}
+  - {{name: router-1, node_id: "10.62.0.6", endpoint: "192.0.2.6"}}
+
+mesh:
+  links:
+    - pair: [node-a, node-b]
+      port: 52801
+    - pair: [node-b, node-c]
+      port: 52802
+    - pair: [node-c, node-a]
+      port: 52803
+
+    - pair: [node-d, node-a]
+      port: 52821
+    - pair: [node-e, node-d]
+      port: 52886
+
+    - pair: [router-1, node-a]
+      port: 52891
+      plain: true
+    - pair: [router-1, node-b]
+      port: 52892
+      plain: true
+    - pair: [router-1, node-c]
+      port: 52893
+      plain: true
+
+roadwarriors:
+  - name: plain
+    node_hostnames: [node-a, node-b]
+    address: "198.51.100.1/24"
+    listen_port: 51820
+    private_key: "{plain_key}"
+    plain: true
+    clients:
+      - {{name: client-a, public_key: "AAA=", allowed_ips: ["198.51.100.2/32"]}}
+  - name: obfuscated
+    node_hostnames: [node-c]
+    address: "203.0.113.1/24"
+    listen_port: 51821
+    private_key: "{obfuscated_key}"
+    obfuscation:
+      jc: 4
+      jmin: 81
+      jmax: 408
+      s1: 1114
+      s2: 131
+      h1: 883683258
+      h2: 2249923740
+      h3: 891489045
+      h4: 2070706730
+    clients: []
+
+# prefixes that leave through the local uplink
+bypass:
+  - node: node-d
+    include:
+      - {{kind: literal, prefixes: [{{net: "203.0.113.128/25"}}]}}
+
+nftables:
+  ruleset: |
+    table inet talos_filter {{
+        chain input {{
+            type filter hook input priority filter; policy accept;
+    ---
+        }}
+    }}
+"#
+        )
+        // Written as a replacement rather than in the literal above, where an editor trimming
+        // trailing whitespace would take the space away without anyone noticing.
+        .replace("        chain input {\n", "        chain input { \n")
+    }
+
+    /// Hand-written documents the old generator kept in front of its own, by host.
+    fn legacy_hand_written(host: &str) -> Vec<String> {
+        match host {
+            "node-d" => vec![
+                "apiVersion: v1alpha1\nkind: UnattendedInstallConfig\ninstaller:\n    disk: /dev/vda"
+                    .to_owned(),
+            ],
+            "node-e" => vec![
+                "# a smaller box\napiVersion: v1alpha1\nkind: UnattendedInstallConfig\ninstaller:\n    disk: /dev/nvme0n1"
+                    .to_owned(),
+            ],
+            "router-1" => vec![
+                "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n  - content: |\n      password: \"x\" \n      -----BEGIN CERTIFICATE-----\n      MIIB\n      -----END CERTIFICATE-----\n    mountPath: /etc/device.yaml"
+                    .to_owned(),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    const HOSTS: [&str; 6] = ["node-a", "node-b", "node-c", "node-d", "node-e", "router-1"];
+
+    #[test]
+    fn a_migrated_repository_regenerates_its_patch_files_document_for_document() {
+        let mesh = legacy_mesh_yaml();
+        assert!(
+            mesh.contains("chain input { \n"),
+            "the fixture lost its trailing space"
+        );
+
+        // What the old generator left on disk: its documents per host, keys minted once, with the
+        // hand-written ones in front.
+        let first = temp_dir();
+        let bootstrap = taloscfg::migrate::migrate(&mesh, &first.join("none")).unwrap();
+        std::fs::write(first.join("slipmesh.yaml"), &bootstrap.slipmesh).unwrap();
+        std::fs::write(first.join("slipmesh-secrets.yaml"), &bootstrap.secrets).unwrap();
+        generate(
+            None,
+            false,
+            false,
+            &first.join("slipmesh.yaml"),
+            &first.join("slipmesh-secrets.yaml"),
+            &first.join("patches"),
+        )
+        .unwrap();
+        let legacy = temp_dir().join("patches");
+        std::fs::create_dir_all(&legacy).unwrap();
+        for host in HOSTS {
+            let generated =
+                std::fs::read_to_string(first.join("patches").join(format!("{host}.yaml")))
+                    .unwrap();
+            let generated = generated.strip_prefix(HEADER).unwrap();
+            // The old generator's layout: hand-written documents trimmed, its own as rendered,
+            // all joined by the one separator.
+            let hand_written = legacy_hand_written(host);
+            let file = if hand_written.is_empty() {
+                generated.to_owned()
+            } else {
+                format!("{}\n---\n{generated}", hand_written.join("\n---\n"))
+            };
+            std::fs::write(legacy.join(format!("{host}.yaml")), file).unwrap();
+        }
+
+        let dir = temp_dir();
+        let migration = taloscfg::migrate::migrate(&mesh, &legacy).unwrap();
+        assert!(migration.minted.is_empty(), "{:?}", migration.minted);
+        let paths = Paths {
+            config: dir.join("slipmesh.yaml"),
+            secrets: dir.join("slipmesh-secrets.yaml"),
+            patches: dir.join("patches"),
+        };
+        std::fs::write(&paths.config, &migration.slipmesh).unwrap();
+        std::fs::write(&paths.secrets, &migration.secrets).unwrap();
+        assert_eq!(
+            SlipmeshFile::parse(&migration.slipmesh)
+                .unwrap()
+                .topology()
+                .unwrap()
+                .roadwarriors
+                .len(),
+            2
+        );
+
+        paths.generate(None, false, false).unwrap();
+        for host in HOSTS {
+            let before = std::fs::read_to_string(legacy.join(format!("{host}.yaml"))).unwrap();
+            let after = paths.patch(host).unwrap();
+            assert_eq!(after, format!("{HEADER}{before}"), "{host}");
+        }
+
+        let settled = |p: &Paths| {
+            let mut files = vec![std::fs::read_to_string(&p.config).unwrap()];
+            files.push(std::fs::read_to_string(&p.secrets).unwrap());
+            files.extend(HOSTS.map(|h| p.patch(h).unwrap()));
+            files
+        };
+        let once = settled(&paths);
+        paths.generate(None, false, false).unwrap();
+        assert_eq!(settled(&paths), once);
     }
 }

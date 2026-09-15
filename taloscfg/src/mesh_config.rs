@@ -24,7 +24,9 @@ pub struct BfdConfig {
     pub settings: BfdSettings,
 }
 
+/// Strict for the same reason `ClusterConfig` is.
 #[derive(Deserialize, Debug, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct MeshConfig {
     pub cluster: ClusterConfig,
     /// Off unless asked for: BFD trades constant control traffic on every mesh link for
@@ -209,7 +211,9 @@ pub struct MeshLink {
     pub plain: bool,
 }
 
+/// Strict for the same reason `ClusterConfig` is.
 #[derive(Deserialize, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RoadwarriorPool {
     pub name: String,
     /// Which nodes terminate connections for this pool - each gets its own `InterfaceEntry` for
@@ -435,6 +439,29 @@ nodes:
         assert_eq!(cfg.nodes.len(), 2);
         assert_eq!(cfg.cluster.bgp_as, 64512);
         validate(&cfg).unwrap();
+    }
+
+    #[test]
+    fn an_unknown_top_level_key_is_refused() {
+        let yaml = format!(
+            "{}roadwarrior: []
+",
+            minimal_yaml()
+        );
+        let err = serde_yaml::from_str::<MeshConfig>(&yaml).unwrap_err();
+        assert!(err.to_string().contains("roadwarrior"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_roadwarriors_pool_key_is_refused() {
+        let yaml = "name: plain
+node_hostnames: [a]
+address: 10.0.0.1/24
+listen_port: 51820
+listen-port: 1
+";
+        let err = serde_yaml::from_str::<RoadwarriorPool>(yaml).unwrap_err();
+        assert!(err.to_string().contains("listen-port"), "{err}");
     }
 
     #[test]
