@@ -173,7 +173,6 @@ mesh:
 roadwarriors:
   - name: eu
     node_hostnames: [a]
-    iface: rw-eu
     address: "10.99.0.1/24"
     listen_port: 51900
     clients: []
