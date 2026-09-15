@@ -211,8 +211,10 @@ impl SecretsFile {
         if !self.holds_mapping {
             let lead = if self.raw.trim().is_empty() {
                 HEADER.to_owned()
+            } else if self.raw.ends_with('\n') {
+                self.raw.clone()
             } else {
-                format!("{}\n", self.raw.trim_end())
+                format!("{}\n", self.raw)
             };
             return Ok(lead + &yaml_serde::to_string(&additions)?);
         }
@@ -494,6 +496,16 @@ roadwarriors:
     }
 
     // Writing.
+
+    #[test]
+    fn a_file_of_only_comments_keeps_every_byte_in_front_of_the_first_values() {
+        for before in ["# kept by hand   \n\n", "# no newline at the end"] {
+            let after = run(&topology(TOPOLOGY), &SecretsFile::parse(before).unwrap());
+            assert!(after.starts_with(before), "{after:?}");
+            let secrets: Secrets = yaml_serde::from_str(&after).unwrap();
+            assert_eq!(secrets.nodes.len(), 3);
+        }
+    }
 
     #[test]
     fn a_first_run_creates_the_file_with_every_minted_value() {
