@@ -134,37 +134,48 @@ pub fn patch_document(
     Ok(splice(raw, span, patched.source()))
 }
 
-/// `document` without its `slipmesh:` block - what is left is what goes into a patch file. A
-/// document that has no such block comes back unchanged, so this is safe to call on anything.
-pub fn strip_meta(document: &str) -> Result<String> {
+/// `document` without its top-level `key` and everything under it. A document without that key
+/// comes back unchanged.
+pub fn remove_key(document: &str, key: &str) -> Result<String> {
     let parsed = yamlpath::Document::new(document).context("parsing the document")?;
-    let route = yamlpath::route![META_KEY];
+    let route = yamlpath::route![key];
     if !parsed.query_exists(&route) {
         return Ok(document.to_owned());
     }
 
     let span = parsed
         .removal_span(&route)
-        .context("locating the slipmesh block")?;
+        .with_context(|| format!("locating `{key}`"))?;
     let mut out = document.to_owned();
-    out.replace_range(without_trailing_top_level_comments(document, span), "");
+    out.replace_range(
+        without_trailing_comments_and_blank_lines(document, span),
+        "",
+    );
     Ok(out)
 }
 
-/// `span` cut back to end before any top-level comment lines it closes with. The grammar hangs a
-/// comment that follows a nested block's last line onto that block, so a removal span swallows it -
-/// but a comment written at column 0 speaks to the document, not to the block above it.
-fn without_trailing_top_level_comments(text: &str, span: Range<usize>) -> Range<usize> {
+/// `document` without its `slipmesh:` block - what is left is what goes into a patch file. A
+/// document that has no such block comes back unchanged, so this is safe to call on anything.
+pub fn strip_meta(document: &str) -> Result<String> {
+    remove_key(document, META_KEY)
+}
+
+/// `span` cut back to end before any top-level comment lines and blank lines it closes with. The
+/// grammar hangs what follows a nested block's last line onto that block, so a removal span swallows
+/// it - but a comment written at column 0 speaks to the document, not to the block above it, and a
+/// blank line separates the block from whatever comes next rather than belonging to it.
+fn without_trailing_comments_and_blank_lines(text: &str, span: Range<usize>) -> Range<usize> {
     let mut end = span.end;
     loop {
         let body = &text[span.start..end];
         let body = body.strip_suffix('\n').unwrap_or(body);
         let body = body.strip_suffix('\r').unwrap_or(body);
-        // The first line is the key itself, never a comment to keep.
+        // The first line is the key itself, never a line to keep.
         let Some(newline) = body.rfind('\n') else {
             break;
         };
-        if !body[newline + 1..].starts_with('#') {
+        let last = &body[newline + 1..];
+        if !last.starts_with('#') && !last.trim().is_empty() {
             break;
         }
         end = span.start + newline + 1;
@@ -352,6 +363,21 @@ configFiles:
             strip_meta(document).unwrap(),
             "apiVersion: v1alpha1\nkind: KubeletConfig\n"
         );
+    }
+
+    #[test]
+    fn removing_a_block_keeps_the_comment_that_introduces_the_next_one() {
+        let document = "a: 1\npools:\n  - name: x\n    port: 1\n\n# where traffic bypasses the mesh\nbypass: []\n";
+        assert_eq!(
+            remove_key(document, "pools").unwrap(),
+            "a: 1\n\n# where traffic bypasses the mesh\nbypass: []\n"
+        );
+    }
+
+    #[test]
+    fn removing_the_last_block_leaves_the_rest_as_it_was() {
+        let document = "a: 1  # kept\nruleset: |\n  table inet t {}\n";
+        assert_eq!(remove_key(document, "ruleset").unwrap(), "a: 1  # kept\n");
     }
 
     #[test]
