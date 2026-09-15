@@ -65,6 +65,32 @@ impl Secrets {
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty() && self.links.is_empty() && self.roadwarriors.is_empty()
     }
+
+    /// Where each value sits in the file, as dotted routes - what a message names.
+    pub fn routes(&self) -> Vec<String> {
+        let nodes = self.nodes.iter().flat_map(|(name, node)| {
+            node.mesh_private_key
+                .iter()
+                .map(move |_| format!("nodes.{name}.mesh_private_key"))
+        });
+        let links = self.links.iter().flat_map(|(key, link)| {
+            link.obfuscation
+                .iter()
+                .map(move |_| format!("links.{key}.obfuscation"))
+        });
+        let pools = self.roadwarriors.iter().flat_map(|(name, pool)| {
+            let key = pool
+                .private_key
+                .iter()
+                .map(move |_| format!("roadwarriors.{name}.private_key"));
+            let obfuscation = pool
+                .obfuscation
+                .iter()
+                .map(move |_| format!("roadwarriors.{name}.obfuscation"));
+            key.chain(obfuscation)
+        });
+        nodes.chain(links).chain(pools).collect()
+    }
 }
 
 pub struct SecretsFile {
@@ -404,6 +430,23 @@ roadwarriors:
     }
 
     const NINE: [&str; 9] = ["jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4"];
+
+    #[test]
+    fn routes_name_every_value() {
+        let secrets: Secrets = yaml_serde::from_str(
+            "nodes:\n  node-a:\n    mesh_private_key: K\nlinks:\n  node-a|node-b:\n    obfuscation: {jc: 1}\nroadwarriors:\n  plain:\n    private_key: P\n    obfuscation: {s1: 1}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            secrets.routes(),
+            [
+                "nodes.node-a.mesh_private_key",
+                "links.node-a|node-b.obfuscation",
+                "roadwarriors.plain.private_key",
+                "roadwarriors.plain.obfuscation",
+            ]
+        );
+    }
 
     // Reading.
 
