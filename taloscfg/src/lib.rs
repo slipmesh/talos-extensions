@@ -5,6 +5,7 @@ pub mod addressing;
 pub mod document;
 pub mod existing;
 pub mod keys;
+pub mod merge;
 pub mod mesh_config;
 pub mod obfuscation_gen;
 pub mod render;
