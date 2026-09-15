@@ -2,6 +2,7 @@
 //! binary can be built on them.
 
 pub mod addressing;
+pub mod document;
 pub mod existing;
 pub mod keys;
 pub mod mesh_config;
