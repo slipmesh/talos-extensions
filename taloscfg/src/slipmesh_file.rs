@@ -12,6 +12,7 @@ use crate::mesh_config::{self, MeshConfig, NftablesTopology, RoadwarriorPool};
 use crate::segments::OWNED_NAMES;
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
+use std::ops::Range;
 use yaml_serde::Value;
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Debug)]
@@ -46,6 +47,8 @@ struct Meta {
 
 struct Document {
     line: usize,
+    /// The document's bytes in the file, markers and all - where an edited version goes back.
+    span: Range<usize>,
     meta: Meta,
     /// Trimmed, without document markers or the `slipmesh:` block - what a patch file gets when
     /// nothing is merged into it.
@@ -60,7 +63,7 @@ impl Document {
     /// The value is parsed from `exact`, the document's own bytes, and not from the trimmed
     /// `text`: trimming takes the final newline off a block scalar that ends the document, and
     /// with it changes the scalar's value.
-    fn read(exact: &str, text: &str, line: usize) -> Result<Option<Self>> {
+    fn read(exact: &str, span: Range<usize>, text: &str, line: usize) -> Result<Option<Self>> {
         let mut value: Value = yaml_serde::from_str(exact).context("not valid YAML")?;
         if value.is_null() {
             return Ok(None);
@@ -73,6 +76,7 @@ impl Document {
         let text = document::strip_meta(text)?.trim().to_owned();
         Ok(Some(Self {
             line,
+            span,
             meta,
             text,
             value,
@@ -110,7 +114,7 @@ pub struct HostDocument {
 pub struct SlipmeshFile {
     network: Value,
     hosts: Vec<String>,
-    pools: Vec<Value>,
+    pools: Vec<Document>,
     rulesets: Vec<Document>,
     patches: Vec<Document>,
 }
@@ -123,7 +127,7 @@ impl SlipmeshFile {
         let mut patches = Vec::new();
         for (span, text) in document::documents(raw)? {
             let line = raw[..span.start].matches('\n').count() + 1;
-            let Some(document) = Document::read(&raw[span.clone()], &text, line)
+            let Some(document) = Document::read(&raw[span.clone()], span.clone(), &text, line)
                 .with_context(|| format!("the document starting at line {line}"))?
             else {
                 continue;
@@ -233,12 +237,21 @@ impl SlipmeshFile {
         let parsed = Self {
             network: network.value,
             hosts,
-            pools: pools.into_iter().map(|p| p.value).collect(),
+            pools,
             rulesets,
             patches,
         };
         parsed.topology()?;
         Ok(parsed)
+    }
+
+    /// The byte range of the `roadwarriors` document holding pool `name` - where an edit to that
+    /// pool is spliced back.
+    pub fn pool_span(&self, name: &str) -> Option<Range<usize>> {
+        self.pools
+            .iter()
+            .find(|p| p.value.get("name").and_then(Value::as_str) == Some(name))
+            .map(|p| p.span.clone())
     }
 
     /// The hosts `network` names, in its order.
@@ -322,7 +335,8 @@ impl SlipmeshFile {
         let mapping = value
             .as_mapping_mut()
             .context("the network document is not a mapping")?;
-        mapping.insert("roadwarriors".into(), Value::Sequence(self.pools.clone()));
+        let pools = self.pools.iter().map(|p| p.value.clone()).collect();
+        mapping.insert("roadwarriors".into(), Value::Sequence(pools));
         if let Some(ruleset) = ruleset {
             mapping.insert("nftables".into(), ruleset);
         }
@@ -627,6 +641,21 @@ extraArgs:
             .map(|p| p.name)
             .collect();
         assert_eq!(names, ["second", "first"]);
+    }
+
+    #[test]
+    fn a_pool_is_found_by_name_at_the_bytes_it_was_written_at() {
+        let raw = file(&[NETWORK, &pool("first", 51820), &pool("second", 51821)]);
+        let parsed = SlipmeshFile::parse(&raw).unwrap();
+        let span = parsed.pool_span("second").unwrap();
+        assert!(
+            raw[span.clone()].contains("name: second"),
+            "{}",
+            &raw[span.clone()]
+        );
+        assert!(!raw[span.clone()].contains("name: first"));
+        assert_eq!(span.end, raw.len());
+        assert!(parsed.pool_span("third").is_none());
     }
 
     #[test]

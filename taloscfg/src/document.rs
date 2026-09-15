@@ -110,6 +110,16 @@ pub fn spans(raw: &str) -> Result<Vec<Range<usize>>> {
         .collect())
 }
 
+/// `raw` with the bytes at `span` replaced by `replacement` - one document swapped for its edited
+/// version, every other byte carried over.
+pub fn splice(raw: &str, span: Range<usize>, replacement: &str) -> String {
+    let mut out = String::with_capacity(raw.len() - span.len() + replacement.len());
+    out.push_str(&raw[..span.start]);
+    out.push_str(replacement);
+    out.push_str(&raw[span.end..]);
+    out
+}
+
 /// Applies `patches` to the single document at `span`, returning the whole file with that document
 /// replaced. Every byte outside `span` is carried over untouched.
 pub fn patch_document(
@@ -121,12 +131,7 @@ pub fn patch_document(
         .context("parsing the document being patched")?;
     let patched = yamlpatch::apply_yaml_patches(&document, patches)
         .context("applying patches to the document")?;
-
-    let mut out = String::with_capacity(raw.len());
-    out.push_str(&raw[..span.start]);
-    out.push_str(patched.source());
-    out.push_str(&raw[span.end..]);
-    Ok(out)
+    Ok(splice(raw, span, patched.source()))
 }
 
 /// `document` without its `slipmesh:` block - what is left is what goes into a patch file. A
@@ -266,6 +271,16 @@ configFiles:
     fn a_directive_does_not_start_a_second_document() {
         let raw = "%YAML 1.2\n---\nmachine:\n    install:\n        disk: /dev/vda\n";
         assert_eq!(spans(raw).unwrap(), vec![0..raw.len()]);
+    }
+
+    #[test]
+    fn splicing_replaces_exactly_the_span() {
+        let raw = "a: 1\n---\nb: 2\n---\nc: 3\n";
+        let span = spans(raw).unwrap()[1].clone();
+        assert_eq!(
+            splice(raw, span, "---\nb: 20\n"),
+            "a: 1\n---\nb: 20\n---\nc: 3\n"
+        );
     }
 
     #[test]
