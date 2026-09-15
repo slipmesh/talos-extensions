@@ -8,19 +8,11 @@
 //! `validate`/`diff`/`apply` are deliberately not separate subcommands: `generate`'s own
 //! `--check`/`--diff` flags already cover them.
 
-mod addressing;
-mod existing;
-mod keys;
-mod mesh_config;
-mod obfuscation_gen;
-mod render;
-mod roadwarrior;
-mod segments;
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use taloscfg::{existing, mesh_config, render, roadwarrior, segments};
 
 #[derive(Parser)]
 #[command(

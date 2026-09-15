@@ -254,7 +254,7 @@ pub(crate) fn render_client_config(
 /// background, the visual opposite of standard (dark-on-light) QR polarity. The official
 /// WireGuard app's own scanner rejects the un-inverted default there; AmneziaWG's and a plain
 /// camera read either polarity fine.
-pub(crate) fn render_qr(config_text: &str, invert: bool) -> Result<String> {
+pub fn render_qr(config_text: &str, invert: bool) -> Result<String> {
     let code = qrcode::QrCode::new(config_text).context("encoding client config as a QR code")?;
     let mut renderer = code.render::<qrcode::render::unicode::Dense1x2>();
     if invert {
