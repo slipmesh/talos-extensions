@@ -167,22 +167,30 @@ fn without_trailing_top_level_comments(text: &str, span: Range<usize>) -> Range<
     span.start..end
 }
 
+/// Every document in `raw` that has anything in it, as the byte range it occupies and its trimmed
+/// text without markers - the range is for putting an edited document back, the text is for
+/// reading it.
+pub fn documents(raw: &str) -> Result<Vec<(Range<usize>, String)>> {
+    let (starts, markers) = scan(raw)?;
+    Ok(starts
+        .iter()
+        .enumerate()
+        .map(|(i, &start)| {
+            let span = start..starts.get(i + 1).copied().unwrap_or(raw.len());
+            let text = without_markers(raw, span.clone(), &markers);
+            (span, text)
+        })
+        .filter(|(_, text)| !text.is_empty())
+        .collect())
+}
+
 /// Splits a patch file's raw text into trimmed segments, in file order. Empty input yields no
 /// segments (a from-scratch file has nothing to preserve).
 ///
 /// What each segment drops is its markers and the whitespace around it - see
 /// `segments::render_file`, which writes those back. For byte-exact ranges instead, use [`spans`].
 pub fn split(raw: &str) -> Result<Vec<String>> {
-    let (starts, markers) = scan(raw)?;
-    Ok(starts
-        .iter()
-        .enumerate()
-        .map(|(i, &start)| {
-            let end = starts.get(i + 1).copied().unwrap_or(raw.len());
-            without_markers(raw, start..end, &markers)
-        })
-        .filter(|s| !s.is_empty())
-        .collect())
+    Ok(documents(raw)?.into_iter().map(|(_, text)| text).collect())
 }
 
 /// The segment's text with the document markers inside it removed - `segments::render_file` writes
@@ -340,6 +348,31 @@ configFiles:
     // What a text split on the document marker gets wrong, and what this module decides on top
     // of the grammar: which markers to strip, what to do with a file that will not parse, and
     // where the bytes before the first document belong.
+
+    #[test]
+    fn each_document_comes_with_the_span_it_was_cut_from() {
+        let raw = "a: 1
+---
+# b's note
+b: 2
+";
+        let found = documents(raw).unwrap();
+        let spans_found: Vec<_> = found.iter().map(|(span, _)| span.clone()).collect();
+        assert_eq!(spans_found, spans(raw).unwrap());
+        assert_eq!(
+            found[1].1,
+            "# b's note
+b: 2"
+        );
+    }
+
+    #[test]
+    fn a_document_with_nothing_in_it_is_not_one() {
+        let raw = "a: 1
+---
+";
+        assert_eq!(documents(raw).unwrap().len(), 1);
+    }
 
     #[test]
     fn splits_multi_document_file_preserving_order() {
