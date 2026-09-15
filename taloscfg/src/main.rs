@@ -15,7 +15,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use taloscfg::secrets::SecretsFile;
 use taloscfg::slipmesh_file::SlipmeshFile;
-use taloscfg::{mesh_config, render, roadwarrior, segments};
+use taloscfg::{document, mesh_config, render, roadwarrior, segments};
 
 #[derive(Parser)]
 #[command(
@@ -49,9 +49,9 @@ enum Command {
         #[arg(long, default_value = "patches")]
         patches_dir: PathBuf,
     },
-    /// Add a client to a `roadwarriors:` pool in mesh.yaml.
+    /// Add a client to a roadwarriors pool in slipmesh.yaml.
     RwAdd {
-        /// Which roadwarriors pool (mesh.yaml's `roadwarriors[].name`, e.g. `plain`).
+        /// Which roadwarriors pool (its document's `name`, e.g. `plain`).
         #[arg(long = "if")]
         if_: String,
         /// Client name (must not already exist in the pool).
@@ -64,7 +64,7 @@ enum Command {
         #[arg(long = "public-key")]
         public_key: Option<String>,
         /// Which of the pool's node_hostnames to put first as the live Endpoint (default: the
-        /// first one in mesh.yaml's own order) - the rest still appear as commented #Endpoint =.
+        /// first one in the pool's own order) - the rest still appear as commented #Endpoint =.
         #[arg(long)]
         endpoint: Option<String>,
         /// Print a ready-to-import client config to stdout.
@@ -79,21 +79,21 @@ enum Command {
         /// scanner rejects that, while AmneziaWG's and a plain camera don't care either way.
         #[arg(long)]
         invert: bool,
-        #[arg(long, default_value = "mesh.yaml")]
+        #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
-        #[arg(long, default_value = "patches")]
-        patches_dir: PathBuf,
+        #[arg(long, default_value = "slipmesh-secrets.yaml")]
+        secrets: PathBuf,
     },
-    /// Remove a client from a `roadwarriors:` pool in mesh.yaml.
+    /// Remove a client from a roadwarriors pool in slipmesh.yaml.
     RwDel {
         #[arg(long = "if")]
         if_: String,
         #[arg(long)]
         name: String,
-        #[arg(long, default_value = "mesh.yaml")]
+        #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
     },
-    /// Re-render an existing client's config/QR without changing mesh.yaml.
+    /// Re-render an existing client's config/QR without changing slipmesh.yaml.
     RwInspect {
         #[arg(long = "if")]
         if_: String,
@@ -104,7 +104,7 @@ enum Command {
         #[arg(long = "private-key")]
         private_key: Option<String>,
         /// Which of the pool's node_hostnames to put first as the live Endpoint (default: the
-        /// first one in mesh.yaml's own order) - the rest still appear as commented #Endpoint =.
+        /// first one in the pool's own order) - the rest still appear as commented #Endpoint =.
         #[arg(long)]
         endpoint: Option<String>,
         #[arg(long)]
@@ -117,10 +117,10 @@ enum Command {
         /// scanner rejects that, while AmneziaWG's and a plain camera don't care either way.
         #[arg(long)]
         invert: bool,
-        #[arg(long, default_value = "mesh.yaml")]
+        #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
-        #[arg(long, default_value = "patches")]
-        patches_dir: PathBuf,
+        #[arg(long, default_value = "slipmesh-secrets.yaml")]
+        secrets: PathBuf,
     },
 }
 
@@ -152,7 +152,7 @@ fn main() -> Result<()> {
             qr,
             invert,
             config,
-            patches_dir,
+            secrets,
         } => rw_add(
             &if_,
             &name,
@@ -163,7 +163,7 @@ fn main() -> Result<()> {
             qr,
             invert,
             &config,
-            &patches_dir,
+            &secrets,
         ),
         Command::RwDel { if_, name, config } => rw_del(&if_, &name, &config),
         Command::RwInspect {
@@ -175,7 +175,7 @@ fn main() -> Result<()> {
             qr,
             invert,
             config,
-            patches_dir,
+            secrets,
         } => rw_inspect(
             &if_,
             &name,
@@ -185,7 +185,7 @@ fn main() -> Result<()> {
             qr,
             invert,
             &config,
-            &patches_dir,
+            &secrets,
         ),
     }
 }
@@ -201,18 +201,19 @@ fn rw_add(
     qr: bool,
     invert: bool,
     config_path: &Path,
-    patches_dir: &Path,
+    secrets_path: &Path,
 ) -> Result<()> {
-    let raw_mesh =
-        std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
-    let mesh: mesh_config::MeshConfig =
-        serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
-    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
+    let (raw, file) = read_slipmesh(config_path)?;
+    let topology = file.topology()?;
+    let span = pool_document(&file, &topology, if_)?;
+    // Settled and recorded before the client is added: a pool key minted for the exported config
+    // has to be the one `generate` puts on the wire, not a key that dies with this process.
+    let secrets = settle_secrets(&file, secrets_path, false)?;
 
-    let (updated, client_config) = roadwarrior::add(
-        &mesh,
-        &raw_mesh,
-        patches_dir,
+    let (updated_pool, client_config) = roadwarrior::add(
+        &topology,
+        &raw[span.clone()],
+        &secrets,
         if_,
         name,
         allowed_ips,
@@ -221,8 +222,7 @@ fn rw_add(
         export,
         qr,
     )?;
-
-    std::fs::write(config_path, &updated).with_context(|| format!("writing {config_path:?}"))?;
+    write_edited(config_path, &raw, span, &updated_pool)?;
     println!(
         "added {name:?} to roadwarriors pool {if_:?} in {}",
         config_path.display()
@@ -240,15 +240,12 @@ fn rw_add(
 }
 
 fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
-    let raw_mesh =
-        std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
-    let mesh: mesh_config::MeshConfig =
-        serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
-    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
+    let (raw, file) = read_slipmesh(config_path)?;
+    let topology = file.topology()?;
+    let span = pool_document(&file, &topology, if_)?;
 
-    let (updated, public_key) = roadwarrior::del(&mesh, &raw_mesh, if_, name)?;
-
-    std::fs::write(config_path, &updated).with_context(|| format!("writing {config_path:?}"))?;
+    let (updated_pool, public_key) = roadwarrior::del(&topology, &raw[span.clone()], if_, name)?;
+    write_edited(config_path, &raw, span, &updated_pool)?;
     println!(
         "removed {name:?} (public_key {public_key:?}) from roadwarriors pool {if_:?} in {}",
         config_path.display()
@@ -266,15 +263,13 @@ fn rw_inspect(
     qr: bool,
     invert: bool,
     config_path: &Path,
-    patches_dir: &Path,
+    secrets_path: &Path,
 ) -> Result<()> {
-    let raw_mesh =
-        std::fs::read_to_string(config_path).with_context(|| format!("reading {config_path:?}"))?;
-    let mesh: mesh_config::MeshConfig =
-        serde_yaml::from_str(&raw_mesh).with_context(|| format!("parsing {config_path:?}"))?;
-    mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
+    let (_, file) = read_slipmesh(config_path)?;
+    let topology = file.topology()?;
+    let secrets = settle_secrets(&file, secrets_path, true)?;
 
-    let text = roadwarrior::inspect(&mesh, patches_dir, if_, name, private_key, endpoint)?;
+    let text = roadwarrior::inspect(&topology, &secrets, if_, name, private_key, endpoint)?;
 
     // Inspecting is pointless with no output at all - default to --export if neither flag was
     // given, unlike rw-add (where registering a client without ever displaying it is legitimate).
@@ -286,6 +281,40 @@ fn rw_inspect(
         println!("\n{}", roadwarrior::render_qr(&text, invert)?);
     }
     Ok(())
+}
+
+fn read_slipmesh(config_path: &Path) -> Result<(String, SlipmeshFile)> {
+    let raw = std::fs::read_to_string(config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let file =
+        SlipmeshFile::parse(&raw).with_context(|| format!("reading {}", config_path.display()))?;
+    Ok((raw, file))
+}
+
+/// The bytes of pool `name`'s document, erring with the pools there are.
+fn pool_document(
+    file: &SlipmeshFile,
+    topology: &mesh_config::MeshConfig,
+    name: &str,
+) -> Result<std::ops::Range<usize>> {
+    roadwarrior::find_pool(topology, name)?;
+    file.pool_span(name)
+        .with_context(|| format!("pool {name:?} is in the topology but in no document"))
+}
+
+/// Writes `raw` with the document at `span` replaced by `edited` - once the result still reads as
+/// a valid `slipmesh.yaml`, so a bad edit is refused instead of written.
+fn write_edited(
+    config_path: &Path,
+    raw: &str,
+    span: std::ops::Range<usize>,
+    edited: &str,
+) -> Result<()> {
+    let updated = document::splice(raw, span, edited);
+    SlipmeshFile::parse(&updated)
+        .context("the edited slipmesh.yaml does not read back - not written")?;
+    std::fs::write(config_path, &updated)
+        .with_context(|| format!("writing {}", config_path.display()))
 }
 
 /// Renders one owned `ExtensionServiceConfig` document: `name`/`mountPath` fixed by convention,
@@ -614,8 +643,8 @@ cluster:
   bgp_as: 64512
   loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
 nodes:
-  - {name: a, node_id: "10.62.0.1"}
-  - {name: b, node_id: "10.62.0.2"}
+  - {name: a, node_id: "10.62.0.1", endpoint: "192.0.2.10"}
+  - {name: b, node_id: "10.62.0.2", endpoint: "192.0.2.11"}
   - {name: c, node_id: "10.62.0.3"}
   - {name: d, node_id: "10.62.0.4"}
 mesh:
@@ -775,5 +804,137 @@ installer:
     fn generate_rejects_an_unknown_node() {
         let paths = setup("");
         assert!(paths.generate(Some("nonexistent"), false, false).is_err());
+    }
+
+    const POOLS: &str = r#"---
+slipmesh:
+  kind: roadwarriors
+name: first
+node_hostnames: [a]
+address: "198.51.100.1/24"
+listen_port: 51900
+clients: []
+---
+slipmesh:
+  kind: roadwarriors
+name: second
+node_hostnames: [b]
+address: "203.0.113.1/24"
+listen_port: 51901
+clients:
+  - {name: carol, public_key: "CCC=", allowed_ips: ["203.0.113.22/32"]}
+"#;
+
+    fn pool_span(paths: &Paths, pool: &str) -> (String, std::ops::Range<usize>) {
+        let raw = std::fs::read_to_string(&paths.config).unwrap();
+        let span = SlipmeshFile::parse(&raw).unwrap().pool_span(pool).unwrap();
+        (raw, span)
+    }
+
+    #[test]
+    fn rw_add_edits_only_the_pools_own_document() {
+        let paths = setup(POOLS);
+        let (before, span) = pool_span(&paths, "first");
+
+        rw_add(
+            "first",
+            "dave",
+            "198.51.100.99",
+            Some("DDD="),
+            None,
+            false,
+            false,
+            false,
+            &paths.config,
+            &paths.secrets,
+        )
+        .unwrap();
+
+        let after = std::fs::read_to_string(&paths.config).unwrap();
+        assert!(after.starts_with(&before[..span.start]), "{after}");
+        assert!(after.ends_with(&before[span.end..]), "{after}");
+        let (_, new_span) = pool_span(&paths, "first");
+        assert!(after[new_span].contains("name: dave"), "{after}");
+    }
+
+    #[test]
+    fn rw_del_edits_only_the_pools_own_document() {
+        let paths = setup(POOLS);
+        let (before, span) = pool_span(&paths, "second");
+
+        rw_del("second", "carol", &paths.config).unwrap();
+
+        let after = std::fs::read_to_string(&paths.config).unwrap();
+        assert!(after.starts_with(&before[..span.start]), "{after}");
+        assert!(!after.contains("carol"), "{after}");
+    }
+
+    #[test]
+    fn rw_add_to_an_unknown_pool_names_the_pools_there_are() {
+        let paths = setup(POOLS);
+        let err = rw_add(
+            "third",
+            "dave",
+            "198.51.100.99",
+            Some("DDD="),
+            None,
+            false,
+            false,
+            false,
+            &paths.config,
+            &paths.secrets,
+        )
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("first") && err.contains("second"), "{err}");
+    }
+
+    #[test]
+    fn rw_add_records_the_pool_key_its_exported_config_was_built_with() {
+        // The key used to be generated for the exported config and then thrown away, so the next
+        // `generate` minted a different one and the exported config never connected.
+        let paths = setup(POOLS);
+        rw_add(
+            "first",
+            "dave",
+            "198.51.100.99",
+            None,
+            None,
+            true,
+            false,
+            false,
+            &paths.config,
+            &paths.secrets,
+        )
+        .unwrap();
+
+        let secrets = SecretsFile::read(&paths.secrets).unwrap();
+        use render::ExistingState;
+        assert!(secrets.roadwarrior_private_key("first").is_some());
+        paths.generate(None, true, false).unwrap();
+    }
+
+    #[test]
+    fn rw_inspect_needs_the_pool_key_to_be_recorded_already() {
+        let paths = setup(POOLS);
+        let inspect = || {
+            rw_inspect(
+                "second",
+                "carol",
+                None,
+                None,
+                true,
+                false,
+                false,
+                &paths.config,
+                &paths.secrets,
+            )
+        };
+        let err = inspect().unwrap_err();
+        assert!(format!("{err:#}").contains("generate"), "{err:#}");
+        assert!(!paths.secrets.exists());
+
+        paths.generate(None, false, false).unwrap();
+        inspect().unwrap();
     }
 }
