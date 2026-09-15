@@ -137,21 +137,38 @@ pub fn patch_document(
 /// `document` without its top-level `key` and everything under it. A document without that key
 /// comes back unchanged.
 pub fn remove_key(document: &str, key: &str) -> Result<String> {
+    let mut out = document.to_owned();
+    if let Some(span) = key_span(document, key)? {
+        out.replace_range(span, "");
+    }
+    Ok(out)
+}
+
+/// `document` with its top-level `key` and everything under it replaced by as many empty lines as
+/// it took up - gone for a parser, while every other line keeps its number, so an error found in
+/// what is left still points at the line the operator wrote.
+pub fn blank_key(document: &str, key: &str) -> Result<String> {
+    let mut out = document.to_owned();
+    if let Some(span) = key_span(document, key)? {
+        let lines = document[span.clone()].matches('\n').count();
+        out.replace_range(span, &"\n".repeat(lines));
+    }
+    Ok(out)
+}
+
+/// The bytes a top-level `key` and its block take up, if the document has it.
+fn key_span(document: &str, key: &str) -> Result<Option<Range<usize>>> {
     let parsed = yamlpath::Document::new(document).context("parsing the document")?;
     let route = yamlpath::route![key];
     if !parsed.query_exists(&route) {
-        return Ok(document.to_owned());
+        return Ok(None);
     }
-
     let span = parsed
         .removal_span(&route)
         .with_context(|| format!("locating `{key}`"))?;
-    let mut out = document.to_owned();
-    out.replace_range(
-        without_trailing_comments_and_blank_lines(document, span),
-        "",
-    );
-    Ok(out)
+    Ok(Some(without_trailing_comments_and_blank_lines(
+        document, span,
+    )))
 }
 
 /// `document` without its `slipmesh:` block - what is left is what goes into a patch file. A
@@ -378,6 +395,13 @@ configFiles:
     fn removing_the_last_block_leaves_the_rest_as_it_was() {
         let document = "a: 1  # kept\nruleset: |\n  table inet t {}\n";
         assert_eq!(remove_key(document, "ruleset").unwrap(), "a: 1  # kept\n");
+    }
+
+    #[test]
+    fn blanking_a_key_keeps_every_other_line_where_it_was() {
+        let document = "slipmesh:\n  kind: network\ncluster:\n  bgp_as: 1\n";
+        let blanked = blank_key(document, "slipmesh").unwrap();
+        assert_eq!(blanked, "\n\ncluster:\n  bgp_as: 1\n");
     }
 
     #[test]

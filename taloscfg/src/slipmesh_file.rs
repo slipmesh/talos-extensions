@@ -55,6 +55,10 @@ struct Document {
     text: String,
     /// The same document parsed, also without the `slipmesh:` block.
     value: Value,
+    /// The document's own bytes with the `slipmesh:` block blanked out, behind as many empty lines
+    /// as come before it in the file - deserialized from this, a document's error names the line
+    /// of the file it is on.
+    positioned: String,
 }
 
 impl Document {
@@ -74,13 +78,20 @@ impl Document {
             .context("no `slipmesh:` block saying what the document is for")?;
         let meta: Meta = yaml_serde::from_value(meta).context("its `slipmesh:` block")?;
         let text = document::strip_meta(text)?.trim().to_owned();
+        let positioned = "\n".repeat(line - 1) + &document::blank_key(exact, document::META_KEY)?;
         Ok(Some(Self {
             line,
             span,
             meta,
             text,
             value,
+            positioned,
         }))
+    }
+
+    /// The document as `T`, with an error that names the field and the line of the file.
+    fn deserialize<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
+        yaml_serde::from_str(&self.positioned).with_context(|| self.at())
     }
 
     fn at(&self) -> String {
@@ -164,8 +175,7 @@ impl SlipmeshFile {
                 kind.name()
             );
         }
-        let topology: MeshConfig =
-            yaml_serde::from_value(network.value.clone()).with_context(|| network.at())?;
+        let topology: MeshConfig = network.deserialize()?;
         let hosts: Vec<String> = topology.nodes.into_iter().map(|n| n.name).collect();
 
         for targeted in rulesets.iter().chain(&patches) {
@@ -192,12 +202,10 @@ impl SlipmeshFile {
         }
 
         for pool in &pools {
-            yaml_serde::from_value::<RoadwarriorPool>(pool.value.clone())
-                .with_context(|| pool.at())?;
+            pool.deserialize::<RoadwarriorPool>()?;
         }
         for ruleset in &rulesets {
-            yaml_serde::from_value::<NftablesTopology>(ruleset.value.clone())
-                .with_context(|| ruleset.at())?;
+            ruleset.deserialize::<NftablesTopology>()?;
         }
         for host in &hosts {
             let lines: Vec<String> = rulesets
@@ -502,6 +510,23 @@ extraArgs:
             let err = error(&file(&[NETWORK, &ruleset(meta, "t")]));
             assert!(err.contains("node-z"), "{err}");
         }
+    }
+
+    #[test]
+    fn an_unknown_field_is_refused_at_the_line_it_is_written_on() {
+        let network = NETWORK.replace(
+            "  bgp_as: 64512\n",
+            "  bgp_as: 64512\n  metrics_port: 9586\n",
+        );
+        let raw = file(&[KUBELET, &network]);
+        let line = raw[..raw.find("  metrics_port").unwrap()]
+            .matches('\n')
+            .count()
+            + 1;
+        let err = error(&raw);
+        assert!(err.contains("cluster"), "{err}");
+        assert!(err.contains("metrics_port"), "{err}");
+        assert!(err.contains(&format!("line {line}")), "{err}");
     }
 
     #[test]
