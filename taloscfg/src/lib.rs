@@ -7,6 +7,7 @@ pub mod existing;
 pub mod keys;
 pub mod merge;
 pub mod mesh_config;
+pub mod migrate;
 pub mod obfuscation_gen;
 pub mod render;
 pub mod roadwarrior;

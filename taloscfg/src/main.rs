@@ -937,4 +937,200 @@ clients:
         paths.generate(None, false, false).unwrap();
         inspect().unwrap();
     }
+
+    /// The shape of a real repository, with nothing real in it: six hosts, one of them not a Talos
+    /// node, two booting from different disks, three plain links, a plain pool with its key written
+    /// out, an obfuscated pool with all nine fields written out, and a ruleset carrying a `---` line
+    /// and a line with a trailing space.
+    fn legacy_mesh_yaml() -> String {
+        let plain_key = taloscfg::keys::generate_private_key();
+        let obfuscated_key = taloscfg::keys::generate_private_key();
+        format!(
+            r#"bfd:
+  enable: true
+
+cluster:
+  bgp_as: 64512
+  loopback_networks: {{ipv4: "10.62.0.0/24", ipv6: "fd00:62::/120"}}
+  # the metrics ports every node listens on
+  awg_metrics_port: 9586
+
+nodes:
+  - {{name: node-a, node_id: "10.62.0.1", endpoint: "192.0.2.1"}}
+  - {{name: node-b, node_id: "10.62.0.2", endpoint: "192.0.2.2"}}
+  - {{name: node-c, node_id: "10.62.0.3", endpoint: "192.0.2.3"}}
+  - {{name: node-d, node_id: "10.62.0.4", endpoint: "192.0.2.4"}}
+  - {{name: node-e, node_id: "10.62.0.5"}}
+  - {{name: router-1, node_id: "10.62.0.6", endpoint: "192.0.2.6"}}
+
+mesh:
+  links:
+    - pair: [node-a, node-b]
+      port: 52801
+    - pair: [node-b, node-c]
+      port: 52802
+    - pair: [node-c, node-a]
+      port: 52803
+
+    - pair: [node-d, node-a]
+      port: 52821
+    - pair: [node-e, node-d]
+      port: 52886
+
+    - pair: [router-1, node-a]
+      port: 52891
+      plain: true
+    - pair: [router-1, node-b]
+      port: 52892
+      plain: true
+    - pair: [router-1, node-c]
+      port: 52893
+      plain: true
+
+roadwarriors:
+  - name: plain
+    node_hostnames: [node-a, node-b]
+    address: "198.51.100.1/24"
+    listen_port: 51820
+    private_key: "{plain_key}"
+    plain: true
+    clients:
+      - {{name: client-a, public_key: "AAA=", allowed_ips: ["198.51.100.2/32"]}}
+  - name: obfuscated
+    node_hostnames: [node-c]
+    address: "203.0.113.1/24"
+    listen_port: 51821
+    private_key: "{obfuscated_key}"
+    obfuscation:
+      jc: 4
+      jmin: 81
+      jmax: 408
+      s1: 1114
+      s2: 131
+      h1: 883683258
+      h2: 2249923740
+      h3: 891489045
+      h4: 2070706730
+    clients: []
+
+# prefixes that leave through the local uplink
+bypass:
+  - node: node-d
+    include:
+      - {{kind: literal, prefixes: [{{net: "203.0.113.128/25"}}]}}
+
+nftables:
+  ruleset: |
+    table inet talos_filter {{
+        chain input {{
+            type filter hook input priority filter; policy accept;
+    ---
+        }}
+    }}
+"#
+        )
+        // Written as a replacement rather than in the literal above, where an editor trimming
+        // trailing whitespace would take the space away without anyone noticing.
+        .replace("        chain input {\n", "        chain input { \n")
+    }
+
+    /// Hand-written documents the old generator kept in front of its own, by host.
+    fn legacy_hand_written(host: &str) -> Vec<String> {
+        match host {
+            "node-d" => vec![
+                "apiVersion: v1alpha1\nkind: UnattendedInstallConfig\ninstaller:\n    disk: /dev/vda"
+                    .to_owned(),
+            ],
+            "node-e" => vec![
+                "# a smaller box\napiVersion: v1alpha1\nkind: UnattendedInstallConfig\ninstaller:\n    disk: /dev/nvme0n1"
+                    .to_owned(),
+            ],
+            "router-1" => vec![
+                "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n  - content: |\n      password: \"x\" \n      -----BEGIN CERTIFICATE-----\n      MIIB\n      -----END CERTIFICATE-----\n    mountPath: /etc/device.yaml"
+                    .to_owned(),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    const HOSTS: [&str; 6] = ["node-a", "node-b", "node-c", "node-d", "node-e", "router-1"];
+
+    #[test]
+    fn a_migrated_repository_regenerates_its_patch_files_document_for_document() {
+        let mesh = legacy_mesh_yaml();
+        assert!(
+            mesh.contains("chain input { \n"),
+            "the fixture lost its trailing space"
+        );
+
+        // What the old generator left on disk: its documents per host, keys minted once, with the
+        // hand-written ones in front.
+        let first = temp_dir();
+        let bootstrap = taloscfg::migrate::migrate(&mesh, &first.join("none")).unwrap();
+        std::fs::write(first.join("slipmesh.yaml"), &bootstrap.slipmesh).unwrap();
+        std::fs::write(first.join("slipmesh-secrets.yaml"), &bootstrap.secrets).unwrap();
+        generate(
+            None,
+            false,
+            false,
+            &first.join("slipmesh.yaml"),
+            &first.join("slipmesh-secrets.yaml"),
+            &first.join("patches"),
+        )
+        .unwrap();
+        let legacy = temp_dir().join("patches");
+        std::fs::create_dir_all(&legacy).unwrap();
+        for host in HOSTS {
+            let generated =
+                std::fs::read_to_string(first.join("patches").join(format!("{host}.yaml")))
+                    .unwrap();
+            let generated = generated.strip_prefix(HEADER).unwrap();
+            // The old generator's layout: hand-written documents trimmed, its own as rendered,
+            // all joined by the one separator.
+            let hand_written = legacy_hand_written(host);
+            let file = if hand_written.is_empty() {
+                generated.to_owned()
+            } else {
+                format!("{}\n---\n{generated}", hand_written.join("\n---\n"))
+            };
+            std::fs::write(legacy.join(format!("{host}.yaml")), file).unwrap();
+        }
+
+        let dir = temp_dir();
+        let migration = taloscfg::migrate::migrate(&mesh, &legacy).unwrap();
+        assert!(migration.minted.is_empty(), "{:?}", migration.minted);
+        let paths = Paths {
+            config: dir.join("slipmesh.yaml"),
+            secrets: dir.join("slipmesh-secrets.yaml"),
+            patches: dir.join("patches"),
+        };
+        std::fs::write(&paths.config, &migration.slipmesh).unwrap();
+        std::fs::write(&paths.secrets, &migration.secrets).unwrap();
+        assert_eq!(
+            SlipmeshFile::parse(&migration.slipmesh)
+                .unwrap()
+                .topology()
+                .unwrap()
+                .roadwarriors
+                .len(),
+            2
+        );
+
+        paths.generate(None, false, false).unwrap();
+        for host in HOSTS {
+            let before = std::fs::read_to_string(legacy.join(format!("{host}.yaml"))).unwrap();
+            let after = paths.patch(host).unwrap();
+            assert_eq!(after, format!("{HEADER}{before}"), "{host}");
+        }
+
+        let settled = |p: &Paths| {
+            let mut files = vec![std::fs::read_to_string(&p.config).unwrap()];
+            files.push(std::fs::read_to_string(&p.secrets).unwrap());
+            files.extend(HOSTS.map(|h| p.patch(h).unwrap()));
+            files
+        };
+        let once = settled(&paths);
+        paths.generate(None, false, false).unwrap();
+        assert_eq!(settled(&paths), once);
+    }
 }

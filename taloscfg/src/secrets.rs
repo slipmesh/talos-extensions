@@ -295,7 +295,7 @@ fn minted_key(
 }
 
 /// The fields of `resolved` none of `layers` set - the ones this run generated.
-fn minted_obfuscation(
+pub(crate) fn minted_obfuscation(
     resolved: Option<&Obfuscation>,
     layers: &[&Obfuscation],
 ) -> Result<Option<Obfuscation>> {
