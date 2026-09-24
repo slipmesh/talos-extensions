@@ -523,7 +523,7 @@ roadwarriors:
     }
 
     fn secrets(mesh: &MeshConfig) -> ResolvedSecrets {
-        crate::render::resolve_secrets(mesh, &crate::secrets::SecretsFile::parse("").unwrap())
+        crate::render::resolve_secrets(mesh, &crate::render::NothingStored)
     }
 
     /// The `plain` pool as its own `slipmesh.yaml` document.

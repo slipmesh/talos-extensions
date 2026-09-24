@@ -1,5 +1,5 @@
-//! `generate`: reads `slipmesh.yaml`, settles the topology's secrets against
-//! `slipmesh-secrets.yaml`, computes every target node's `awg`/`router`/`nftables` config,
+//! `generate`: reads `slipmesh.yaml`, writes whatever secrets the topology lacks into the fields of
+//! `slipmesh.yaml` they belong to, computes every target node's `awg`/`router`/`nftables` config,
 //! validates each through the real daemon's own `validate()` (not a re-implementation - see the
 //! lib-target refactor this crate depends on), and writes `patches/<node>.yaml`: the `patch`
 //! documents aimed at that node, then the generated `ExtensionServiceConfig` documents. A patch
@@ -13,9 +13,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use taloscfg::secrets::SecretsFile;
 use taloscfg::slipmesh_file::SlipmeshFile;
-use taloscfg::{document, mesh_config, render, roadwarrior, segments};
+use taloscfg::{document, mesh_config, minted, render, roadwarrior, segments};
 
 #[derive(Parser)]
 #[command(
@@ -32,8 +31,8 @@ struct Cli {
 enum Command {
     /// Compute and write patches/<node>.yaml for one or every node in slipmesh.yaml.
     Generate {
-        /// Only this node's patch file, instead of every node's. Secrets are still settled for
-        /// the whole topology: a link's two ends need the same ones.
+        /// Only this node's patch file, instead of every node's. Secrets are still minted for the
+        /// whole topology: a link's two ends need the same ones.
         #[arg(long)]
         node: Option<String>,
         /// Validate only, don't write anything to disk.
@@ -44,8 +43,6 @@ enum Command {
         diff: bool,
         #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
-        #[arg(long, default_value = "slipmesh-secrets.yaml")]
-        secrets: PathBuf,
         #[arg(long, default_value = "patches")]
         patches_dir: PathBuf,
     },
@@ -81,8 +78,6 @@ enum Command {
         invert: bool,
         #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
-        #[arg(long, default_value = "slipmesh-secrets.yaml")]
-        secrets: PathBuf,
     },
     /// Remove a client from a roadwarriors pool in slipmesh.yaml.
     RwDel {
@@ -119,8 +114,6 @@ enum Command {
         invert: bool,
         #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
-        #[arg(long, default_value = "slipmesh-secrets.yaml")]
-        secrets: PathBuf,
     },
 }
 
@@ -132,16 +125,8 @@ fn main() -> Result<()> {
             check,
             diff,
             config,
-            secrets,
             patches_dir,
-        } => generate(
-            node.as_deref(),
-            check,
-            diff,
-            &config,
-            &secrets,
-            &patches_dir,
-        ),
+        } => generate(node.as_deref(), check, diff, &config, &patches_dir),
         Command::RwAdd {
             if_,
             name,
@@ -152,7 +137,6 @@ fn main() -> Result<()> {
             qr,
             invert,
             config,
-            secrets,
         } => rw_add(
             &if_,
             &name,
@@ -163,7 +147,6 @@ fn main() -> Result<()> {
             qr,
             invert,
             &config,
-            &secrets,
         ),
         Command::RwDel { if_, name, config } => rw_del(&if_, &name, &config),
         Command::RwInspect {
@@ -175,7 +158,6 @@ fn main() -> Result<()> {
             qr,
             invert,
             config,
-            secrets,
         } => rw_inspect(
             &if_,
             &name,
@@ -185,7 +167,6 @@ fn main() -> Result<()> {
             qr,
             invert,
             &config,
-            &secrets,
         ),
     }
 }
@@ -201,14 +182,14 @@ fn rw_add(
     qr: bool,
     invert: bool,
     config_path: &Path,
-    secrets_path: &Path,
 ) -> Result<()> {
     let (raw, file) = read_slipmesh(config_path)?;
+    // Minted and written in along with the client: a pool key minted for the exported config has
+    // to be the one `generate` puts on the wire, not a key that dies with this process.
+    let (secrets, raw) = settle_secrets(config_path, &raw, &file, false)?;
+    let file = SlipmeshFile::parse(&raw)?;
     let topology = file.topology()?;
     let span = pool_document(&file, &topology, if_)?;
-    // Settled and recorded before the client is added: a pool key minted for the exported config
-    // has to be the one `generate` puts on the wire, not a key that dies with this process.
-    let secrets = settle_secrets(&file, secrets_path, false)?;
 
     let (updated_pool, client_config) = roadwarrior::add(
         &topology,
@@ -263,11 +244,10 @@ fn rw_inspect(
     qr: bool,
     invert: bool,
     config_path: &Path,
-    secrets_path: &Path,
 ) -> Result<()> {
-    let (_, file) = read_slipmesh(config_path)?;
+    let (raw, file) = read_slipmesh(config_path)?;
     let topology = file.topology()?;
-    let secrets = settle_secrets(&file, secrets_path, true)?;
+    let (secrets, _) = settle_secrets(config_path, &raw, &file, true)?;
 
     let text = roadwarrior::inspect(&topology, &secrets, if_, name, private_key, endpoint)?;
 
@@ -313,8 +293,7 @@ fn write_edited(
     let updated = document::splice(raw, span, edited);
     SlipmeshFile::parse(&updated)
         .context("the edited slipmesh.yaml does not read back - not written")?;
-    std::fs::write(config_path, &updated)
-        .with_context(|| format!("writing {}", config_path.display()))
+    write_replacing(config_path, &updated)
 }
 
 /// Renders one owned `ExtensionServiceConfig` document: `name`/`mountPath` fixed by convention,
@@ -344,13 +323,9 @@ fn generate(
     check: bool,
     diff: bool,
     config_path: &Path,
-    secrets_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
-    let raw = std::fs::read_to_string(config_path)
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    let file =
-        SlipmeshFile::parse(&raw).with_context(|| format!("reading {}", config_path.display()))?;
+    let (raw, file) = read_slipmesh(config_path)?;
     let targets = match node {
         Some(n) => {
             anyhow::ensure!(file.hosts().contains(&n), "unknown node {n:?}");
@@ -359,7 +334,10 @@ fn generate(
         None => file.hosts(),
     };
 
-    let resolved = settle_secrets(&file, secrets_path, check || diff)?;
+    let (resolved, recorded) = settle_secrets(config_path, &raw, &file, check || diff)?;
+    if recorded != raw {
+        write_replacing(config_path, &recorded)?;
+    }
     // Every host is rendered and validated before any is written, so a host that fails leaves
     // the patch files as a set rather than half of them new.
     let hosts = render_hosts(&file, &resolved, &targets, patches_dir)?;
@@ -389,43 +367,37 @@ fn generate(
     Ok(())
 }
 
-/// Resolves the whole topology's secrets against the secrets file. On a write run, whatever that
-/// minted is recorded first; on a dry run, needing to mint anything is an error, since a minted
-/// value that is never written would differ on the next run.
+/// The whole topology's secrets, and `raw` with whatever they had to mint written into the fields
+/// it belongs to. On a dry run, needing to mint anything is an error instead: a value that is never
+/// written down would differ on the next run.
 fn settle_secrets(
+    config_path: &Path,
+    raw: &str,
     file: &SlipmeshFile,
-    secrets_path: &Path,
     dry_run: bool,
-) -> Result<render::ResolvedSecrets> {
-    let secrets = SecretsFile::read(secrets_path)?;
+) -> Result<(render::ResolvedSecrets, String)> {
     let topology = file.topology()?;
-    for orphan in secrets.orphans(&topology) {
-        eprintln!(
-            "warning: {orphan} in {} belongs to nothing in slipmesh.yaml - kept; delete it by \
-             hand if it is gone for good",
-            secrets_path.display()
-        );
+    let resolved = render::resolve_secrets(&topology, &render::NothingStored);
+    let minted = minted::minted(&topology, &resolved)?;
+    if minted.is_empty() {
+        return Ok((resolved, raw.to_owned()));
     }
-
-    let resolved = render::resolve_secrets(&topology, &secrets);
-    let additions = secrets.additions(&topology, &resolved)?;
-    if additions.is_empty() {
-        return Ok(resolved);
-    }
-    let routes = additions.routes().join(", ");
+    let routes = minted.routes().join(", ");
     anyhow::ensure!(
         !dry_run,
-        "{} lacks {routes} - run `slipmesh-taloscfg generate` to mint and record them",
-        secrets_path.display()
+        "{} lacks {routes} - run `slipmesh-taloscfg generate` to mint and write them",
+        config_path.display()
     );
 
-    write_replacing(secrets_path, &secrets.with(&additions)?)?;
-    println!("recorded {routes} in {}", secrets_path.display());
-    Ok(resolved)
+    let recorded = minted.record(raw, file)?;
+    SlipmeshFile::parse(&recorded)
+        .context("slipmesh.yaml with the minted values written in does not read back")?;
+    println!("minted {routes} into {}", config_path.display());
+    Ok((resolved, recorded))
 }
 
 /// Writes `content` to a sibling file and renames it over `path`, so an interrupted write cannot
-/// leave the secrets file half-written - a key lost that way is an identity rotated.
+/// leave the file half-written - a key lost that way is an identity rotated.
 fn write_replacing(path: &Path, content: &str) -> Result<()> {
     let mut temporary = path.as_os_str().to_owned();
     temporary.push(".tmp");
@@ -662,29 +634,32 @@ installer:
 
     struct Paths {
         config: PathBuf,
-        secrets: PathBuf,
         patches: PathBuf,
     }
 
     impl Paths {
         fn generate(&self, node: Option<&str>, check: bool, diff: bool) -> Result<()> {
-            generate(
-                node,
-                check,
-                diff,
-                &self.config,
-                &self.secrets,
-                &self.patches,
-            )
+            generate(node, check, diff, &self.config, &self.patches)
         }
 
         fn patch(&self, host: &str) -> Option<String> {
             std::fs::read_to_string(self.patches.join(format!("{host}.yaml"))).ok()
         }
 
+        fn config(&self) -> String {
+            std::fs::read_to_string(&self.config).unwrap()
+        }
+
+        fn topology(&self) -> mesh_config::MeshConfig {
+            SlipmeshFile::parse(&self.config())
+                .unwrap()
+                .topology()
+                .unwrap()
+        }
+
         /// Every file a run could have written, with what it holds.
         fn snapshot(&self) -> Vec<(PathBuf, Option<String>)> {
-            let mut paths = vec![self.secrets.clone()];
+            let mut paths = vec![self.config.clone()];
             paths.extend(["a", "b", "c", "d"].map(|h| self.patches.join(format!("{h}.yaml"))));
             paths
                 .into_iter()
@@ -702,9 +677,19 @@ installer:
         std::fs::write(&config, format!("{SLIPMESH}{extra_documents}")).unwrap();
         Paths {
             config,
-            secrets: dir.join("slipmesh-secrets.yaml"),
             patches: dir.join("patches"),
         }
+    }
+
+    #[test]
+    fn generate_writes_what_it_minted_into_slipmesh_yaml() {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
+        let topology = paths.topology();
+        for node in &topology.nodes {
+            assert!(node.mesh_private_key.is_some(), "{}", node.name);
+        }
+        assert!(topology.mesh.links[0].obfuscation.h1.is_some());
     }
 
     #[test]
@@ -733,9 +718,10 @@ installer:
     fn a_dry_run_that_would_mint_a_secret_fails_and_writes_nothing() {
         for (check, diff) in [(true, false), (false, true)] {
             let paths = setup("");
+            let before = paths.config();
             let err = paths.generate(None, check, diff).unwrap_err();
             assert!(format!("{err:#}").contains("generate"), "{err:#}");
-            assert!(!paths.secrets.exists());
+            assert_eq!(paths.config(), before);
             assert!(!paths.patches.exists());
         }
     }
@@ -754,9 +740,10 @@ installer:
     fn two_dry_runs_render_the_same() {
         let paths = setup("");
         paths.generate(None, false, false).unwrap();
-        let file = SlipmeshFile::parse(&std::fs::read_to_string(&paths.config).unwrap()).unwrap();
+        let raw = paths.config();
+        let file = SlipmeshFile::parse(&raw).unwrap();
         let render = || {
-            let resolved = settle_secrets(&file, &paths.secrets, true).unwrap();
+            let (resolved, _) = settle_secrets(&paths.config, &raw, &file, true).unwrap();
             render_hosts(&file, &resolved, &["a", "b", "c", "d"], &paths.patches)
                 .unwrap()
                 .into_iter()
@@ -834,8 +821,9 @@ clients:
     #[test]
     fn rw_add_edits_only_the_pools_own_document() {
         let paths = setup(POOLS);
+        // Minted first, so that the only change the client makes is its own.
+        paths.generate(None, false, false).unwrap();
         let (before, span) = pool_span(&paths, "first");
-
         rw_add(
             "first",
             "dave",
@@ -846,7 +834,6 @@ clients:
             false,
             false,
             &paths.config,
-            &paths.secrets,
         )
         .unwrap();
 
@@ -882,7 +869,6 @@ clients:
             false,
             false,
             &paths.config,
-            &paths.secrets,
         )
         .unwrap_err();
         let err = format!("{err:#}");
@@ -890,7 +876,7 @@ clients:
     }
 
     #[test]
-    fn rw_add_records_the_pool_key_its_exported_config_was_built_with() {
+    fn rw_add_writes_down_the_pool_key_its_exported_config_was_built_with() {
         // The key used to be generated for the exported config and then thrown away, so the next
         // `generate` minted a different one and the exported config never connected.
         let paths = setup(POOLS);
@@ -904,18 +890,17 @@ clients:
             false,
             false,
             &paths.config,
-            &paths.secrets,
         )
         .unwrap();
 
-        let secrets = SecretsFile::read(&paths.secrets).unwrap();
-        use render::ExistingState;
-        assert!(secrets.roadwarrior_private_key("first").is_some());
+        let topology = paths.topology();
+        assert!(topology.roadwarriors[0].private_key.is_some());
+        assert_eq!(topology.roadwarriors[0].clients[0].name, "dave");
         paths.generate(None, true, false).unwrap();
     }
 
     #[test]
-    fn rw_inspect_needs_the_pool_key_to_be_recorded_already() {
+    fn rw_inspect_needs_the_pool_key_to_be_written_down_already() {
         let paths = setup(POOLS);
         let inspect = || {
             rw_inspect(
@@ -927,12 +912,12 @@ clients:
                 false,
                 false,
                 &paths.config,
-                &paths.secrets,
             )
         };
+        let before = paths.config();
         let err = inspect().unwrap_err();
         assert!(format!("{err:#}").contains("generate"), "{err:#}");
-        assert!(!paths.secrets.exists());
+        assert_eq!(paths.config(), before);
 
         paths.generate(None, false, false).unwrap();
         inspect().unwrap();
@@ -1068,13 +1053,11 @@ nftables:
         let first = temp_dir();
         let bootstrap = taloscfg::migrate::migrate(&mesh, &first.join("none")).unwrap();
         std::fs::write(first.join("slipmesh.yaml"), &bootstrap.slipmesh).unwrap();
-        std::fs::write(first.join("slipmesh-secrets.yaml"), &bootstrap.secrets).unwrap();
         generate(
             None,
             false,
             false,
             &first.join("slipmesh.yaml"),
-            &first.join("slipmesh-secrets.yaml"),
             &first.join("patches"),
         )
         .unwrap();
@@ -1101,11 +1084,9 @@ nftables:
         assert!(migration.minted.is_empty(), "{:?}", migration.minted);
         let paths = Paths {
             config: dir.join("slipmesh.yaml"),
-            secrets: dir.join("slipmesh-secrets.yaml"),
             patches: dir.join("patches"),
         };
         std::fs::write(&paths.config, &migration.slipmesh).unwrap();
-        std::fs::write(&paths.secrets, &migration.secrets).unwrap();
         assert_eq!(
             SlipmeshFile::parse(&migration.slipmesh)
                 .unwrap()
@@ -1124,8 +1105,7 @@ nftables:
         }
 
         let settled = |p: &Paths| {
-            let mut files = vec![std::fs::read_to_string(&p.config).unwrap()];
-            files.push(std::fs::read_to_string(&p.secrets).unwrap());
+            let mut files = vec![p.config()];
             files.extend(HOSTS.map(|h| p.patch(h).unwrap()));
             files
         };

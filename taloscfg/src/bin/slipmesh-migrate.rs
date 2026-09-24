@@ -1,6 +1,6 @@
-//! `slipmesh-migrate`: moves `mesh.yaml` and the hand-edited patch files to `slipmesh.yaml` and
-//! `slipmesh-secrets.yaml`, once. It writes the two new files and touches nothing else; the patch
-//! files are regenerated from them afterwards by `slipmesh-taloscfg generate`.
+//! `slipmesh-migrate`: moves `mesh.yaml` and the hand-edited patch files to `slipmesh.yaml`, once.
+//! It writes the new file and touches nothing else; the patch files are regenerated from it
+//! afterwards by `slipmesh-taloscfg generate`.
 
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
@@ -11,7 +11,7 @@ use taloscfg::migrate::migrate;
 #[command(
     name = "slipmesh-migrate",
     version,
-    about = "Moves mesh.yaml and hand-edited patch files to slipmesh.yaml and slipmesh-secrets.yaml"
+    about = "Moves mesh.yaml and hand-edited patch files to slipmesh.yaml"
 )]
 struct Cli {
     #[arg(long, default_value = "mesh.yaml")]
@@ -22,19 +22,15 @@ struct Cli {
     patches_dir: PathBuf,
     #[arg(long, default_value = "slipmesh.yaml")]
     out: PathBuf,
-    #[arg(long, default_value = "slipmesh-secrets.yaml")]
-    out_secrets: PathBuf,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    for path in [&cli.out, &cli.out_secrets] {
-        ensure!(
-            !path.exists(),
-            "{} already exists - a migration writes it from scratch and would replace it",
-            path.display()
-        );
-    }
+    ensure!(
+        !cli.out.exists(),
+        "{} already exists - a migration writes it from scratch and would replace it",
+        cli.out.display()
+    );
 
     let mesh = std::fs::read_to_string(&cli.mesh)
         .with_context(|| format!("reading {}", cli.mesh.display()))?;
@@ -50,12 +46,9 @@ fn main() -> Result<()> {
 
     std::fs::write(&cli.out, &migration.slipmesh)
         .with_context(|| format!("writing {}", cli.out.display()))?;
-    std::fs::write(&cli.out_secrets, &migration.secrets)
-        .with_context(|| format!("writing {}", cli.out_secrets.display()))?;
     println!(
-        "wrote {} and {} - `slipmesh-taloscfg generate --diff` shows what they regenerate",
-        cli.out.display(),
-        cli.out_secrets.display()
+        "wrote {} - `slipmesh-taloscfg generate --diff` shows what it regenerates",
+        cli.out.display()
     );
     Ok(())
 }

@@ -39,6 +39,27 @@ pub trait ExistingState {
     fn roadwarrior_obfuscation(&self, pool_name: &str) -> Option<Obfuscation>;
 }
 
+/// Nothing kept outside the topology: every secret is either written in it or minted.
+pub struct NothingStored;
+
+impl ExistingState for NothingStored {
+    fn mesh_private_key(&self, _: &str) -> Option<String> {
+        None
+    }
+
+    fn mesh_link_obfuscation(&self, _: &[String; 2]) -> Option<Obfuscation> {
+        None
+    }
+
+    fn roadwarrior_private_key(&self, _: &str) -> Option<String> {
+        None
+    }
+
+    fn roadwarrior_obfuscation(&self, _: &str) -> Option<Obfuscation> {
+        None
+    }
+}
+
 /// Resolved once for the whole topology - see this module's doc comment for why these two can't
 /// be resolved independently per node.
 pub struct ResolvedSecrets {

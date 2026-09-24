@@ -1,6 +1,5 @@
-//! The one-shot move from `mesh.yaml` and hand-edited patch files to `slipmesh.yaml` and
-//! `slipmesh-secrets.yaml`. Used by the `slipmesh-migrate` binary, and gone with it once no
-//! `mesh.yaml` is left to migrate.
+//! The one-shot move from `mesh.yaml` and hand-edited patch files to `slipmesh.yaml`. Used by the
+//! `slipmesh-migrate` binary, and gone with it once no `mesh.yaml` is left to migrate.
 //!
 //! It carries today's behaviour over and fixes nothing on the way, so that `generate` on its
 //! output reproduces the patch files it was given document for document - that is how a
@@ -9,23 +8,22 @@
 use crate::document;
 use crate::existing::FileExistingState;
 use crate::mesh_config::{self, MeshConfig};
+use crate::minted::{self, generated_fields};
 use crate::render::{self, ExistingState, link_key};
-use crate::secrets::{SecretsFile, minted_obfuscation};
 use crate::segments;
 use crate::slipmesh_file::SlipmeshFile;
 use anyhow::{Context, Result};
-use common::Obfuscation;
 use std::path::Path;
 
 pub struct Migration {
     pub slipmesh: String,
-    pub secrets: String,
     /// Routes of secrets found nowhere on disk and minted by the migration - a new identity for a
     /// node or pool that already had one would show up here.
     pub minted: Vec<String>,
 }
 
-/// Builds both files from `mesh_yaml` and the patch files in `patches_dir`, one per node in it.
+/// Builds `slipmesh.yaml` from `mesh_yaml` and the patch files in `patches_dir`, one per node in
+/// it. The keys and obfuscation the patch files carry are written into the fields they belong to.
 pub fn migrate(mesh_yaml: &str, patches_dir: &Path) -> Result<Migration> {
     let mesh: MeshConfig = yaml_serde::from_str(mesh_yaml).context("reading mesh.yaml")?;
     mesh_config::validate(&mesh).context("mesh.yaml failed validation")?;
@@ -37,8 +35,6 @@ pub fn migrate(mesh_yaml: &str, patches_dir: &Path) -> Result<Migration> {
 
     for index in 0..mesh.roadwarriors.len() {
         let pool = block_at(&parsed, &yamlpath::route!["roadwarriors", index])?;
-        // The key moves to the secrets file: slipmesh.yaml holds nothing secret.
-        let pool = document::remove_key(&pool, "private_key")?;
         documents.push(format!("slipmesh:\n  kind: roadwarriors\n{pool}"));
     }
     if mesh.nftables.is_some() {
@@ -72,62 +68,27 @@ pub fn migrate(mesh_yaml: &str, patches_dir: &Path) -> Result<Migration> {
         SlipmeshFile::parse(&slipmesh).context("the migrated slipmesh.yaml does not read back")?;
     let topology = file.topology()?;
 
-    let on_disk = OnDisk {
-        mesh: &mesh,
-        patches: FileExistingState::new(&mesh, patches_dir)?,
-    };
-    let resolved = render::resolve_secrets(&topology, &on_disk);
-    let empty = SecretsFile::parse("")?;
-    let secrets = empty.with(&empty.additions(&topology, &resolved)?)?;
+    let patches = FileExistingState::new(&mesh, patches_dir)?;
+    let resolved = render::resolve_secrets(&topology, &patches);
+    let recorded = minted::minted(&topology, &resolved)?.record(&slipmesh, &file)?;
 
     Ok(Migration {
-        slipmesh,
-        secrets,
-        minted: minted(&topology, &on_disk, &resolved)?,
+        slipmesh: recorded,
+        minted: fresh(&topology, &patches, &resolved)?,
     })
 }
 
-/// What `mesh.yaml` and the patch files hold between them: a key written in `mesh.yaml`, else the
-/// one the patch files carry.
-struct OnDisk<'a> {
-    mesh: &'a MeshConfig,
-    patches: FileExistingState<'a>,
-}
-
-impl ExistingState for OnDisk<'_> {
-    fn mesh_private_key(&self, node_name: &str) -> Option<String> {
-        let written = self.mesh.nodes.iter().find(|n| n.name == node_name);
-        written
-            .and_then(|n| n.mesh_private_key.clone())
-            .or_else(|| self.patches.mesh_private_key(node_name))
-    }
-
-    fn mesh_link_obfuscation(&self, pair: &[String; 2]) -> Option<Obfuscation> {
-        self.patches.mesh_link_obfuscation(pair)
-    }
-
-    fn roadwarrior_private_key(&self, pool_name: &str) -> Option<String> {
-        let written = self.mesh.roadwarriors.iter().find(|p| p.name == pool_name);
-        written
-            .and_then(|p| p.private_key.clone())
-            .or_else(|| self.patches.roadwarrior_private_key(pool_name))
-    }
-
-    fn roadwarrior_obfuscation(&self, pool_name: &str) -> Option<Obfuscation> {
-        self.patches.roadwarrior_obfuscation(pool_name)
-    }
-}
-
-/// Routes of what `resolved` had to generate because nothing on disk held it.
-fn minted(
+/// Routes of what `resolved` had to generate because neither the topology nor the patch files
+/// held it.
+fn fresh(
     topology: &MeshConfig,
-    on_disk: &OnDisk,
+    patches: &FileExistingState,
     resolved: &render::ResolvedSecrets,
 ) -> Result<Vec<String>> {
     let mut out = Vec::new();
     for node in &topology.nodes {
-        if on_disk.mesh_private_key(&node.name).is_none() {
-            out.push(format!("nodes.{}.mesh_private_key", node.name));
+        if node.mesh_private_key.is_none() && patches.mesh_private_key(&node.name).is_none() {
+            out.push(format!("nodes[{}].mesh_private_key", node.name));
         }
     }
     for link in topology.mesh.links.iter().filter(|l| !l.plain) {
@@ -135,17 +96,17 @@ fn minted(
         let layers = [
             &link.obfuscation,
             &topology.obfuscation,
-            &on_disk
+            &patches
                 .mesh_link_obfuscation(&link.pair)
                 .unwrap_or_default(),
         ];
-        if minted_obfuscation(resolved.mesh_link_obfuscation.get(&key), &layers)?.is_some() {
-            out.push(format!("links.{key}.obfuscation"));
+        if generated_fields(resolved.mesh_link_obfuscation.get(&key), &layers)?.is_some() {
+            out.push(format!("mesh.links[{key}].obfuscation"));
         }
     }
     for pool in &topology.roadwarriors {
-        if on_disk.roadwarrior_private_key(&pool.name).is_none() {
-            out.push(format!("roadwarriors.{}.private_key", pool.name));
+        if pool.private_key.is_none() && patches.roadwarrior_private_key(&pool.name).is_none() {
+            out.push(format!("roadwarriors[{}].private_key", pool.name));
         }
         if pool.plain {
             continue;
@@ -153,13 +114,12 @@ fn minted(
         let layers = [
             &pool.obfuscation,
             &topology.obfuscation,
-            &on_disk
+            &patches
                 .roadwarrior_obfuscation(&pool.name)
                 .unwrap_or_default(),
         ];
-        if minted_obfuscation(resolved.roadwarrior_obfuscation.get(&pool.name), &layers)?.is_some()
-        {
-            out.push(format!("roadwarriors.{}.obfuscation", pool.name));
+        if generated_fields(resolved.roadwarrior_obfuscation.get(&pool.name), &layers)?.is_some() {
+            out.push(format!("roadwarriors[{}].obfuscation", pool.name));
         }
     }
     Ok(out)
@@ -206,8 +166,6 @@ fn block_at(parsed: &yamlpath::Document, route: &yamlpath::Route) -> Result<Stri
 mod tests {
     use super::*;
     use crate::keys;
-    use crate::render::ExistingState;
-    use crate::secrets::SecretsFile;
     use crate::slipmesh_file::SlipmeshFile;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -325,12 +283,15 @@ nftables:
         crate::document::split(slipmesh).unwrap()
     }
 
+    fn topology(slipmesh: &str) -> MeshConfig {
+        SlipmeshFile::parse(slipmesh).unwrap().topology().unwrap()
+    }
+
     #[test]
     fn the_output_reads_as_slipmesh_yaml() {
         let migration = fixture().migration;
         let file = SlipmeshFile::parse(&migration.slipmesh).unwrap();
         assert_eq!(file.hosts(), ["node-a", "node-b"]);
-        SecretsFile::parse(&migration.secrets).unwrap();
     }
 
     #[test]
@@ -354,7 +315,7 @@ nftables:
     }
 
     #[test]
-    fn each_pool_is_its_own_document_with_its_key_moved_out() {
+    fn each_pool_is_its_own_document_as_written() {
         let fixture = fixture();
         let slipmesh = &fixture.migration.slipmesh;
         let pools: Vec<_> = documents(slipmesh)
@@ -364,19 +325,14 @@ nftables:
         assert_eq!(pools.len(), 2, "{slipmesh}");
         assert!(pools[0].contains("\nname: plain\n"), "{}", pools[0]);
         assert!(
-            pools[0].contains("# clients get added by rw-add\nclients:\n  - {name: client-a"),
+            pools[0].contains(&format!(
+                "private_key: \"{}\"\nplain: true\n# clients get added by rw-add\nclients:\n  - {{name: client-a",
+                fixture.pool_key
+            )),
             "{}",
             pools[0]
         );
-        assert!(!pools[0].contains("private_key"), "{}", pools[0]);
         assert!(!pools[1].contains("bypasses"), "{}", pools[1]);
-        assert!(!slipmesh.contains(&fixture.pool_key));
-
-        let secrets = SecretsFile::parse(&fixture.migration.secrets).unwrap();
-        assert_eq!(
-            secrets.roadwarrior_private_key("plain").as_deref(),
-            Some(fixture.pool_key.as_str())
-        );
     }
 
     #[test]
@@ -404,19 +360,18 @@ nftables:
     }
 
     #[test]
-    fn keys_and_obfuscation_come_from_the_patch_files() {
+    fn keys_and_obfuscation_from_the_patch_files_are_written_into_their_fields() {
         let fixture = fixture();
-        let secrets = SecretsFile::parse(&fixture.migration.secrets).unwrap();
+        let topology = topology(&fixture.migration.slipmesh);
         assert_eq!(
-            secrets.mesh_private_key("node-a").as_deref(),
+            topology.nodes[0].mesh_private_key.as_deref(),
             Some(fixture.node_a_key.as_str())
         );
         assert_eq!(
-            secrets.mesh_private_key("node-b").as_deref(),
+            topology.nodes[1].mesh_private_key.as_deref(),
             Some(fixture.node_b_key.as_str())
         );
-        let pair = ["node-a".to_owned(), "node-b".to_owned()];
-        assert_eq!(secrets.mesh_link_obfuscation(&pair).unwrap().jc, Some(9));
+        assert_eq!(topology.mesh.links[0].obfuscation.jc, Some(9));
         assert!(
             fixture.migration.minted.is_empty(),
             "{:?}",
@@ -425,9 +380,14 @@ nftables:
     }
 
     #[test]
-    fn a_pool_with_its_obfuscation_written_out_records_no_obfuscation() {
-        let secrets = SecretsFile::parse(&fixture().migration.secrets).unwrap();
-        assert_eq!(secrets.roadwarrior_obfuscation("obfuscated"), None);
+    fn a_pool_with_its_obfuscation_written_out_gets_nothing_added() {
+        let slipmesh = fixture().migration.slipmesh;
+        let pool = documents(&slipmesh)
+            .into_iter()
+            .find(|d| d.contains("\nname: obfuscated\n"))
+            .unwrap();
+        assert_eq!(pool.matches("obfuscation").count(), 1, "{pool}");
+        assert_eq!(topology(&slipmesh).roadwarriors[1].obfuscation.jc, Some(4));
     }
 
     #[test]
@@ -437,9 +397,14 @@ nftables:
         assert!(
             migration
                 .minted
-                .contains(&"nodes.node-a.mesh_private_key".to_owned()),
+                .contains(&"nodes[node-a].mesh_private_key".to_owned()),
             "{:?}",
             migration.minted
+        );
+        assert!(
+            topology(&migration.slipmesh).nodes[0]
+                .mesh_private_key
+                .is_some()
         );
     }
 }

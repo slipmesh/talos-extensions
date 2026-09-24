@@ -124,6 +124,7 @@ pub struct HostDocument {
 
 pub struct SlipmeshFile {
     network: Value,
+    network_span: Range<usize>,
     hosts: Vec<String>,
     pools: Vec<Document>,
     rulesets: Vec<Document>,
@@ -243,6 +244,7 @@ impl SlipmeshFile {
         }
 
         let parsed = Self {
+            network_span: network.span,
             network: network.value,
             hosts,
             pools,
@@ -251,6 +253,11 @@ impl SlipmeshFile {
         };
         parsed.topology()?;
         Ok(parsed)
+    }
+
+    /// The byte range of the `network` document - where an edit to the topology is spliced back.
+    pub fn network_span(&self) -> Range<usize> {
+        self.network_span.clone()
     }
 
     /// The byte range of the `roadwarriors` document holding pool `name` - where an edit to that
