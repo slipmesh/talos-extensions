@@ -3,6 +3,7 @@
 
 pub mod addressing;
 pub mod document;
+pub mod emit;
 pub mod existing;
 pub mod keys;
 pub mod merge;
