@@ -3,11 +3,11 @@
 //! (comments, existing flow-style entries, unrelated pools).
 //!
 //! Each pool is its own document in `slipmesh.yaml`, and the functions here edit that one document;
-//! `main.rs` splices it back into the file. The edit goes through `yamlpatch`
-//! (comment/format-preserving YAML patch operations, part of the `zizmor` project), addressed by
-//! numeric `Route` (no path-predicate syntax - a client's index has to be found by hand first, see
+//! `main.rs` splices it back into the file. Edits are addressed by `yamlpath` `Route` (no
+//! path-predicate syntax - a client's index has to be found by hand first, see
 //! `find_client_index`), not by a hand-rolled text scan: a scan cannot add an entry without
-//! reflowing what surrounds it.
+//! reflowing what surrounds it. A client is removed through `yamlpatch` and added through `emit`,
+//! in the layout sops writes the file in.
 
 use crate::addressing;
 use crate::keys;
@@ -259,7 +259,7 @@ pub fn render_qr(config_text: &str, invert: bool) -> Result<String> {
     Ok(renderer.build())
 }
 
-/// `yaml_serde::Value` for one flow-style client entry - name/public_key/allowed_ips, matching
+/// `yaml_serde::Value` for one client entry - name/public_key/allowed_ips, matching
 /// `RoadwarriorClient`'s own field set.
 fn client_value(name: &str, public_key: &str, allowed_ips: &[String]) -> yaml_serde::Value {
     let mut map = yaml_serde::Mapping::new();
@@ -272,75 +272,11 @@ fn client_value(name: &str, public_key: &str, allowed_ips: &[String]) -> yaml_se
     yaml_serde::Value::Mapping(map)
 }
 
-/// `yamlpatch::serialize_flow` pads `{ ` / ` }` - mesh.yaml's existing convention doesn't.
-fn flow_style(value: &yaml_serde::Value) -> Result<String> {
-    let s = yamlpatch::serialize_flow(value).context("rendering flow-style YAML")?;
-    let s = s
-        .strip_prefix("{ ")
-        .map(|rest| format!("{{{rest}"))
-        .unwrap_or(s);
-    let s = s
-        .strip_suffix(" }")
-        .map(|rest| format!("{rest}}}"))
-        .unwrap_or(s);
-    Ok(s)
-}
-
-/// Appends one flow-style item to an existing block-sequence feature, in the same style
-/// `mesh.yaml`'s existing client entries already use.
-fn append_flow_item(
-    doc: &yamlpath::Document,
-    feature: &yamlpath::Feature,
-    value: &yaml_serde::Value,
-) -> Result<String> {
-    let indent = yamlpatch::extract_leading_whitespace(doc, feature);
-    let value_str = flow_style(value)?;
-    let insertion_point = yamlpatch::find_content_end(feature, doc);
-    let source = doc.source();
-    let needs_leading_newline = !source[..insertion_point].ends_with('\n');
-    let mut new_item = String::new();
-    if needs_leading_newline {
-        new_item.push('\n');
-    }
-    new_item.push_str(&format!("{indent}- {value_str}"));
-    let mut result = source.to_string();
-    result.insert_str(insertion_point, &new_item);
-    Ok(result)
-}
-
-/// A pool whose `clients:` is still `[]` (empty flow sequence) doesn't go through
-/// `append_flow_item` - `yamlpath`/`yamlpatch` only support appending onto a *block* sequence.
-/// Replace the `[]` span directly with a one-item block sequence instead.
-fn replace_empty_flow_sequence(
-    doc: &yamlpath::Document,
-    feature: &yamlpath::Feature,
-    value: &yaml_serde::Value,
-) -> Result<String> {
-    let indent = yamlpatch::extract_leading_whitespace(doc, feature);
-    let value_str = flow_style(value)?;
-    let (start, end) = feature.location.byte_span;
-    let mut result = doc.source().to_string();
-    result.replace_range(start..end, &format!("\n{indent}- {value_str}"));
-    Ok(result)
-}
-
 /// Adds one client to the `clients` of `pool_document`, returning the whole updated document.
 /// Everything outside that one sequence - comments, the rest of the pool, formatting - is untouched.
 pub(crate) fn add_client_to_yaml(pool_document: &str, value: &yaml_serde::Value) -> Result<String> {
-    let doc = yamlpath::Document::new(pool_document).context("parsing the pool document")?;
-    let route = yamlpath::route!["clients"];
-    let feature = yamlpatch::route_to_feature_exact(&route, &doc)
-        .context("querying clients list")?
-        .context("pool has no clients list")?;
-    match yamlpatch::Style::from_feature(&feature, &doc) {
-        yamlpatch::Style::BlockSequence => append_flow_item(&doc, &feature, value),
-        yamlpatch::Style::FlowSequence if doc.extract(&feature).trim() == "[]" => {
-            replace_empty_flow_sequence(&doc, &feature, value)
-        }
-        other => {
-            bail!("clients list has unsupported YAML style {other:?} - expected a block sequence")
-        }
-    }
+    crate::emit::append_to_sequence(pool_document, &yamlpath::route!["clients"], value)
+        .context("adding the client to the pool's clients list")
 }
 
 /// Removes `clients[client_index]` from `pool_document`, returning the whole updated document -
@@ -707,12 +643,12 @@ roadwarriors:
     }
 
     #[test]
-    fn add_client_to_yaml_appends_flow_style_and_leaves_the_rest_untouched() {
+    fn add_client_to_yaml_appends_a_block_entry_and_leaves_the_rest_untouched() {
         let value = client_value("dave", "DDD=", &["198.51.100.99/32".to_string()]);
         let out = add_client_to_yaml(PLAIN_POOL, &value).unwrap();
         let expected = PLAIN_POOL.to_owned()
-            + r#"  - {name: dave, public_key: "DDD=", allowed_ips: ["198.51.100.99/32"]}"#;
-        assert_eq!(out.trim_end(), expected);
+            + "  - name: dave\n    public_key: DDD=\n    allowed_ips:\n        - 198.51.100.99/32\n";
+        assert_eq!(out, expected);
     }
 
     #[test]
@@ -747,7 +683,10 @@ clients: []
         let value = client_value("eve", "EEE=", &["198.51.100.5/32".to_string()]);
         let out = add_client_to_yaml(src, &value).unwrap();
         assert!(
-            out.contains(r#"- {name: eve, public_key: "EEE=", allowed_ips: ["198.51.100.5/32"]}"#)
+            out.ends_with(
+                "clients:\n    - name: eve\n      public_key: EEE=\n      allowed_ips:\n        - 198.51.100.5/32\n"
+            ),
+            "{out}"
         );
     }
 
