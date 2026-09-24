@@ -454,12 +454,14 @@ encrypts the result back only if it changed:
 
 ```sh
 sops exec-file --no-fifo slipmesh.yaml 'slipmesh-taloscfg generate --diff --config {}'
-EDITOR='slipmesh-taloscfg generate --config' sops edit slipmesh.yaml
-EDITOR='slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 10.62.253.5/32 --export --config' \
+SOPS_EDITOR='slipmesh-taloscfg generate --config' sops edit slipmesh.yaml
+SOPS_EDITOR='slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 10.62.253.5/32 --export --config' \
   sops edit slipmesh.yaml
 ```
 
-`sops edit` exits with 200 when nothing changed, and writes nothing back when the tool fails.
+`SOPS_EDITOR` rather than `EDITOR`: sops reads it first, so an editor set there would be opened
+instead. `sops edit` exits with 200 when nothing changed, and writes nothing back when the tool
+fails.
 `--no-fifo` is for systems without named pipes, Windows among them. sops writes the whole file in
 its own layout, so the first encryption reformats it once; after that, a change shows in the file
 as the lines of that change and sops' `mac`.
