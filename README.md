@@ -374,23 +374,45 @@ without a key would leave no way to remove an element. A document that comes fro
 into the patch file as written; a merged one is re-serialized, which loses its comments, and
 `generate` names it when that happens.
 
+A file a `patch` document carries in `configFiles[].content` may be written as YAML - a mapping or
+a list - rather than as a string. Talos takes only a string there, so the patch file gets that
+YAML's text; comments inside it do not carry over. Written this way, each field of the file is a
+field of `slipmesh.yaml`, which is what lets a password be encrypted without the host beside it:
+
+```yaml
+slipmesh:
+  kind: patch
+  include: [router-1]
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: mikrotik
+configFiles:
+  - mountPath: /etc/talos-extensions/mikrotik.yaml
+    content:
+      host: router1.example.com
+      port: 8729
+      username: admin
+      password: hunter2
+```
+
 ### Secrets
 
 Everything derivable is derived: interface names and link-local/loopback addressing fall out of
 the topology rather than being written by hand, and only the public half of a peer's key ever
-appears in the other end's config. Keys aren't derivable, so they're generated once and kept in
-`slipmesh-secrets.yaml`, beside `slipmesh.yaml`: each node's mesh key, each pool's key, and the
-obfuscation fields a link or pool left for the tool to generate.
+appears in the other end's config. Keys aren't derivable, so the tool generates them once and
+writes them into `slipmesh.yaml` itself, into the fields an operator would otherwise fill in by
+hand: `nodes[].mesh_private_key`, a pool document's `private_key`, and whichever `obfuscation`
+fields a link or pool leaves unset.
 
-Only what the tool minted goes there. A value written in `slipmesh.yaml` is never copied in, so
-removing it there really removes it, and a key written in both places with different values is an
-error rather than one of them silently winning. A regeneration never rotates a key it has already
-issued; deleting one from the file does, for that node or pool and every peer of it. An entry whose
-node or pool is gone from `slipmesh.yaml` is kept and reported, not pruned.
+Written, a value is the operator's like any other. A regeneration never rotates a key that is
+written down; deleting one does, for that node, link or pool and every peer of it. Only what the
+tool generated is written: a field set on the entry or in the global `obfuscation` is never copied
+down, and neither are `random_trailers` and `disable_cookies`, which are never generated. Taking a
+node out of the `network` document takes its key with it, so putting it back mints a new one.
 
-It is a file of its own so it can be encrypted with sops without turning the topology into
-ciphertext. The patch files carry the same keys in the clear, since that is what Talos reads, so
-encrypting it alone protects nothing while the patch files sit beside it.
+What the tool adds goes in as block entries laid out the way sops lays out YAML - nested four
+columns deeper, a mapping in a list two columns past the dash - so that encrypting the file moves
+nothing the tool wrote. An entry written in flow style, `{...}`, takes an addition in flow style.
 
 Each rendered config is validated through the real daemon's own `validate()` - the daemons are
 depended on as libraries here, so there is no second implementation to drift.
@@ -401,10 +423,51 @@ slipmesh-taloscfg generate --node node-a --diff # one node, print what would cha
 slipmesh-taloscfg generate --check              # validate only
 ```
 
-Every run settles the secrets of the whole topology, whichever nodes it renders, and renders and
-validates every node before it writes any. `--check` and `--diff` never write: when a secret would
-have to be minted they stop and name it, because a key minted and not kept would differ on the next
-run.
+Every run mints for the whole topology, whichever nodes it renders, and renders and validates every
+node before it writes any patch file. `--check` and `--diff` never write: when a secret would have
+to be minted they stop and name it, because a key minted and not kept would differ on the next run.
+
+### Encrypting `slipmesh.yaml`
+
+The tool reads and writes plain YAML and knows nothing of encryption. To keep the secrets in
+`slipmesh.yaml` out of the clear, have sops encrypt just those fields; everything else stays
+readable, and so do diffs:
+
+```yaml
+# .sops.yaml
+creation_rules:
+  - path_regex: (^|/)slipmesh\.yaml$
+    encrypted_regex: ^(mesh_private_key|private_key|obfuscation|password)$
+    mac_only_encrypted: true
+    age: age1...
+```
+
+`mac_only_encrypted` lets the unencrypted part be edited in any editor: changing a value, adding a
+node. Removing or reordering anything that holds an encrypted value goes through `sops edit`, since
+sops checks those against its MAC. A field the regex matches is written through sops or by the
+tool, never typed in by hand - plaintext in it fails decryption. A secret under a name the regex
+does not list stays in the clear, so a new one needs adding to it.
+
+The tool then runs through sops. Reading, sops decrypts to a temporary file and passes its path;
+writing, sops runs the tool in place of an editor, with the temporary file's path appended, and
+encrypts the result back only if it changed:
+
+```sh
+sops exec-file --no-fifo slipmesh.yaml 'slipmesh-taloscfg generate --diff --config {}'
+EDITOR='slipmesh-taloscfg generate --config' sops edit slipmesh.yaml
+EDITOR='slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 10.62.253.5/32 --export --config' \
+  sops edit slipmesh.yaml
+```
+
+`sops edit` exits with 200 when nothing changed, and writes nothing back when the tool fails.
+`--no-fifo` is for systems without named pipes, Windows among them. sops writes the whole file in
+its own layout, so the first encryption reformats it once; after that, a change shows in the file
+as the lines of that change and sops' `mac`.
+
+For diffs in the clear, mark the file for a diff driver in `.gitattributes`
+(`slipmesh.yaml diff=sops`) and name the driver per command -
+`git -c diff.sops.textconv="sops decrypt" diff`. Configuring it for good would also show the
+decrypted text to gitleaks, which reads history through `git log -p` and reports every key in it.
 
 ### Road warriors
 
@@ -420,9 +483,9 @@ slipmesh-taloscfg rw-del --if plain --name laptop
 `rw-add` generates the client's keypair and prints a ready-to-import config (optionally as a
 terminal QR code), keeping only the public half. Client private keys are never persisted -
 `rw-inspect` re-renders the rest and leaves a placeholder unless you pass the key back in. The
-pool's own key, which the config is built with, is recorded in `slipmesh-secrets.yaml`, so
-`generate` puts the same key on the wire; `rw-inspect` writes nothing and asks for `generate` first
-when that key is not recorded yet.
+pool's own key, which the config is built with, is written into the pool's document, so `generate`
+puts the same key on the wire; `rw-inspect` writes nothing and asks for `generate` first when that
+key is not written down yet.
 
 The same generated `<node>.yaml` also drives [routeros](https://github.com/slipmesh/routeros),
 which converges a MikroTik device into the mesh from it - a mesh member need not be a Talos node.
@@ -433,14 +496,14 @@ Before `slipmesh.yaml`, the topology lived in `mesh.yaml`, and the keys and hand
 lived inside the patch files. `slipmesh-migrate` moves both, once:
 
 ```sh
-slipmesh-migrate --mesh mesh.yaml --patches-dir patches \
-  --out slipmesh.yaml --out-secrets slipmesh-secrets.yaml
+slipmesh-migrate --mesh mesh.yaml --patches-dir patches --out slipmesh.yaml
 slipmesh-taloscfg generate --diff
 ```
 
-It writes the two new files and nothing else, and refuses to overwrite either. Each hand-written
-document in a patch file becomes a `patch` document for that node, pool keys move out of the pools
-into the secrets file, and the ruleset reaches every node as it did. It changes no behaviour, so
+It writes the new file and nothing else, and refuses to overwrite it. Each hand-written document
+in a patch file becomes a `patch` document for that node, the keys and obfuscation the patch files
+carry are written into the fields of `slipmesh.yaml` they belong to, and the ruleset reaches every
+node as it did. It changes no behaviour, so
 the diff after it shows only the header `generate` now writes at the top of each patch file. A
 warning that something was minted means a key was in neither `mesh.yaml` nor the patch files - for
 a node that already had one, that is a new identity. Until `generate` has run, the patch files hold
