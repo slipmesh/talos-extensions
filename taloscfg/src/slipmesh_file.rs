@@ -316,11 +316,16 @@ impl SlipmeshFile {
                     .copied()
                     .collect();
                 let text = match sources.as_slice() {
-                    [only] => only.text.clone(),
+                    [only] => contents_as_text(&only.text, &only.value)?,
                     [first, rest @ ..] => {
-                        let merged = rest.iter().fold(first.value.clone(), |base, patch| {
+                        let mut merged = rest.iter().fold(first.value.clone(), |base, patch| {
                             merge_document(base, &patch.value)
                         });
+                        for (_, file) in written_contents(&mut merged) {
+                            let text = yaml_serde::to_string(&*file)
+                                .context("serializing a file's contents")?;
+                            *file = Value::String(text);
+                        }
                         yaml_serde::to_string(&merged)
                             .context("serializing a merged patch")?
                             .trim_end()
@@ -359,6 +364,49 @@ impl SlipmeshFile {
         mesh_config::validate(&model)?;
         Ok(model)
     }
+}
+
+/// The `configFiles[].content` values of `document` written as a mapping or a list rather than a
+/// string, with their indices.
+///
+/// Such a content is the file's contents given as YAML. Talos takes only a string there, so it goes
+/// out as that YAML's text; written this way, each field of the file is a field of `slipmesh.yaml`
+/// and can be encrypted on its own, a password without the host beside it.
+fn written_contents(document: &mut Value) -> Vec<(usize, &mut Value)> {
+    let Some(files) = document
+        .get_mut("configFiles")
+        .and_then(Value::as_sequence_mut)
+    else {
+        return Vec::new();
+    };
+    files
+        .iter_mut()
+        .enumerate()
+        .filter_map(|(index, file)| Some((index, file.get_mut("content")?)))
+        .filter(|(_, content)| content.is_mapping() || content.is_sequence())
+        .collect()
+}
+
+/// `text` - the document `value` was parsed from - with each content written as YAML replaced by a
+/// literal block of that YAML's text, and every other byte as it was.
+fn contents_as_text(text: &str, value: &Value) -> Result<String> {
+    let mut value = value.clone();
+    let mut out = text.to_owned();
+    // From the last file back, so that the spans of those before it still hold.
+    for (index, content) in written_contents(&mut value).into_iter().rev() {
+        let yaml = yaml_serde::to_string(&*content).context("serializing a file's contents")?;
+        let parsed = yamlpath::Document::new(out.as_str()).context("parsing a patch document")?;
+        let pair = parsed
+            .query_pretty(&yamlpath::route!["configFiles", index, "content"])
+            .with_context(|| format!("locating configFiles[{index}].content"))?;
+        let start = pair.location.byte_span.0;
+        let end = yamlpatch::find_content_end(&pair, &parsed);
+        let column = start - out[..start].rfind('\n').map_or(0, |i| i + 1);
+        let indent = " ".repeat(column + 2);
+        let block: String = yaml.lines().map(|l| format!("\n{indent}{l}")).collect();
+        out.replace_range(start..end, &format!("content: |{block}"));
+    }
+    Ok(out)
 }
 
 /// What Talos keys a document by - two `patch` documents with the same one are merged.
@@ -598,6 +646,52 @@ extraArgs:
         let documents = parsed.patches_for("node-b").unwrap();
         assert!(documents[0].text.contains(content), "{}", documents[0].text);
         assert_eq!(documents[0].identity, "ExtensionServiceConfig/mikrotik");
+    }
+
+    const DEVICE: &str = "slipmesh:\n  kind: patch\n  include: [node-b]\n# the device the converger talks to\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n  - mountPath: /etc/device.yaml\n    content:\n      host: router1.example.com\n      port: 8729\n      username: admin\n      password: hunter2   # the one secret here\n";
+
+    /// A `configFiles[].content` in `text`, parsed as it lands in a patch file: followed by a line
+    /// break, which a block scalar ending the document keeps.
+    fn content(text: &str, index: usize) -> yaml_serde::Value {
+        let value: yaml_serde::Value = yaml_serde::from_str(&format!("{text}\n")).unwrap();
+        value["configFiles"][index]["content"].clone()
+    }
+
+    #[test]
+    fn a_content_mapping_goes_out_as_the_text_of_that_yaml() {
+        let parsed = SlipmeshFile::parse(&file(&[NETWORK, DEVICE])).unwrap();
+        let text = &parsed.patches_for("node-b").unwrap()[0].text;
+        assert_eq!(
+            content(text, 0).as_str(),
+            Some("host: router1.example.com\nport: 8729\nusername: admin\npassword: hunter2\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_content_mapping_changes_nothing_else_in_its_document() {
+        let parsed = SlipmeshFile::parse(&file(&[NETWORK, DEVICE])).unwrap();
+        let text = &parsed.patches_for("node-b").unwrap()[0].text;
+        assert!(
+            text.starts_with("# the device the converger talks to\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n  - mountPath: /etc/device.yaml\n    content: |\n      host: router1.example.com\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_content_mapping_goes_out_as_text_after_a_merge_too() {
+        let default = "slipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n  - mountPath: /etc/device.yaml\n    content:\n      host: router0.example.com\n";
+        let parsed = SlipmeshFile::parse(&file(&[NETWORK, default, DEVICE])).unwrap();
+        let documents = parsed.patches_for("node-b").unwrap();
+        assert_eq!(documents[0].sources, 2);
+        assert_eq!(
+            content(&documents[0].text, 0).as_str(),
+            Some("host: router1.example.com\nport: 8729\nusername: admin\npassword: hunter2\n")
+        );
+        assert_eq!(
+            content(&parsed.patches_for("node-a").unwrap()[0].text, 0).as_str(),
+            Some("host: router0.example.com\n")
+        );
     }
 
     #[test]
