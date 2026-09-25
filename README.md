@@ -377,7 +377,7 @@ into the patch file as written; a merged one is re-serialized, which loses its c
 A file a `patch` document carries in `configFiles[].content` may be written as YAML - a mapping or
 a list - rather than as a string. Talos takes only a string there, so the patch file gets that
 YAML's text; comments inside it do not carry over. Written this way, each field of the file is a
-field of `slipmesh.yaml`, which is what lets a password be encrypted without the host beside it:
+field of `slipmesh.yaml` like any other:
 
 ```yaml
 slipmesh:
@@ -410,9 +410,10 @@ tool generated is written: a field set on the entry or in the global `obfuscatio
 down, and neither are `random_trailers` and `disable_cookies`, which are never generated. Taking a
 node out of the `network` document takes its key with it, so putting it back mints a new one.
 
-What the tool adds goes in as block entries laid out the way sops lays out YAML - nested four
-columns deeper, a mapping in a list two columns past the dash - so that encrypting the file moves
-nothing the tool wrote. An entry written in flow style, `{...}`, takes an addition in flow style.
+So `slipmesh.yaml` holds private keys in the clear, as the patch files it renders do - keep it
+where those are kept. What the tool adds goes in through format-preserving patch operations,
+serialized by `yaml_serde`, and the rest of the file stays as written; an entry written in flow
+style, `{...}`, takes an addition in flow style.
 
 Each rendered config is validated through the real daemon's own `validate()` - the daemons are
 depended on as libraries here, so there is no second implementation to drift.
@@ -426,50 +427,6 @@ slipmesh-taloscfg generate --check              # validate only
 Every run mints for the whole topology, whichever nodes it renders, and renders and validates every
 node before it writes any patch file. `--check` and `--diff` never write: when a secret would have
 to be minted they stop and name it, because a key minted and not kept would differ on the next run.
-
-### Encrypting `slipmesh.yaml`
-
-The tool reads and writes plain YAML and knows nothing of encryption. To keep the secrets in
-`slipmesh.yaml` out of the clear, have sops encrypt just those fields; everything else stays
-readable, and so do diffs:
-
-```yaml
-# .sops.yaml
-creation_rules:
-  - path_regex: (^|/)slipmesh\.yaml$
-    encrypted_regex: ^(mesh_private_key|private_key|obfuscation|password)$
-    mac_only_encrypted: true
-    age: age1...
-```
-
-`mac_only_encrypted` lets the unencrypted part be edited in any editor: changing a value, adding a
-node. Removing or reordering anything that holds an encrypted value goes through `sops edit`, since
-sops checks those against its MAC. A field the regex matches is written through sops or by the
-tool, never typed in by hand - plaintext in it fails decryption. A secret under a name the regex
-does not list stays in the clear, so a new one needs adding to it.
-
-The tool then runs through sops. Reading, sops decrypts to a temporary file and passes its path;
-writing, sops runs the tool in place of an editor, with the temporary file's path appended, and
-encrypts the result back only if it changed:
-
-```sh
-sops exec-file --no-fifo slipmesh.yaml 'slipmesh-taloscfg generate --diff --config {}'
-SOPS_EDITOR='slipmesh-taloscfg generate --config' sops edit slipmesh.yaml
-SOPS_EDITOR='slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 10.62.253.5/32 --export --config' \
-  sops edit slipmesh.yaml
-```
-
-`SOPS_EDITOR` rather than `EDITOR`: sops reads it first, so an editor set there would be opened
-instead. `sops edit` exits with 200 when nothing changed, and writes nothing back when the tool
-fails.
-`--no-fifo` is for systems without named pipes, Windows among them. sops writes the whole file in
-its own layout, so the first encryption reformats it once; after that, a change shows in the file
-as the lines of that change and sops' `mac`.
-
-For diffs in the clear, mark the file for a diff driver in `.gitattributes`
-(`slipmesh.yaml diff=sops`) and name the driver per command -
-`git -c diff.sops.textconv="sops decrypt" diff`. Configuring it for good would also show the
-decrypted text to gitleaks, which reads history through `git log -p` and reports every key in it.
 
 ### Road warriors
 
