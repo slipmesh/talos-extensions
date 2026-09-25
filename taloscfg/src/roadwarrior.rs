@@ -6,8 +6,8 @@
 //! `main.rs` splices it back into the file. Edits are addressed by `yamlpath` `Route` (no
 //! path-predicate syntax - a client's index has to be found by hand first, see
 //! `find_client_index`), not by a hand-rolled text scan: a scan cannot add an entry without
-//! reflowing what surrounds it. A client is removed through `yamlpatch` and added through `emit`,
-//! in the layout sops writes the file in.
+//! reflowing what surrounds it. A client is added and removed through `yamlpatch`
+//! (comment/format-preserving YAML patch operations, part of the `zizmor` project).
 
 use crate::addressing;
 use crate::keys;
@@ -275,8 +275,27 @@ fn client_value(name: &str, public_key: &str, allowed_ips: &[String]) -> yaml_se
 /// Adds one client to the `clients` of `pool_document`, returning the whole updated document.
 /// Everything outside that one sequence - comments, the rest of the pool, formatting - is untouched.
 pub(crate) fn add_client_to_yaml(pool_document: &str, value: &yaml_serde::Value) -> Result<String> {
-    crate::emit::append_to_sequence(pool_document, &yamlpath::route!["clients"], value)
-        .context("adding the client to the pool's clients list")
+    let doc = yamlpath::Document::new(pool_document).context("parsing the pool document")?;
+    let route = yamlpath::route!["clients"];
+    let feature = yamlpatch::route_to_feature_exact(&route, &doc)
+        .context("querying clients list")?
+        .context("pool has no clients list")?;
+    let operation = match yamlpatch::Style::from_feature(&feature, &doc) {
+        yamlpatch::Style::BlockSequence => yamlpatch::Op::Append {
+            value: value.clone(),
+        },
+        // `yamlpatch` appends only to a block sequence; an empty `[]` becomes a list of one instead.
+        yamlpatch::Style::FlowSequence if doc.extract(&feature).trim() == "[]" => {
+            yamlpatch::Op::Replace(yaml_serde::Value::Sequence(vec![value.clone()]))
+        }
+        other => bail!(
+            "clients list has unsupported YAML style {other:?} - expected a block sequence or `[]`"
+        ),
+    };
+    let patch = yamlpatch::Patch { route, operation };
+    let out = yamlpatch::apply_yaml_patches(&doc, std::slice::from_ref(&patch))
+        .context("adding the client to the pool document")?;
+    Ok(out.source().to_string())
 }
 
 /// Removes `clients[client_index]` from `pool_document`, returning the whole updated document -
@@ -647,7 +666,7 @@ roadwarriors:
         let value = client_value("dave", "DDD=", &["198.51.100.99/32".to_string()]);
         let out = add_client_to_yaml(PLAIN_POOL, &value).unwrap();
         let expected = PLAIN_POOL.to_owned()
-            + "  - name: dave\n    public_key: DDD=\n    allowed_ips:\n        - 198.51.100.99/32\n";
+            + "  - name: dave\n    public_key: DDD=\n    allowed_ips:\n    - 198.51.100.99/32\n";
         assert_eq!(out, expected);
     }
 
@@ -684,7 +703,7 @@ clients: []
         let out = add_client_to_yaml(src, &value).unwrap();
         assert!(
             out.ends_with(
-                "clients:\n    - name: eve\n      public_key: EEE=\n      allowed_ips:\n        - 198.51.100.5/32\n"
+                "clients:\n  - name: eve\n    public_key: EEE=\n    allowed_ips:\n    - 198.51.100.5/32\n"
             ),
             "{out}"
         );

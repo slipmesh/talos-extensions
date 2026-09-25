@@ -7,7 +7,6 @@
 //! never copied down, and neither are the switches that are never generated.
 
 use crate::document;
-use crate::emit;
 use crate::mesh_config::MeshConfig;
 use crate::render::{ResolvedSecrets, link_key};
 use crate::slipmesh_file::SlipmeshFile;
@@ -165,25 +164,33 @@ impl Entry {
     /// `document` with this value written in. Obfuscation fields join an `obfuscation` mapping the
     /// entry already has, beside the fields written there by hand.
     fn write(&self, document: &str) -> Result<String> {
+        let doc = yamlpath::Document::new(document).context("parsing the document")?;
         let mut own = self.parent.clone();
         own.push(self.key.into());
         let own = Route::from(own);
-        if let Value::Mapping(fields) = &self.value
-            && yamlpath::Document::new(document)?.query_exists(&own)
-        {
-            let fields: Vec<(&str, Value)> = fields
+        let additions: Vec<(Route, String, Value)> = match &self.value {
+            Value::Mapping(fields) if doc.query_exists(&own) => fields
                 .iter()
                 .map(|(k, v)| {
-                    Ok((
-                        k.as_str().context("a field that is not a string")?,
-                        v.clone(),
-                    ))
+                    let key = k.as_str().context("a field that is not a string")?;
+                    Ok((own.clone(), key.to_owned(), v.clone()))
                 })
-                .collect::<Result<_>>()?;
-            return emit::append_to_mapping(document, &own, &fields);
-        }
-        let parent = Route::from(self.parent.clone());
-        emit::append_to_mapping(document, &parent, &[(self.key, self.value.clone())])
+                .collect::<Result<_>>()?,
+            value => vec![(
+                Route::from(self.parent.clone()),
+                self.key.to_owned(),
+                value.clone(),
+            )],
+        };
+        let patches: Vec<yamlpatch::Patch> = additions
+            .into_iter()
+            .map(|(route, key, value)| yamlpatch::Patch {
+                route,
+                operation: yamlpatch::Op::Add { key, value },
+            })
+            .collect();
+        let patched = yamlpatch::apply_yaml_patches(&doc, &patches)?;
+        Ok(patched.source().to_owned())
     }
 }
 
