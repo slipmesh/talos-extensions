@@ -26,7 +26,6 @@ common.workspace = true
 nftables.workspace = true
 router.workspace = true
 serde.workspace = true
-serde_yaml.workspace = true
 tree-sitter.workspace = true
 tree-sitter-yaml.workspace = true
 sha2 = "0.11.0"

@@ -24,7 +24,7 @@ struct SegmentHeader {
 }
 
 pub fn is_owned(segment: &str) -> bool {
-    let header: SegmentHeader = serde_yaml::from_str(segment).unwrap_or_default();
+    let header: SegmentHeader = yaml_serde::from_str(segment).unwrap_or_default();
     header.kind.as_deref() == Some("ExtensionServiceConfig")
         && header
             .name
@@ -41,7 +41,7 @@ pub fn foreign_segments(raw: &str) -> Result<Vec<String>> {
 /// used to read back a previous run's output for the idempotency tiers in `render.rs`.
 pub fn owned_segment(raw: &str, name: &str) -> Result<Option<String>> {
     Ok(split(raw)?.into_iter().find(|s| {
-        let header: SegmentHeader = serde_yaml::from_str(s).unwrap_or_default();
+        let header: SegmentHeader = yaml_serde::from_str(s).unwrap_or_default();
         header.kind.as_deref() == Some("ExtensionServiceConfig")
             && header.name.as_deref() == Some(name)
     }))

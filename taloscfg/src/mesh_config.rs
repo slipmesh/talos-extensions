@@ -435,7 +435,7 @@ nodes:
 
     #[test]
     fn parses_a_minimal_config() {
-        let cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         assert_eq!(cfg.nodes.len(), 2);
         assert_eq!(cfg.cluster.bgp_as, 64512);
         validate(&cfg).unwrap();
@@ -448,7 +448,7 @@ nodes:
 ",
             minimal_yaml()
         );
-        let err = serde_yaml::from_str::<MeshConfig>(&yaml).unwrap_err();
+        let err = yaml_serde::from_str::<MeshConfig>(&yaml).unwrap_err();
         assert!(err.to_string().contains("roadwarrior"), "{err}");
     }
 
@@ -460,13 +460,13 @@ address: 10.0.0.1/24
 listen_port: 51820
 listen-port: 1
 ";
-        let err = serde_yaml::from_str::<RoadwarriorPool>(yaml).unwrap_err();
+        let err = yaml_serde::from_str::<RoadwarriorPool>(yaml).unwrap_err();
         assert!(err.to_string().contains("listen-port"), "{err}");
     }
 
     #[test]
     fn tunnel_networks_is_none_when_not_configured() {
-        let cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         assert!(cfg.cluster.tunnel_networks.is_none());
     }
 
@@ -483,7 +483,7 @@ nodes:
   - name: b
     node_id: "10.62.0.2"
 "#;
-        let cfg: MeshConfig = serde_yaml::from_str(yaml).unwrap();
+        let cfg: MeshConfig = yaml_serde::from_str(yaml).unwrap();
         let tunnel = cfg.cluster.tunnel_networks.unwrap();
         assert_eq!(tunnel.ipv4, "10.62.1.0/24");
         assert_eq!(tunnel.ipv6, "fd00:63::/120");
@@ -497,7 +497,7 @@ nodes:
 
     #[test]
     fn rejects_duplicate_node_names() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.nodes[1].name = "a".to_string();
         assert!(validate(&cfg).is_err());
     }
@@ -507,7 +507,7 @@ nodes:
         // Two distinct nodes sharing a node_id would silently collide onto the same loopback
         // address and the same mesh interface name on any node linked to both - must fail here,
         // not surface downstream as a confusing "duplicate interface name" from awg::config.
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.nodes[1].node_id = cfg.nodes[0].node_id.clone();
         let err = validate(&cfg).unwrap_err();
         assert!(err.to_string().contains("node_id"), "error was: {err}");
@@ -515,14 +515,14 @@ nodes:
 
     #[test]
     fn rejects_a_node_id_that_is_not_a_valid_ipv4_address() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.nodes[0].node_id = "not-an-ip".to_string();
         assert!(validate(&cfg).is_err());
     }
 
     #[test]
     fn rejects_mesh_link_referencing_unknown_node() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "ghost".to_string()],
             port: 51820,
@@ -534,7 +534,7 @@ nodes:
 
     #[test]
     fn rejects_mesh_link_to_self() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "a".to_string()],
             port: 51820,
@@ -546,7 +546,7 @@ nodes:
 
     #[test]
     fn accepts_two_links_on_the_same_node_with_different_ports() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.nodes.push(NodeEntry {
             name: "c".to_string(),
             node_id: "10.62.0.3".to_string(),
@@ -571,7 +571,7 @@ nodes:
 
     #[test]
     fn rejects_duplicate_port_on_the_same_node() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.nodes.push(NodeEntry {
             name: "c".to_string(),
             node_id: "10.62.0.3".to_string(),
@@ -596,7 +596,7 @@ nodes:
 
     #[test]
     fn rejects_roadwarriors_pool_referencing_unknown_node() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),
             node_hostnames: vec!["ghost".to_string()],
@@ -615,7 +615,7 @@ nodes:
 
     #[test]
     fn rejects_roadwarriors_pool_with_empty_node_hostnames() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),
             node_hostnames: vec![],
@@ -634,7 +634,7 @@ nodes:
 
     #[test]
     fn rejects_duplicate_roadwarrior_client_public_key_in_one_pool() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),
             node_hostnames: vec!["a".to_string()],
@@ -666,7 +666,7 @@ nodes:
 
     #[test]
     fn rejects_bypass_entry_referencing_unknown_node() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.bypass.push(BypassEntry {
             node: "ghost".to_string(),
             include: vec![],
@@ -677,7 +677,7 @@ nodes:
 
     #[test]
     fn accepts_roadwarriors_and_mesh_sharing_a_node_with_distinct_ports() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "b".to_string()],
             port: 51820,

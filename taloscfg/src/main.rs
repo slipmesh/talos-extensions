@@ -449,19 +449,19 @@ fn render_hosts(
                 render_extension_service_document(
                     "awg",
                     "/etc/talos-extensions/awg.yaml",
-                    &serde_yaml::to_string(&awg_cfg)?,
+                    &yaml_serde::to_string(&awg_cfg)?,
                 ),
                 render_extension_service_document(
                     "router",
                     "/etc/talos-extensions/router.yaml",
-                    &serde_yaml::to_string(&router_cfg)?,
+                    &yaml_serde::to_string(&router_cfg)?,
                 ),
             ];
             if let Some(cfg) = &nftables_cfg {
                 generated.push(render_extension_service_document(
                     "nftables",
                     "/etc/talos-extensions/nftables.yaml",
-                    &serde_yaml::to_string(cfg)?,
+                    &yaml_serde::to_string(cfg)?,
                 ));
             }
 
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn render_extension_service_document_round_trips_through_owned_segment_and_serde() {
-        let inner = serde_yaml::to_string(&nftables::config::NftablesConfig {
+        let inner = yaml_serde::to_string(&nftables::config::NftablesConfig {
             ruleset: "table inet x {}".to_string(),
         })
         .unwrap();
@@ -603,9 +603,9 @@ mod tests {
         struct ConfigFile {
             content: String,
         }
-        let parsed: Doc = serde_yaml::from_str(&found).unwrap();
+        let parsed: Doc = yaml_serde::from_str(&found).unwrap();
         let cfg: nftables::config::NftablesConfig =
-            serde_yaml::from_str(&parsed.config_files[0].content).unwrap();
+            yaml_serde::from_str(&parsed.config_files[0].content).unwrap();
         assert_eq!(cfg.ruleset, "table inet x {}");
     }
 

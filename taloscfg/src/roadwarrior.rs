@@ -474,7 +474,7 @@ roadwarriors:
     }
 
     fn mesh() -> MeshConfig {
-        serde_yaml::from_str(fixture()).unwrap()
+        yaml_serde::from_str(fixture()).unwrap()
     }
 
     fn secrets(mesh: &MeshConfig) -> ResolvedSecrets {
@@ -528,7 +528,7 @@ clients:
                 r#"{{name: alice, public_key: "{alice_pub}", allowed_ips: ["198.51.100.41/32"]}}"#
             ),
         );
-        let m: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let m: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
         let cfg = inspect(&m, &secrets(&m), "plain", "alice", Some(&alice_priv), None).unwrap();
         assert!(cfg.contains(&format!("PrivateKey = {alice_priv}")));
         assert!(!cfg.contains("<enter your private key here>"));
@@ -569,7 +569,7 @@ roadwarriors:
     dns: "9.9.9.9"
     clients: []
 "#;
-        let m: MeshConfig = serde_yaml::from_str(yaml).unwrap();
+        let m: MeshConfig = yaml_serde::from_str(yaml).unwrap();
         let pool = find_pool(&m, "plain").unwrap();
         assert_eq!(resolve_dns(&m, pool), Some("9.9.9.9".to_string()));
     }
@@ -589,7 +589,7 @@ roadwarriors:
     plain: true
     clients: []
 "#;
-        let m: MeshConfig = serde_yaml::from_str(yaml).unwrap();
+        let m: MeshConfig = yaml_serde::from_str(yaml).unwrap();
         let pool = find_pool(&m, "plain").unwrap();
         assert_eq!(resolve_dns(&m, pool), None);
     }

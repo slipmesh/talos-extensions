@@ -57,12 +57,12 @@ impl<'a> FileExistingState<'a> {
             else {
                 continue;
             };
-            let doc: ExtensionServiceConfigDoc = serde_yaml::from_str(&segment)
+            let doc: ExtensionServiceConfigDoc = yaml_serde::from_str(&segment)
                 .with_context(|| format!("parsing the awg document in {path:?}"))?;
             let Some(file) = doc.config_files.first() else {
                 continue;
             };
-            let cfg: awg::config::AwgConfig = serde_yaml::from_str(&file.content)
+            let cfg: awg::config::AwgConfig = yaml_serde::from_str(&file.content)
                 .with_context(|| format!("parsing the awg config inside {path:?}"))?;
             awg_by_node.insert(node.name.clone(), cfg);
         }
@@ -159,7 +159,7 @@ mod tests {
     }
 
     fn mesh_with_link() -> MeshConfig {
-        serde_yaml::from_str(
+        yaml_serde::from_str(
             r#"
 cluster:
   bgp_as: 64512
