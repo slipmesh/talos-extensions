@@ -358,14 +358,8 @@ impl SlipmeshFile {
                     merge_document(base, &patch.value)
                 });
                 contents_as_text(&mut document)?;
-                let serialized =
+                let text =
                     yaml_serde::to_string(&document).context("serializing a patch document")?;
-                // One line break, the one the serializer ends with: any more belong to a `|+`
-                // block scalar's value.
-                let text = serialized
-                    .strip_suffix('\n')
-                    .unwrap_or(&serialized)
-                    .to_owned();
                 Ok(HostDocument {
                     identity: identity.to_string(),
                     text,
@@ -634,10 +628,9 @@ extraArgs:
 
     const DEVICE: &str = "slipmesh:\n  kind: patch\n  include: [node-b]\n# the device the converger talks to\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n  - mountPath: /etc/device.yaml\n    content:\n      host: router1.example.com\n      port: 8729\n      username: admin\n      password: hunter2   # the one secret here\n";
 
-    /// A `configFiles[].content` in `text`, parsed as it lands in a patch file: followed by a line
-    /// break, which a block scalar ending the document keeps.
+    /// A `configFiles[].content` in `text`.
     fn content(text: &str, index: usize) -> yaml_serde::Value {
-        let value: yaml_serde::Value = yaml_serde::from_str(&format!("{text}\n")).unwrap();
+        let value: yaml_serde::Value = yaml_serde::from_str(text).unwrap();
         value["configFiles"][index]["content"].clone()
     }
 

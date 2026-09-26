@@ -90,8 +90,8 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
     }
 
     Ok(format!(
-        "{HEADER}{}\n",
-        [patches, generated].concat().join("\n---\n")
+        "{HEADER}{}",
+        [patches, generated].concat().join("---\n")
     ))
 }
 
@@ -153,6 +153,7 @@ ruleset: "table inet x {}"
         assert!(content(&generated_document(&a, "awg").unwrap()).contains("mesh-b"));
         assert!(generated_document(&a, "router").is_some());
         assert!(generated_document(&a, "nftables").is_some());
+        assert!(!a.contains("\n\n---\n") && !a.ends_with("\n\n"), "{a}");
     }
 
     #[test]
