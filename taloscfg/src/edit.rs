@@ -265,13 +265,13 @@ plain: true
     fn run(raw: &str) -> String {
         let mut yaml = YamlDoc::parse(raw).unwrap();
         let file = SlipmeshFile::read(raw, &yaml).unwrap();
-        let (_, minted) = secrets::resolve(&file.topology().unwrap());
+        let (_, minted) = secrets::resolve(file.topology());
         record(&mut yaml, &file, &minted).unwrap();
         yaml.to_string()
     }
 
     fn topology(raw: &str) -> MeshConfig {
-        SlipmeshFile::parse(raw).unwrap().topology().unwrap()
+        SlipmeshFile::parse(raw).unwrap().into_topology()
     }
 
     fn keys_of(obfuscation: &Obfuscation) -> Vec<String> {
@@ -393,7 +393,7 @@ plain: true
     fn a_second_run_mints_nothing_and_changes_nothing() {
         let first = run(&slipmesh());
         let file = SlipmeshFile::parse(&first).unwrap();
-        let (_, minted) = secrets::resolve(&file.topology().unwrap());
+        let (_, minted) = secrets::resolve(file.topology());
         assert!(minted.is_empty(), "{:?}", minted.routes());
         let mut yaml = YamlDoc::parse(&first).unwrap();
         record(&mut yaml, &file, &minted).unwrap();

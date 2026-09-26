@@ -168,7 +168,7 @@ ruleset: "table inet x {}"
 
     fn rendered(host: &str) -> String {
         let file = SlipmeshFile::parse(SLIPMESH).unwrap();
-        let (resolved, _) = secrets::resolve(&file.topology().unwrap());
+        let (resolved, _) = secrets::resolve(file.topology());
         render(&file, &resolved, host).unwrap()
     }
 
@@ -196,7 +196,7 @@ ruleset: "table inet x {}"
     fn a_config_the_daemon_rejects_is_not_rendered() {
         let raw = SLIPMESH.replace("table inet x {}", "table inet t { {{ bogus }} }");
         let file = SlipmeshFile::parse(&raw).unwrap();
-        let (resolved, _) = secrets::resolve(&file.topology().unwrap());
+        let (resolved, _) = secrets::resolve(file.topology());
         let err = render(&file, &resolved, "a").unwrap_err();
         assert!(format!("{err:#}").contains("nftables"), "{err:#}");
     }

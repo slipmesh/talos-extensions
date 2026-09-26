@@ -149,6 +149,7 @@ pub struct SlipmeshFile {
     pools: Vec<Document>,
     rulesets: Vec<Document>,
     patches: Vec<Document>,
+    topology: MeshConfig,
 }
 
 impl SlipmeshFile {
@@ -274,16 +275,16 @@ impl SlipmeshFile {
             }
         }
 
-        let parsed = Self {
+        let topology = model(&network.value, &pools, None)?;
+        Ok(Self {
             network_index: network.index,
             network: network.value,
             hosts,
             pools,
             rulesets,
             patches,
-        };
-        parsed.topology()?;
-        Ok(parsed)
+            topology,
+        })
     }
 
     /// The position of the `network` document in the file - where an edit to the topology goes.
@@ -307,15 +308,19 @@ impl SlipmeshFile {
 
     /// The whole topology: `network` with every pool, and no ruleset - the ruleset differs by host
     /// and plays no part in anything shared between them, such as secrets.
-    pub fn topology(&self) -> Result<MeshConfig> {
-        self.model(None)
+    pub fn topology(&self) -> &MeshConfig {
+        &self.topology
+    }
+
+    pub fn into_topology(self) -> MeshConfig {
+        self.topology
     }
 
     /// The topology as one host sees it: with the ruleset aimed at that host, if any.
     pub fn effective_for(&self, host: &str) -> Result<MeshConfig> {
         self.ensure_host(host)?;
         let ruleset = self.rulesets.iter().find(|r| r.reaches(host));
-        self.model(ruleset.map(|r| r.value.clone()))
+        model(&self.network, &self.pools, ruleset.map(|r| r.value.clone()))
     }
 
     /// The Talos documents that go into `host`'s patch file, in the order their identities first
@@ -376,21 +381,22 @@ impl SlipmeshFile {
         );
         Ok(())
     }
+}
 
-    fn model(&self, ruleset: Option<Value>) -> Result<MeshConfig> {
-        let mut value = self.network.clone();
-        let mapping = value
-            .as_mapping_mut()
-            .context("the network document is not a mapping")?;
-        let pools = self.pools.iter().map(|p| p.value.clone()).collect();
-        mapping.insert("roadwarriors".into(), Value::Sequence(pools));
-        if let Some(ruleset) = ruleset {
-            mapping.insert("nftables".into(), ruleset);
-        }
-        let model: MeshConfig = yaml_serde::from_value(value).context("assembling the topology")?;
-        mesh_config::validate(&model)?;
-        Ok(model)
+/// `network` with every pool and `ruleset`, as one validated model.
+fn model(network: &Value, pools: &[Document], ruleset: Option<Value>) -> Result<MeshConfig> {
+    let mut value = network.clone();
+    let mapping = value
+        .as_mapping_mut()
+        .context("the network document is not a mapping")?;
+    let pools = pools.iter().map(|p| p.value.clone()).collect();
+    mapping.insert("roadwarriors".into(), Value::Sequence(pools));
+    if let Some(ruleset) = ruleset {
+        mapping.insert("nftables".into(), ruleset);
     }
+    let model: MeshConfig = yaml_serde::from_value(value).context("assembling the topology")?;
+    mesh_config::validate(&model)?;
+    Ok(model)
 }
 
 /// Replaces each `configFiles[].content` of `document` written as a mapping or a list with that
@@ -777,10 +783,9 @@ extraArgs:
         .unwrap();
         let names: Vec<_> = parsed
             .topology()
-            .unwrap()
             .roadwarriors
-            .into_iter()
-            .map(|p| p.name)
+            .iter()
+            .map(|p| p.name.as_str())
             .collect();
         assert_eq!(names, ["second", "first"]);
     }
@@ -849,7 +854,7 @@ extraArgs:
             &ruleset("  include: [node-a]\n", "t"),
         ]))
         .unwrap();
-        let topology = parsed.topology().unwrap();
+        let topology = parsed.topology();
         assert_eq!(topology.roadwarriors.len(), 1);
         assert!(topology.nftables.is_none());
     }

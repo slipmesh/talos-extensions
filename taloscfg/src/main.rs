@@ -185,15 +185,15 @@ fn rw_add(
     config_path: &Path,
 ) -> Result<()> {
     let (_, mut yaml, file) = read_slipmesh(config_path)?;
-    let topology = file.topology()?;
-    let document = pool_document(&file, &topology, if_)?;
+    let topology = file.topology();
+    let document = pool_document(&file, topology, if_)?;
     // Minted and written in along with the client: a pool key minted for the exported config has
     // to be the one `generate` puts on the wire, not a key that dies with this process.
     let (secrets, minted) = settle_secrets(config_path, &mut yaml, &file, false)?;
     yaml.commit_edits()?;
 
     let added = roadwarrior::add(
-        &topology,
+        topology,
         &secrets,
         if_,
         name,
@@ -224,10 +224,10 @@ fn rw_add(
 
 fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
     let (_, mut yaml, file) = read_slipmesh(config_path)?;
-    let topology = file.topology()?;
-    let document = pool_document(&file, &topology, if_)?;
+    let topology = file.topology();
+    let document = pool_document(&file, topology, if_)?;
 
-    let (index, client) = roadwarrior::find_client(&topology, if_, name)?;
+    let (index, client) = roadwarrior::find_client(topology, if_, name)?;
     edit::remove_client(&mut yaml, document, index)?;
     write_edits(config_path, &yaml)?;
     println!(
@@ -250,8 +250,8 @@ fn rw_inspect(
     config_path: &Path,
 ) -> Result<()> {
     let (_, _, file) = read_slipmesh(config_path)?;
-    let topology = file.topology()?;
-    let (secrets, minted) = secrets::resolve(&topology);
+    let topology = file.topology();
+    let (secrets, minted) = secrets::resolve(topology);
     // Only this pool's: a config rendered with a key that is never written down would not connect.
     anyhow::ensure!(
         !minted.pools.iter().any(|pool| pool.name == if_),
@@ -260,7 +260,7 @@ fn rw_inspect(
         config_path.display()
     );
 
-    let text = roadwarrior::inspect(&topology, &secrets, if_, name, private_key, endpoint)?;
+    let text = roadwarrior::inspect(topology, &secrets, if_, name, private_key, endpoint)?;
 
     // Inspecting is pointless with no output at all - default to --export if neither flag was
     // given, unlike rw-add (where registering a client without ever displaying it is legitimate).
@@ -373,7 +373,7 @@ fn settle_secrets(
     file: &SlipmeshFile,
     dry_run: bool,
 ) -> Result<(secrets::ResolvedSecrets, String)> {
-    let (resolved, minted) = secrets::resolve(&file.topology()?);
+    let (resolved, minted) = secrets::resolve(file.topology());
     let routes = minted.routes().join(", ");
     if minted.is_empty() {
         return Ok((resolved, routes));
@@ -579,10 +579,7 @@ installer:
         }
 
         fn topology(&self) -> mesh_config::MeshConfig {
-            SlipmeshFile::parse(&self.config())
-                .unwrap()
-                .topology()
-                .unwrap()
+            SlipmeshFile::parse(&self.config()).unwrap().into_topology()
         }
 
         /// Every file a run could have written, with what it holds.
