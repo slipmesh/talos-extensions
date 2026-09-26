@@ -189,7 +189,7 @@ fn rw_add(
     let document = pool_document(&file, &topology, if_)?;
     // Minted and written in along with the client: a pool key minted for the exported config has
     // to be the one `generate` puts on the wire, not a key that dies with this process.
-    let secrets = settle_secrets(config_path, &mut yaml, &file, false)?;
+    let (secrets, minted) = settle_secrets(config_path, &mut yaml, &file, false)?;
     yaml.commit_edits()?;
 
     let added = roadwarrior::add(
@@ -205,6 +205,7 @@ fn rw_add(
     )?;
     edit::add_client(&mut yaml, document, &added.client)?;
     write_edits(config_path, &yaml)?;
+    report_minted(&minted, config_path);
     println!(
         "added {name:?} to roadwarriors pool {if_:?} in {}",
         config_path.display()
@@ -250,7 +251,7 @@ fn rw_inspect(
 ) -> Result<()> {
     let (_, mut yaml, file) = read_slipmesh(config_path)?;
     let topology = file.topology()?;
-    let secrets = settle_secrets(config_path, &mut yaml, &file, true)?;
+    let (secrets, _) = settle_secrets(config_path, &mut yaml, &file, true)?;
 
     let text = roadwarrior::inspect(&topology, &secrets, if_, name, private_key, endpoint)?;
 
@@ -312,7 +313,7 @@ fn generate(
     config_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
-    let (raw, mut yaml, file) = read_slipmesh(config_path)?;
+    let (_, mut yaml, file) = read_slipmesh(config_path)?;
     let targets = match node {
         Some(n) => {
             anyhow::ensure!(file.hosts().contains(&n), "unknown node {n:?}");
@@ -321,13 +322,14 @@ fn generate(
         None => file.hosts(),
     };
 
-    let resolved = settle_secrets(config_path, &mut yaml, &file, check || diff)?;
-    if yaml.to_string() != raw {
-        write_edits(config_path, &yaml)?;
-    }
-    // Every host is rendered and validated before any is written, so a host that fails leaves
-    // the patch files as a set rather than half of them new.
+    let (resolved, minted) = settle_secrets(config_path, &mut yaml, &file, check || diff)?;
+    // Every host is rendered and validated before anything is written, so a host that fails
+    // leaves slipmesh.yaml and the patch files as they were rather than half of them new.
     let hosts = render_hosts(&file, &resolved, &targets, patches_dir)?;
+    if !minted.is_empty() {
+        write_edits(config_path, &yaml)?;
+        report_minted(&minted, config_path);
+    }
 
     for host in &hosts {
         if diff {
@@ -354,28 +356,34 @@ fn generate(
     Ok(())
 }
 
-/// The whole topology's secrets, with whatever they had to mint written into `yaml`, in the fields
-/// it belongs to. On a dry run, needing to mint anything is an error instead: a value that is never
-/// written down would differ on the next run.
+/// The whole topology's secrets, with whatever they had to mint recorded in `yaml`, in the fields
+/// it belongs to, and named in the second value - empty when nothing was minted. On a dry run,
+/// needing to mint anything is an error instead: a value that is never written down would differ
+/// on the next run.
 fn settle_secrets(
     config_path: &Path,
     yaml: &mut YamlDoc,
     file: &SlipmeshFile,
     dry_run: bool,
-) -> Result<secrets::ResolvedSecrets> {
+) -> Result<(secrets::ResolvedSecrets, String)> {
     let (resolved, minted) = secrets::resolve(&file.topology()?);
-    if minted.is_empty() {
-        return Ok(resolved);
-    }
     let routes = minted.routes().join(", ");
+    if minted.is_empty() {
+        return Ok((resolved, routes));
+    }
     anyhow::ensure!(
         !dry_run,
         "{} lacks {routes} - run `slipmesh-taloscfg generate` to mint and write them",
         config_path.display()
     );
     edit::record(yaml, file, &minted)?;
-    println!("minted {routes} into {}", config_path.display());
-    Ok(resolved)
+    Ok((resolved, routes))
+}
+
+fn report_minted(routes: &str, config_path: &Path) {
+    if !routes.is_empty() {
+        println!("minted {routes} into {}", config_path.display());
+    }
 }
 
 /// Replaces `path` with `content` atomically, so an interrupted write cannot leave the file
@@ -666,7 +674,7 @@ installer:
         paths.generate(None, false, false).unwrap();
         let render = || {
             let (_, mut yaml, file) = read_slipmesh(&paths.config).unwrap();
-            let resolved = settle_secrets(&paths.config, &mut yaml, &file, true).unwrap();
+            let (resolved, _) = settle_secrets(&paths.config, &mut yaml, &file, true).unwrap();
             render_hosts(&file, &resolved, &["a", "b", "c", "d"], &paths.patches)
                 .unwrap()
                 .into_iter()
@@ -699,15 +707,17 @@ installer:
     }
 
     #[test]
-    fn a_host_that_fails_validation_leaves_every_host_unwritten() {
+    fn a_host_that_fails_validation_leaves_every_file_unwritten() {
         let paths = setup(
             "---\nslipmesh:\n  kind: nftables\n  include: [d]\nruleset: |\n  table inet t { {{ bogus }} }\n",
         );
+        let before = paths.config();
         let err = paths.generate(None, false, false).unwrap_err();
         assert!(format!("{err:#}").contains("\"d\""), "{err:#}");
         for host in ["a", "b", "c", "d"] {
             assert!(paths.patch(host).is_none(), "{host} was written");
         }
+        assert_eq!(paths.config(), before, "the minted secrets were written");
     }
 
     #[test]
