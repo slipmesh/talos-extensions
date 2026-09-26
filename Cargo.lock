@@ -1893,6 +1893,8 @@ dependencies = [
 name = "taloscfg"
 version = "0.2.2"
 dependencies = [
+ "anstream",
+ "anstyle",
  "anyhow",
  "awg",
  "base64 0.23.1",

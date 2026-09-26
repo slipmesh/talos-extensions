@@ -11,7 +11,6 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use taloscfg::slipmesh_file::SlipmeshFile;
 use taloscfg::{document, mesh_config, minted, render, roadwarrior, segments};
@@ -509,47 +508,34 @@ fn render_hosts(
         .collect()
 }
 
-const RED: &str = "\x1b[31m";
-const GREEN: &str = "\x1b[32m";
-const RESET: &str = "\x1b[0m";
-
-/// `(prefix, reset)` for one diff line's tag - empty strings when `use_color` is false, so the
-/// caller doesn't need a separate color/no-color code path.
-fn colored_prefix(tag: similar::ChangeTag, use_color: bool) -> (&'static str, &'static str) {
-    if !use_color {
-        return match tag {
-            similar::ChangeTag::Delete => ("-", ""),
-            similar::ChangeTag::Insert => ("+", ""),
-            similar::ChangeTag::Equal => (" ", ""),
-        };
-    }
-    match tag {
-        similar::ChangeTag::Delete => ("\x1b[31m-", RESET),
-        similar::ChangeTag::Insert => ("\x1b[32m+", RESET),
-        similar::ChangeTag::Equal => (" ", ""),
-    }
-}
-
-/// Colors on only when stdout is an actual terminal and `NO_COLOR` isn't set - the same
-/// convention `git diff`/most CLI tools use, so piping into a file or `less` still gets plain
-/// `+`/`-` text, not raw escape codes.
-fn use_color() -> bool {
-    std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
-}
-
-fn print_diff(node_name: &str, before: &str, after: &str) {
+/// A unified diff of one host's patch file, `None` when nothing would change.
+fn diff_text(host: &str, before: &str, after: &str) -> Option<String> {
     if before == after {
-        println!("{node_name}: no changes");
-        return;
+        return None;
     }
-    let use_color = use_color();
-    let (header_del, header_ins) = if use_color { (RED, GREEN) } else { ("", "") };
-    let reset = if use_color { RESET } else { "" };
-    println!("{header_del}--- {node_name} (current){reset}");
-    println!("{header_ins}+++ {node_name} (generated){reset}");
-    for change in similar::TextDiff::from_lines(before, after).iter_all_changes() {
-        let (prefix, reset) = colored_prefix(change.tag(), use_color);
-        print!("{prefix}{change}{reset}");
+    Some(
+        similar::TextDiff::from_lines(before, after)
+            .unified_diff()
+            .header(&format!("{host} (current)"), &format!("{host} (generated)"))
+            .to_string(),
+    )
+}
+
+/// Prints `diff_text` in colour where the output takes it - `anstream` leaves the colour out when
+/// stdout is not a terminal or `NO_COLOR` is set.
+fn print_diff(host: &str, before: &str, after: &str) {
+    let Some(text) = diff_text(host, before, after) else {
+        println!("{host}: no changes");
+        return;
+    };
+    for line in text.lines() {
+        let style = match line.as_bytes().first() {
+            Some(b'-') => anstyle::AnsiColor::Red.on_default(),
+            Some(b'+') => anstyle::AnsiColor::Green.on_default(),
+            Some(b'@') => anstyle::AnsiColor::Cyan.on_default(),
+            _ => anstyle::Style::new(),
+        };
+        anstream::println!("{style}{line}{style:#}");
     }
 }
 
@@ -559,25 +545,57 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
-    fn colored_prefix_without_color_is_plain_signs_with_no_reset() {
-        assert_eq!(colored_prefix(similar::ChangeTag::Delete, false), ("-", ""));
-        assert_eq!(colored_prefix(similar::ChangeTag::Insert, false), ("+", ""));
-        assert_eq!(colored_prefix(similar::ChangeTag::Equal, false), (" ", ""));
+    fn a_diff_shows_the_changed_lines_with_their_context_and_no_more() {
+        let before: String = (1..=20)
+            .map(|n| {
+                format!(
+                    "line {n}
+"
+                )
+            })
+            .collect();
+        let after = before.replace(
+            "line 10
+",
+            "line ten
+",
+        );
+        let text = diff_text("node-a", &before, &after).unwrap();
+        assert!(
+            text.starts_with(
+                "--- node-a (current)
++++ node-a (generated)
+@@ "
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "-line 10
++line ten
+"
+            ),
+            "{text}"
+        );
+        assert!(
+            !text.contains(
+                "line 2
+"
+            ),
+            "{text}"
+        );
     }
 
     #[test]
-    fn colored_prefix_with_color_wraps_delete_in_red_and_insert_in_green() {
-        let (prefix, reset) = colored_prefix(similar::ChangeTag::Delete, true);
-        assert_eq!(prefix, "\x1b[31m-");
-        assert_eq!(reset, RESET);
-        let (prefix, reset) = colored_prefix(similar::ChangeTag::Insert, true);
-        assert_eq!(prefix, "\x1b[32m+");
-        assert_eq!(reset, RESET);
-    }
-
-    #[test]
-    fn colored_prefix_equal_line_is_never_colored() {
-        assert_eq!(colored_prefix(similar::ChangeTag::Equal, true), (" ", ""));
+    fn an_unchanged_file_has_no_diff() {
+        assert_eq!(
+            diff_text(
+                "node-a", "same
+", "same
+"
+            ),
+            None
+        );
     }
 
     fn temp_dir() -> PathBuf {
