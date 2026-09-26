@@ -702,9 +702,8 @@ installer:
 
     #[test]
     fn regenerating_one_host_from_scratch_twice_changes_nothing() {
-        // A key used to be read back only from its own host's patch file, so rendering one host
-        // before its peer had a file minted the peer a new key on every run. Secrets are settled
-        // for the whole topology now, whichever host is rendered.
+        // Secrets are settled for the whole topology whichever host is rendered, so rendering a
+        // host before its peers mints their keys once rather than on every run.
         let paths = setup("");
         paths.generate(Some("a"), false, false).unwrap();
         let first = paths.snapshot();
@@ -827,8 +826,8 @@ clients:
 
     #[test]
     fn rw_add_writes_down_the_pool_key_its_exported_config_was_built_with() {
-        // The key used to be generated for the exported config and then thrown away, so the next
-        // `generate` minted a different one and the exported config never connected.
+        // A pool key that went into the exported config but not into slipmesh.yaml would be minted
+        // anew by the next `generate`, and the exported config would never connect.
         let paths = setup(POOLS);
         rw_add(
             "first",
