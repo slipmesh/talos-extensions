@@ -460,8 +460,12 @@ hand before the first run:
 - each document written by hand into a patch file becomes a `kind: patch` document with
   `include: [<node>]`;
 - the `private_key` of a node's `mesh-*` interfaces goes into that node's `mesh_private_key`, and
-  a link's `jc`...`h4` into the link's `obfuscation` - anything left out is minted anew on the
-  first run, which is a new identity for that node or link and every peer of it.
+  a link's `jc`...`h4` into the link's `obfuscation`;
+- the `private_key` of a pool's interface goes into the `private_key` of its `kind: roadwarriors`
+  document, and the pool's `jc`...`h4` into its `obfuscation`, unless the pool is `plain`.
+
+Anything left out is minted anew on the first run: a new identity for that node or link and every
+peer of it, and for a pool, a new server key that no client config already handed out connects to.
 
 `generate --diff` then shows what the patch files would become: with everything carried over, the
 keys and settings in them stay as they were and only their layout changes.
