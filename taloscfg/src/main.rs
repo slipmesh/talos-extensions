@@ -13,7 +13,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use taloscfg::slipmesh_file::SlipmeshFile;
-use taloscfg::{document, mesh_config, minted, render, roadwarrior};
+use taloscfg::{mesh_config, minted, render, roadwarrior};
+use yaml_rt::YamlDoc;
 
 #[derive(Parser)]
 #[command(
@@ -182,17 +183,18 @@ fn rw_add(
     invert: bool,
     config_path: &Path,
 ) -> Result<()> {
-    let (raw, file) = read_slipmesh(config_path)?;
+    let (_, mut yaml, file) = read_slipmesh(config_path)?;
+    let topology = file.topology()?;
+    let document = pool_document(&file, &topology, if_)?;
     // Minted and written in along with the client: a pool key minted for the exported config has
     // to be the one `generate` puts on the wire, not a key that dies with this process.
-    let (secrets, raw) = settle_secrets(config_path, &raw, &file, false)?;
-    let file = SlipmeshFile::parse(&raw)?;
-    let topology = file.topology()?;
-    let span = pool_document(&file, &topology, if_)?;
+    let secrets = settle_secrets(config_path, &mut yaml, &file, false)?;
+    yaml.commit_edits()?;
 
-    let (updated_pool, client_config) = roadwarrior::add(
+    let client_config = roadwarrior::add(
         &topology,
-        &raw[span.clone()],
+        &mut yaml,
+        document,
         &secrets,
         if_,
         name,
@@ -202,7 +204,7 @@ fn rw_add(
         export,
         qr,
     )?;
-    write_edited(config_path, &raw, span, &updated_pool)?;
+    write_edits(config_path, &yaml)?;
     println!(
         "added {name:?} to roadwarriors pool {if_:?} in {}",
         config_path.display()
@@ -220,12 +222,12 @@ fn rw_add(
 }
 
 fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
-    let (raw, file) = read_slipmesh(config_path)?;
+    let (_, mut yaml, file) = read_slipmesh(config_path)?;
     let topology = file.topology()?;
-    let span = pool_document(&file, &topology, if_)?;
+    let document = pool_document(&file, &topology, if_)?;
 
-    let (updated_pool, public_key) = roadwarrior::del(&topology, &raw[span.clone()], if_, name)?;
-    write_edited(config_path, &raw, span, &updated_pool)?;
+    let public_key = roadwarrior::del(&topology, &mut yaml, document, if_, name)?;
+    write_edits(config_path, &yaml)?;
     println!(
         "removed {name:?} (public_key {public_key:?}) from roadwarriors pool {if_:?} in {}",
         config_path.display()
@@ -244,9 +246,9 @@ fn rw_inspect(
     invert: bool,
     config_path: &Path,
 ) -> Result<()> {
-    let (raw, file) = read_slipmesh(config_path)?;
+    let (_, mut yaml, file) = read_slipmesh(config_path)?;
     let topology = file.topology()?;
-    let (secrets, _) = settle_secrets(config_path, &raw, &file, true)?;
+    let secrets = settle_secrets(config_path, &mut yaml, &file, true)?;
 
     let text = roadwarrior::inspect(&topology, &secrets, if_, name, private_key, endpoint)?;
 
@@ -262,34 +264,32 @@ fn rw_inspect(
     Ok(())
 }
 
-fn read_slipmesh(config_path: &Path) -> Result<(String, SlipmeshFile)> {
+/// `slipmesh.yaml` as its text, parsed for editing, and read.
+fn read_slipmesh(config_path: &Path) -> Result<(String, YamlDoc, SlipmeshFile)> {
     let raw = std::fs::read_to_string(config_path)
         .with_context(|| format!("reading {}", config_path.display()))?;
-    let file =
-        SlipmeshFile::parse(&raw).with_context(|| format!("reading {}", config_path.display()))?;
-    Ok((raw, file))
+    let yaml =
+        YamlDoc::parse(&raw).with_context(|| format!("reading {}", config_path.display()))?;
+    let file = SlipmeshFile::read(&raw, &yaml)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    Ok((raw, yaml, file))
 }
 
-/// The bytes of pool `name`'s document, erring with the pools there are.
+/// The position of pool `name`'s document, erring with the pools there are.
 fn pool_document(
     file: &SlipmeshFile,
     topology: &mesh_config::MeshConfig,
     name: &str,
-) -> Result<std::ops::Range<usize>> {
+) -> Result<usize> {
     roadwarrior::find_pool(topology, name)?;
-    file.pool_span(name)
+    file.pool_document(name)
         .with_context(|| format!("pool {name:?} is in the topology but in no document"))
 }
 
-/// Writes `raw` with the document at `span` replaced by `edited` - once the result still reads as
-/// a valid `slipmesh.yaml`, so a bad edit is refused instead of written.
-fn write_edited(
-    config_path: &Path,
-    raw: &str,
-    span: std::ops::Range<usize>,
-    edited: &str,
-) -> Result<()> {
-    let updated = document::splice(raw, span, edited);
+/// Writes `yaml` with its edits to `config_path` - once the result still reads as a valid
+/// `slipmesh.yaml`, so a bad edit is refused instead of written.
+fn write_edits(config_path: &Path, yaml: &YamlDoc) -> Result<()> {
+    let updated = yaml.to_string();
     SlipmeshFile::parse(&updated)
         .context("the edited slipmesh.yaml does not read back - not written")?;
     write_replacing(config_path, &updated)
@@ -349,7 +349,7 @@ fn generate(
     config_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
-    let (raw, file) = read_slipmesh(config_path)?;
+    let (raw, mut yaml, file) = read_slipmesh(config_path)?;
     let targets = match node {
         Some(n) => {
             anyhow::ensure!(file.hosts().contains(&n), "unknown node {n:?}");
@@ -358,9 +358,9 @@ fn generate(
         None => file.hosts(),
     };
 
-    let (resolved, recorded) = settle_secrets(config_path, &raw, &file, check || diff)?;
-    if recorded != raw {
-        write_replacing(config_path, &recorded)?;
+    let resolved = settle_secrets(config_path, &mut yaml, &file, check || diff)?;
+    if yaml.to_string() != raw {
+        write_edits(config_path, &yaml)?;
     }
     // Every host is rendered and validated before any is written, so a host that fails leaves
     // the patch files as a set rather than half of them new.
@@ -391,20 +391,20 @@ fn generate(
     Ok(())
 }
 
-/// The whole topology's secrets, and `raw` with whatever they had to mint written into the fields
+/// The whole topology's secrets, with whatever they had to mint written into `yaml`, in the fields
 /// it belongs to. On a dry run, needing to mint anything is an error instead: a value that is never
 /// written down would differ on the next run.
 fn settle_secrets(
     config_path: &Path,
-    raw: &str,
+    yaml: &mut YamlDoc,
     file: &SlipmeshFile,
     dry_run: bool,
-) -> Result<(render::ResolvedSecrets, String)> {
+) -> Result<render::ResolvedSecrets> {
     let topology = file.topology()?;
     let resolved = render::resolve_secrets(&topology, &render::NothingStored);
     let minted = minted::minted(&topology, &resolved)?;
     if minted.is_empty() {
-        return Ok((resolved, raw.to_owned()));
+        return Ok(resolved);
     }
     let routes = minted.routes().join(", ");
     anyhow::ensure!(
@@ -412,12 +412,9 @@ fn settle_secrets(
         "{} lacks {routes} - run `slipmesh-taloscfg generate` to mint and write them",
         config_path.display()
     );
-
-    let recorded = minted.record(raw, file)?;
-    SlipmeshFile::parse(&recorded)
-        .context("slipmesh.yaml with the minted values written in does not read back")?;
+    minted.record(yaml, file)?;
     println!("minted {routes} into {}", config_path.display());
-    Ok((resolved, recorded))
+    Ok(resolved)
 }
 
 /// Writes `content` to a sibling file and renames it over `path`, so an interrupted write cannot
@@ -457,17 +454,11 @@ fn render_hosts(
                 })?;
             }
 
-            let mut patches = Vec::new();
-            for patch in file.patches_for(host)? {
-                if patch.sources > 1 {
-                    eprintln!(
-                        "{host}: {} is merged from {} documents and written re-serialized - \
-                         their comments do not carry over",
-                        patch.identity, patch.sources
-                    );
-                }
-                patches.push(patch.text);
-            }
+            let patches: Vec<String> = file
+                .patches_for(host)?
+                .into_iter()
+                .map(|patch| patch.text)
+                .collect();
 
             let mut generated = vec![
                 render_extension_service_document(
@@ -784,10 +775,9 @@ installer:
     fn two_dry_runs_render_the_same() {
         let paths = setup("");
         paths.generate(None, false, false).unwrap();
-        let raw = paths.config();
-        let file = SlipmeshFile::parse(&raw).unwrap();
         let render = || {
-            let (resolved, _) = settle_secrets(&paths.config, &raw, &file, true).unwrap();
+            let (_, mut yaml, file) = read_slipmesh(&paths.config).unwrap();
+            let resolved = settle_secrets(&paths.config, &mut yaml, &file, true).unwrap();
             render_hosts(&file, &resolved, &["a", "b", "c", "d"], &paths.patches)
                 .unwrap()
                 .into_iter()
@@ -856,10 +846,16 @@ clients:
   - {name: carol, public_key: "CCC=", allowed_ips: ["203.0.113.22/32"]}
 "#;
 
-    fn pool_span(paths: &Paths, pool: &str) -> (String, std::ops::Range<usize>) {
-        let raw = std::fs::read_to_string(&paths.config).unwrap();
-        let span = SlipmeshFile::parse(&raw).unwrap().pool_span(pool).unwrap();
-        (raw, span)
+    /// The bytes of pool `name`'s document in `raw`, from its `---` to the next one.
+    fn pool_bounds(raw: &str, name: &str) -> std::ops::Range<usize> {
+        let named = raw
+            .find(&format!("kind: roadwarriors\nname: {name}\n"))
+            .unwrap();
+        let start = raw[..named].rfind("---").unwrap();
+        let end = raw[named..]
+            .find("\n---")
+            .map_or(raw.len(), |i| named + i + 1);
+        start..end
     }
 
     #[test]
@@ -867,7 +863,8 @@ clients:
         let paths = setup(POOLS);
         // Minted first, so that the only change the client makes is its own.
         paths.generate(None, false, false).unwrap();
-        let (before, span) = pool_span(&paths, "first");
+        let before = paths.config();
+        let bounds = pool_bounds(&before, "first");
         rw_add(
             "first",
             "dave",
@@ -881,22 +878,25 @@ clients:
         )
         .unwrap();
 
-        let after = std::fs::read_to_string(&paths.config).unwrap();
-        assert!(after.starts_with(&before[..span.start]), "{after}");
-        assert!(after.ends_with(&before[span.end..]), "{after}");
-        let (_, new_span) = pool_span(&paths, "first");
-        assert!(after[new_span].contains("name: dave"), "{after}");
+        let after = paths.config();
+        assert!(after.starts_with(&before[..bounds.start]), "{after}");
+        assert!(after.ends_with(&before[bounds.end..]), "{after}");
+        assert!(
+            after[pool_bounds(&after, "first")].contains("name: dave"),
+            "{after}"
+        );
     }
 
     #[test]
     fn rw_del_edits_only_the_pools_own_document() {
         let paths = setup(POOLS);
-        let (before, span) = pool_span(&paths, "second");
+        let before = paths.config();
+        let bounds = pool_bounds(&before, "second");
 
         rw_del("second", "carol", &paths.config).unwrap();
 
-        let after = std::fs::read_to_string(&paths.config).unwrap();
-        assert!(after.starts_with(&before[..span.start]), "{after}");
+        let after = paths.config();
+        assert!(after.starts_with(&before[..bounds.start]), "{after}");
         assert!(!after.contains("carol"), "{after}");
     }
 

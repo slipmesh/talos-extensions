@@ -5,42 +5,140 @@
 //! mints a new identity for that node, link or pool, and for every peer that refers to it. Only
 //! what the run generated is written - a field set on the entry or in the global `obfuscation` is
 //! never copied down, and neither are the switches that are never generated.
+//!
+//! The values go in through `yaml-rt` overlays: each document is read into a struct that names only
+//! the fields written here, and written back as the smallest edit, so everything else in the file
+//! stays as the operator wrote it.
 
-use crate::document;
 use crate::mesh_config::MeshConfig;
 use crate::render::{ResolvedSecrets, link_key};
 use crate::slipmesh_file::SlipmeshFile;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use common::Obfuscation;
-use std::ops::Range;
-use yaml_serde::{Mapping, Value};
-use yamlpath::{Component, Route};
+use yaml_rt::{YamlDoc, YamlRt};
+
+/// The obfuscation fields the generator mints - `obfuscation_gen` fills these nine and no others.
+#[derive(YamlRt, Default, Debug, Clone, PartialEq)]
+struct GeneratedObfuscation {
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    jc: Option<u16>,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    jmin: Option<u16>,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    jmax: Option<u16>,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    s1: Option<u16>,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    s2: Option<u16>,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    h1: Option<u32>,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    h2: Option<u32>,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    h3: Option<u32>,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    h4: Option<u32>,
+}
+
+macro_rules! each_generated_field {
+    ($apply:ident) => {
+        $apply!(jc);
+        $apply!(jmin);
+        $apply!(jmax);
+        $apply!(s1);
+        $apply!(s2);
+        $apply!(h1);
+        $apply!(h2);
+        $apply!(h3);
+        $apply!(h4);
+    };
+}
+
+impl GeneratedObfuscation {
+    /// The fields of `resolved` none of `layers` set - the ones this run generated.
+    fn of(resolved: &Obfuscation, layers: &[&Obfuscation]) -> Option<Self> {
+        let mut generated = Self::default();
+        macro_rules! take {
+            ($f:ident) => {
+                if layers.iter().all(|layer| layer.$f.is_none()) {
+                    generated.$f = resolved.$f;
+                }
+            };
+        }
+        each_generated_field!(take);
+        (generated != Self::default()).then_some(generated)
+    }
+
+    /// `self` with every field `other` sets taken from it.
+    fn fill(&mut self, other: &Self) {
+        macro_rules! fill {
+            ($f:ident) => {
+                if other.$f.is_some() {
+                    self.$f = other.$f;
+                }
+            };
+        }
+        each_generated_field!(fill);
+    }
+}
+
+#[derive(YamlRt)]
+struct NetworkDocument {
+    #[yaml(default)]
+    nodes: Vec<NodeFields>,
+    #[yaml(default, skip_serializing_if = "Option::is_none")]
+    mesh: Option<MeshFields>,
+}
+
+#[derive(YamlRt)]
+struct NodeFields {
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    mesh_private_key: Option<String>,
+}
+
+#[derive(YamlRt)]
+struct MeshFields {
+    #[yaml(default)]
+    links: Vec<LinkFields>,
+}
+
+#[derive(YamlRt)]
+struct LinkFields {
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    obfuscation: Option<GeneratedObfuscation>,
+}
+
+#[derive(YamlRt)]
+struct PoolDocument {
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    private_key: Option<String>,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    obfuscation: Option<GeneratedObfuscation>,
+}
+
+/// One pool's minted values.
+#[derive(Default)]
+struct PoolMinted {
+    private_key: Option<String>,
+    obfuscation: Option<GeneratedObfuscation>,
+}
 
 /// The values a run minted, each with the field it goes in.
+#[derive(Default)]
 pub struct Minted {
-    entries: Vec<Entry>,
-}
-
-/// Which document of `slipmesh.yaml` a value goes in.
-#[derive(PartialEq, Clone)]
-enum Home {
-    Network,
-    Pool(String),
-}
-
-/// One value, and where it goes: `key` in the mapping at `parent`.
-struct Entry {
-    home: Home,
-    parent: Vec<Component<'static>>,
-    key: &'static str,
-    value: Value,
-    /// How a message names it.
-    name: String,
+    /// By the node's position in `nodes`.
+    node_keys: Vec<(usize, String)>,
+    /// By the link's position in `mesh.links`.
+    link_obfuscation: Vec<(usize, GeneratedObfuscation)>,
+    /// By the pool's name.
+    pools: Vec<(String, PoolMinted)>,
+    /// How a message names each value.
+    names: Vec<String>,
 }
 
 /// What `resolved` holds that `topology` leaves unset.
 pub fn minted(topology: &MeshConfig, resolved: &ResolvedSecrets) -> Result<Minted> {
-    let mut entries = Vec::new();
+    let mut out = Minted::default();
 
     for (index, node) in topology.nodes.iter().enumerate() {
         if node.mesh_private_key.is_some() {
@@ -50,13 +148,9 @@ pub fn minted(topology: &MeshConfig, resolved: &ResolvedSecrets) -> Result<Minte
             .mesh_private_keys
             .get(&node.name)
             .with_context(|| format!("no key resolved for node {:?}", node.name))?;
-        entries.push(Entry {
-            home: Home::Network,
-            parent: vec!["nodes".into(), index.into()],
-            key: "mesh_private_key",
-            value: key.as_str().into(),
-            name: format!("nodes[{}].mesh_private_key", node.name),
-        });
+        out.node_keys.push((index, key.clone()));
+        out.names
+            .push(format!("nodes[{}].mesh_private_key", node.name));
     }
 
     for (index, link) in topology.mesh.links.iter().enumerate() {
@@ -64,159 +158,104 @@ pub fn minted(topology: &MeshConfig, resolved: &ResolvedSecrets) -> Result<Minte
             continue;
         }
         let pair = link_key(&link.pair);
-        let generated = generated_fields(
-            resolved.mesh_link_obfuscation.get(&pair),
-            &[&link.obfuscation, &topology.obfuscation],
-        )?;
-        if let Some(fields) = generated {
-            entries.push(Entry {
-                home: Home::Network,
-                parent: vec!["mesh".into(), "links".into(), index.into()],
-                key: "obfuscation",
-                value: Value::Mapping(fields),
-                name: format!("mesh.links[{pair}].obfuscation"),
+        let generated = resolved
+            .mesh_link_obfuscation
+            .get(&pair)
+            .and_then(|resolved| {
+                GeneratedObfuscation::of(resolved, &[&link.obfuscation, &topology.obfuscation])
             });
+        if let Some(generated) = generated {
+            out.link_obfuscation.push((index, generated));
+            out.names.push(format!("mesh.links[{pair}].obfuscation"));
         }
     }
 
     for pool in &topology.roadwarriors {
-        let home = Home::Pool(pool.name.clone());
+        let mut minted = PoolMinted::default();
         if pool.private_key.is_none() {
             let key = resolved
                 .roadwarrior_private_keys
                 .get(&pool.name)
                 .with_context(|| format!("no key resolved for pool {:?}", pool.name))?;
-            entries.push(Entry {
-                home: home.clone(),
-                parent: Vec::new(),
-                key: "private_key",
-                value: key.as_str().into(),
-                name: format!("roadwarriors[{}].private_key", pool.name),
-            });
+            minted.private_key = Some(key.clone());
+            out.names
+                .push(format!("roadwarriors[{}].private_key", pool.name));
         }
-        if pool.plain {
-            continue;
+        if !pool.plain {
+            minted.obfuscation =
+                resolved
+                    .roadwarrior_obfuscation
+                    .get(&pool.name)
+                    .and_then(|resolved| {
+                        GeneratedObfuscation::of(
+                            resolved,
+                            &[&pool.obfuscation, &topology.obfuscation],
+                        )
+                    });
+            if minted.obfuscation.is_some() {
+                out.names
+                    .push(format!("roadwarriors[{}].obfuscation", pool.name));
+            }
         }
-        let generated = generated_fields(
-            resolved.roadwarrior_obfuscation.get(&pool.name),
-            &[&pool.obfuscation, &topology.obfuscation],
-        )?;
-        if let Some(fields) = generated {
-            entries.push(Entry {
-                home,
-                parent: Vec::new(),
-                key: "obfuscation",
-                value: Value::Mapping(fields),
-                name: format!("roadwarriors[{}].obfuscation", pool.name),
-            });
+        if minted.private_key.is_some() || minted.obfuscation.is_some() {
+            out.pools.push((pool.name.clone(), minted));
         }
     }
 
-    Ok(Minted { entries })
+    Ok(out)
 }
 
 impl Minted {
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.names.is_empty()
     }
 
     /// Where each value goes, the way a message names it.
     pub fn routes(&self) -> Vec<String> {
-        self.entries.iter().map(|e| e.name.clone()).collect()
+        self.names.clone()
     }
 
-    /// `raw`, the whole of `slipmesh.yaml`, with every value written into its field and every
-    /// other byte as it was.
-    pub fn record(&self, raw: &str, file: &SlipmeshFile) -> Result<String> {
-        let mut homes: Vec<&Home> = Vec::new();
-        for entry in &self.entries {
-            if !homes.contains(&&entry.home) {
-                homes.push(&entry.home);
+    /// Writes every value into its field of `yaml`, the `slipmesh.yaml` `file` was read from.
+    pub fn record(&self, yaml: &mut YamlDoc, file: &SlipmeshFile) -> Result<()> {
+        if !self.node_keys.is_empty() || !self.link_obfuscation.is_empty() {
+            let index = file.network_document();
+            let mut network: NetworkDocument = yaml.read_document(index)?;
+            for (node, key) in &self.node_keys {
+                network
+                    .nodes
+                    .get_mut(*node)
+                    .context("a node the network document does not have")?
+                    .mesh_private_key = Some(key.clone());
             }
-        }
-
-        let mut edits: Vec<(Range<usize>, String)> = Vec::new();
-        for home in homes {
-            let span = match home {
-                Home::Network => file.network_span(),
-                Home::Pool(name) => file
-                    .pool_span(name)
-                    .with_context(|| format!("pool {name:?} is in no document"))?,
-            };
-            let mut text = raw[span.clone()].to_owned();
-            for entry in self.entries.iter().filter(|e| &e.home == home) {
-                text = entry
-                    .write(&text)
-                    .with_context(|| format!("writing {}", entry.name))?;
+            for (link, generated) in &self.link_obfuscation {
+                network
+                    .mesh
+                    .as_mut()
+                    .and_then(|mesh| mesh.links.get_mut(*link))
+                    .context("a link the network document does not have")?
+                    .obfuscation
+                    .get_or_insert_with(Default::default)
+                    .fill(generated);
             }
-            edits.push((span, text));
+            yaml.write_document(index, &network)?;
         }
 
-        // From the last document back, so that the spans of those before it still hold.
-        edits.sort_by_key(|(span, _)| std::cmp::Reverse(span.start));
-        Ok(edits.into_iter().fold(raw.to_owned(), |out, (span, text)| {
-            document::splice(&out, span, &text)
-        }))
-    }
-}
-
-impl Entry {
-    /// `document` with this value written in. Obfuscation fields join an `obfuscation` mapping the
-    /// entry already has, beside the fields written there by hand.
-    fn write(&self, document: &str) -> Result<String> {
-        let doc = yamlpath::Document::new(document).context("parsing the document")?;
-        let mut own = self.parent.clone();
-        own.push(self.key.into());
-        let own = Route::from(own);
-        let additions: Vec<(Route, String, Value)> = match &self.value {
-            Value::Mapping(fields) if doc.query_exists(&own) => fields
-                .iter()
-                .map(|(k, v)| {
-                    let key = k.as_str().context("a field that is not a string")?;
-                    Ok((own.clone(), key.to_owned(), v.clone()))
-                })
-                .collect::<Result<_>>()?,
-            value => vec![(
-                Route::from(self.parent.clone()),
-                self.key.to_owned(),
-                value.clone(),
-            )],
-        };
-        let patches: Vec<yamlpatch::Patch> = additions
-            .into_iter()
-            .map(|(route, key, value)| yamlpatch::Patch {
-                route,
-                operation: yamlpatch::Op::Add { key, value },
-            })
-            .collect();
-        let patched = yamlpatch::apply_yaml_patches(&doc, &patches)?;
-        Ok(patched.source().to_owned())
-    }
-}
-
-/// The fields of `resolved` none of `layers` set - the ones this run generated - in declaration
-/// order.
-pub(crate) fn generated_fields(
-    resolved: Option<&Obfuscation>,
-    layers: &[&Obfuscation],
-) -> Result<Option<Mapping>> {
-    let Some(resolved) = resolved else {
-        return Ok(None);
-    };
-    let mut fields = fields_of(resolved)?;
-    for layer in layers {
-        for key in fields_of(layer)?.keys() {
-            fields.shift_remove(key);
+        for (name, minted) in &self.pools {
+            let index = file
+                .pool_document(name)
+                .with_context(|| format!("pool {name:?} is in no document"))?;
+            let mut pool: PoolDocument = yaml.read_document(index)?;
+            if let Some(key) = &minted.private_key {
+                pool.private_key = Some(key.clone());
+            }
+            if let Some(generated) = &minted.obfuscation {
+                pool.obfuscation
+                    .get_or_insert_with(Default::default)
+                    .fill(generated);
+            }
+            yaml.write_document(index, &pool)?;
         }
-    }
-    Ok((!fields.is_empty()).then_some(fields))
-}
-
-/// The fields an obfuscation sets - unset ones are not serialized.
-fn fields_of(obfuscation: &Obfuscation) -> Result<Mapping> {
-    match yaml_serde::to_value(obfuscation)? {
-        Value::Mapping(fields) => Ok(fields),
-        _ => bail!("obfuscation did not serialize to a mapping"),
+        Ok(())
     }
 }
 
@@ -292,13 +331,15 @@ plain: true
 
     /// One run: resolve with nothing stored, write down what was minted.
     fn run(raw: &str) -> String {
-        let file = SlipmeshFile::parse(raw).unwrap();
+        let mut yaml = YamlDoc::parse(raw).unwrap();
+        let file = SlipmeshFile::read(raw, &yaml).unwrap();
         let topology = file.topology().unwrap();
         let resolved = resolve_secrets(&topology, &NothingStored);
         minted(&topology, &resolved)
             .unwrap()
-            .record(raw, &file)
-            .unwrap()
+            .record(&mut yaml, &file)
+            .unwrap();
+        yaml.to_string()
     }
 
     fn topology(raw: &str) -> MeshConfig {
@@ -413,7 +454,9 @@ plain: true
         let topology = file.topology().unwrap();
         let minted = minted(&topology, &resolve_secrets(&topology, &NothingStored)).unwrap();
         assert!(minted.is_empty(), "{:?}", minted.routes());
-        assert_eq!(minted.record(&first, &file).unwrap(), first);
+        let mut yaml = YamlDoc::parse(&first).unwrap();
+        minted.record(&mut yaml, &file).unwrap();
+        assert_eq!(yaml.to_string(), first);
     }
 
     #[test]

@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Offline generator for Talos machine-config patches (awg mesh/roadwarriors, router BGP/OSPF, nftables) from a single mesh.yaml topology file - never touches a live node"
+description = "Offline generator for Talos machine-config patches (awg mesh/roadwarriors, router BGP/OSPF, nftables) from a single slipmesh.yaml file - never touches a live node"
 
 [[bin]]
 name = "slipmesh-taloscfg"
@@ -22,15 +22,12 @@ common.workspace = true
 nftables.workspace = true
 router.workspace = true
 serde.workspace = true
-tree-sitter.workspace = true
-tree-sitter-yaml.workspace = true
 sha2 = "0.11.0"
 similar = "3.2.0"
 x25519-dalek = { version = "3.0.0", features = ["static_secrets", "getrandom"] }
 rand = "0.10.2"
-yamlpath.workspace = true
-yamlpatch.workspace = true
 yaml_serde.workspace = true
 qrcode.workspace = true
 anstream = "1.0.0"
 anstyle = "1.0.14"
+yaml-rt.workspace = true

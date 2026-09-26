@@ -370,14 +370,12 @@ those without `include` first, then those naming the node, each in file order, s
 wins wherever it sits. Mappings merge key by key, an explicit `null` deletes a key, and a sequence
 replaces the one before it whole. That last part differs from Talos' own strategic merge, which
 appends to a list: appending by key needs the types Talos has and this tool does not, and appending
-without a key would leave no way to remove an element. A document that comes from one source goes
-into the patch file as written; a merged one is re-serialized, which loses its comments, and
-`generate` names it when that happens.
+without a key would leave no way to remove an element. Every document goes into the patch file
+serialized; its comments stay in `slipmesh.yaml`.
 
 A file a `patch` document carries in `configFiles[].content` may be written as YAML - a mapping or
 a list - rather than as a string. Talos takes only a string there, so the patch file gets that
-YAML's text, and the document goes in re-serialized, without its comments. Written this way, each field of the file is a
-field of `slipmesh.yaml` like any other:
+YAML's text. Written this way, each field of the file is a field of `slipmesh.yaml` like any other:
 
 ```yaml
 slipmesh:
@@ -411,9 +409,10 @@ down, and neither are `random_trailers` and `disable_cookies`, which are never g
 node out of the `network` document takes its key with it, so putting it back mints a new one.
 
 So `slipmesh.yaml` holds private keys in the clear, as the patch files it renders do - keep it
-where those are kept. What the tool adds goes in through format-preserving patch operations,
-serialized by `yaml_serde`, and the rest of the file stays as written; an entry written in flow
-style, `{...}`, takes an addition in flow style.
+where those are kept. What the tool adds goes in through [yaml-rt](https://crates.io/crates/yaml-rt),
+which changes only the lines it adds: comments and layout stay as written, and an entry written in
+flow style, `{...}`, takes an addition in flow style. It refuses a file with a line of just `---`
+inside an indented block scalar, which YAML allows; a ruleset should not carry one.
 
 Each rendered config is validated through the real daemon's own `validate()` - the daemons are
 depended on as libraries here, so there is no second implementation to drift.
@@ -430,8 +429,8 @@ to be minted they stop and name it, because a key minted and not kept would diff
 
 ### Road warriors
 
-`rw-add`/`rw-del` add or remove one client in the pool's own document through a format-preserving
-YAML patch rather than a rewrite, so the rest of `slipmesh.yaml` stays exactly as written:
+`rw-add`/`rw-del` add or remove one client in the pool's own document the same way, so the rest of
+`slipmesh.yaml` stays exactly as written:
 
 ```sh
 slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 10.62.253.5/32 --export --qr

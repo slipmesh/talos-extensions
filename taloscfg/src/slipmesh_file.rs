@@ -6,13 +6,17 @@
 //! `patch` is a Talos document, both aimed at hosts by `include`/`exclude`. The block is addressed
 //! to this tool and never reaches a patch file.
 
-use crate::document;
 use crate::merge::merge_document;
 use crate::mesh_config::{self, MeshConfig, NftablesTopology, RoadwarriorPool};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::ops::Range;
+use yaml_rt::{NodeId, YamlDoc};
 use yaml_serde::Value;
+
+/// The generator's own top-level block in every document: what the document is for and which
+/// hosts it reaches.
+pub const META_KEY: &str = "slipmesh";
 
 /// The `ExtensionServiceConfig` names this tool generates itself, and so refuses in a `patch`
 /// document. Talos keeps `name` unique per `kind`, so the pair is the whole identity.
@@ -49,47 +53,53 @@ struct Meta {
 }
 
 struct Document {
+    /// Its position among the documents of the file, those of only comments included - how
+    /// `yaml-rt` addresses it.
+    index: usize,
     line: usize,
-    /// The document's bytes in the file, markers and all - where an edited version goes back.
-    span: Range<usize>,
     meta: Meta,
-    /// Trimmed, without document markers or the `slipmesh:` block - what a patch file gets when
-    /// nothing is merged into it.
-    text: String,
-    /// The same document parsed, also without the `slipmesh:` block.
+    /// The document parsed, without the `slipmesh:` block.
     value: Value,
-    /// The document's own bytes with the `slipmesh:` block blanked out, behind as many empty lines
-    /// as come before it in the file - deserialized from this, a document's error names the line
-    /// of the file it is on.
+    /// The document's text with the `slipmesh:` block blanked out, behind as many empty lines as
+    /// come before it in the file - deserialized from this, a document's error names the line of
+    /// the file it is on.
     positioned: String,
 }
 
 impl Document {
-    /// `None` for a document with nothing in it but comments: it says nothing to route.
-    ///
-    /// The value is parsed from `exact`, the document's own bytes, and not from the trimmed
-    /// `text`: trimming takes the final newline off a block scalar that ends the document, and
-    /// with it changes the scalar's value.
-    fn read(exact: &str, span: Range<usize>, text: &str, line: usize) -> Result<Option<Self>> {
-        let mut value: Value = yaml_serde::from_str(exact).context("not valid YAML")?;
-        if value.is_null() {
+    /// The document at `index`, whose text is `raw[span]`. `None` for a document with nothing in
+    /// it but comments: it says nothing to route.
+    fn read(raw: &str, yaml: &YamlDoc, index: usize, span: Range<usize>) -> Result<Option<Self>> {
+        let Some(root) = yaml.document_root(index)? else {
             return Ok(None);
-        }
-        let meta = value
-            .as_mapping_mut()
-            .and_then(|mapping| mapping.shift_remove(document::META_KEY))
-            .context("no `slipmesh:` block saying what the document is for")?;
-        let meta: Meta = yaml_serde::from_value(meta).context("its `slipmesh:` block")?;
-        let text = document::strip_meta(text)?.trim().to_owned();
-        let positioned = "\n".repeat(line - 1) + &document::blank_key(exact, document::META_KEY)?;
-        Ok(Some(Self {
-            line,
-            span,
-            meta,
-            text,
-            value,
-            positioned,
-        }))
+        };
+        let line = raw[..span.start].matches('\n').count() + 1;
+        let text = &raw[span.clone()];
+        let read = || -> Result<Self> {
+            let mut value: Value = yaml_serde::from_str(text).context("not valid YAML")?;
+            let meta = value
+                .as_mapping_mut()
+                .and_then(|mapping| mapping.shift_remove(META_KEY))
+                .context("no `slipmesh:` block saying what the document is for")?;
+            let meta: Meta = yaml_serde::from_value(meta).context("its `slipmesh:` block")?;
+            let mut blanked = text.to_owned();
+            if let Some(entry) = yaml.get_mapping_entry(root, META_KEY)? {
+                let entry = span_of(yaml, entry)?;
+                let entry = entry.start - span.start..entry.end - span.start;
+                let lines = "\n".repeat(blanked[entry.clone()].matches('\n').count());
+                blanked.replace_range(entry, &lines);
+            }
+            Ok(Self {
+                index,
+                line,
+                meta,
+                value,
+                positioned: "\n".repeat(line - 1) + &blanked,
+            })
+        };
+        read()
+            .map(Some)
+            .with_context(|| format!("the document starting at line {line}"))
     }
 
     /// The document as `T`, with an error that names the field and the line of the file.
@@ -114,20 +124,27 @@ impl Document {
     }
 }
 
-/// One Talos document as it goes into one host's patch file.
+/// The byte range of `node` in the source.
+fn span_of(yaml: &YamlDoc, node: NodeId) -> Result<Range<usize>> {
+    let span = yaml
+        .node(node)
+        .context("a node the parser did not keep")?
+        .span();
+    Ok(span.start as usize..span.end as usize)
+}
+
+/// One Talos document as it goes into one host's patch file, serialized - its comments stay in
+/// `slipmesh.yaml`.
 #[derive(Debug, PartialEq)]
 pub struct HostDocument {
-    /// `kind`, plus `/name` when the document has one - what a warning calls it.
+    /// `kind`, plus `/name` when the document has one.
     pub identity: String,
     pub text: String,
-    /// How many `patch` documents it was merged from. More than one means it was re-serialized,
-    /// which loses its comments - as does a content written as YAML.
-    pub sources: usize,
 }
 
 pub struct SlipmeshFile {
     network: Value,
-    network_span: Range<usize>,
+    network_index: usize,
     hosts: Vec<String>,
     pools: Vec<Document>,
     rulesets: Vec<Document>,
@@ -136,15 +153,27 @@ pub struct SlipmeshFile {
 
 impl SlipmeshFile {
     pub fn parse(raw: &str) -> Result<Self> {
+        Self::read(raw, &YamlDoc::parse(raw)?)
+    }
+
+    /// `yaml` parsed from `raw` - for a caller that goes on to edit it.
+    pub fn read(raw: &str, yaml: &YamlDoc) -> Result<Self> {
         let mut networks = Vec::new();
         let mut pools = Vec::new();
         let mut rulesets = Vec::new();
         let mut patches = Vec::new();
-        for (span, text) in document::documents(raw)? {
-            let line = raw[..span.start].matches('\n').count() + 1;
-            let Some(document) = Document::read(&raw[span.clone()], span.clone(), &text, line)
-                .with_context(|| format!("the document starting at line {line}"))?
-            else {
+        // Each document runs to where the next one starts. Its own span cannot say where it ends:
+        // `yaml-rt` ends the span of a block scalar at its `|`, before the text under it.
+        let mut starts: Vec<usize> = yaml
+            .documents()
+            .map(|document| span_of(yaml, document).map(|span| span.start))
+            .collect::<Result<_>>()?;
+        if let Some(first) = starts.first_mut() {
+            *first = 0;
+        }
+        for (index, &start) in starts.iter().enumerate() {
+            let end = starts.get(index + 1).copied().unwrap_or(raw.len());
+            let Some(document) = Document::read(raw, yaml, index, start..end)? else {
                 continue;
             };
             match document.meta.kind {
@@ -247,7 +276,7 @@ impl SlipmeshFile {
         }
 
         let parsed = Self {
-            network_span: network.span,
+            network_index: network.index,
             network: network.value,
             hosts,
             pools,
@@ -258,18 +287,18 @@ impl SlipmeshFile {
         Ok(parsed)
     }
 
-    /// The byte range of the `network` document - where an edit to the topology is spliced back.
-    pub fn network_span(&self) -> Range<usize> {
-        self.network_span.clone()
+    /// The position of the `network` document in the file - where an edit to the topology goes.
+    pub fn network_document(&self) -> usize {
+        self.network_index
     }
 
-    /// The byte range of the `roadwarriors` document holding pool `name` - where an edit to that
-    /// pool is spliced back.
-    pub fn pool_span(&self, name: &str) -> Option<Range<usize>> {
+    /// The position of the `roadwarriors` document holding pool `name` - where an edit to that
+    /// pool goes.
+    pub fn pool_document(&self, name: &str) -> Option<usize> {
         self.pools
             .iter()
             .find(|p| p.value.get("name").and_then(Value::as_str) == Some(name))
-            .map(|p| p.span.clone())
+            .map(|p| p.index)
     }
 
     /// The hosts `network` names, in its order.
@@ -318,27 +347,20 @@ impl SlipmeshFile {
                     .filter(|p| Identity::of(&p.value) == identity)
                     .copied()
                     .collect();
-                let text = match sources.as_slice() {
-                    [first, rest @ ..] => {
-                        let mut document = rest.iter().fold(first.value.clone(), |base, patch| {
-                            merge_document(base, &patch.value)
-                        });
-                        let contents_rewritten = contents_as_text(&mut document)?;
-                        if rest.is_empty() && !contents_rewritten {
-                            first.text.clone()
-                        } else {
-                            yaml_serde::to_string(&document)
-                                .context("serializing a patch document")?
-                                .trim_end()
-                                .to_owned()
-                        }
-                    }
-                    [] => unreachable!("every identity comes from at least one document"),
+                let [first, rest @ ..] = sources.as_slice() else {
+                    unreachable!("every identity comes from at least one document")
                 };
+                let mut document = rest.iter().fold(first.value.clone(), |base, patch| {
+                    merge_document(base, &patch.value)
+                });
+                contents_as_text(&mut document)?;
+                let text = yaml_serde::to_string(&document)
+                    .context("serializing a patch document")?
+                    .trim_end()
+                    .to_owned();
                 Ok(HostDocument {
                     identity: identity.to_string(),
                     text,
-                    sources: sources.len(),
                 })
             })
             .collect()
@@ -369,26 +391,24 @@ impl SlipmeshFile {
 }
 
 /// Replaces each `configFiles[].content` of `document` written as a mapping or a list with that
-/// YAML's text, returning whether there was any.
+/// YAML's text.
 ///
 /// Such a content is the file's contents given as YAML, each of its fields a field of
 /// `slipmesh.yaml` like any other. Talos takes only a string there.
-fn contents_as_text(document: &mut Value) -> Result<bool> {
+fn contents_as_text(document: &mut Value) -> Result<()> {
     let Some(files) = document
         .get_mut("configFiles")
         .and_then(Value::as_sequence_mut)
     else {
-        return Ok(false);
+        return Ok(());
     };
-    let mut rewritten = false;
     for content in files.iter_mut().filter_map(|file| file.get_mut("content")) {
         if content.is_mapping() || content.is_sequence() {
             let text = yaml_serde::to_string(&*content).context("serializing a file's contents")?;
             *content = Value::String(text);
-            rewritten = true;
         }
     }
-    Ok(rewritten)
+    Ok(())
 }
 
 /// What Talos keys a document by - two `patch` documents with the same one are merged.
@@ -604,7 +624,7 @@ extraArgs:
     }
 
     #[test]
-    fn a_single_source_patch_passes_through_byte_for_byte() {
+    fn a_patch_goes_out_as_the_serializer_writes_it_without_its_slipmesh_block() {
         let patch = "slipmesh:\n  kind: patch\n  include: [node-a]\n# why this disk\napiVersion: v1alpha1\nkind: UnattendedInstallConfig   # trailing\ninstaller:\n    disk:   /dev/vda\n";
         let parsed = SlipmeshFile::parse(&file(&[NETWORK, patch])).unwrap();
         let documents = parsed.patches_for("node-a").unwrap();
@@ -612,21 +632,28 @@ extraArgs:
             documents,
             [HostDocument {
                 identity: "UnattendedInstallConfig".into(),
-                text: "# why this disk\napiVersion: v1alpha1\nkind: UnattendedInstallConfig   # trailing\ninstaller:\n    disk:   /dev/vda".into(),
-                sources: 1,
+                text: "apiVersion: v1alpha1\nkind: UnattendedInstallConfig\ninstaller:\n  disk: /dev/vda"
+                    .into(),
             }]
         );
     }
 
     #[test]
-    fn a_block_scalar_with_a_trailing_space_and_a_pem_survives_verbatim() {
-        let content = "      password: \"x\" \n      -----BEGIN CERTIFICATE-----\n      MIIB\n      -----END CERTIFICATE-----\n";
+    fn a_block_scalar_with_a_trailing_space_and_a_pem_keeps_its_value() {
+        let block = "      password: \"x\" \n      -----BEGIN CERTIFICATE-----\n      MIIB\n      -----END CERTIFICATE-----\n";
         let patch = format!(
-            "slipmesh:\n  kind: patch\n  include: [node-b]\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: mikrotik\nconfigFiles:\n  - content: |\n{content}    mountPath: /etc/x\n"
+            "slipmesh:\n  kind: patch\n  include: [node-b]\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: mikrotik\nconfigFiles:\n  - content: |\n{block}    mountPath: /etc/x\n"
         );
         let parsed = SlipmeshFile::parse(&file(&[NETWORK, &patch])).unwrap();
         let documents = parsed.patches_for("node-b").unwrap();
-        assert!(documents[0].text.contains(content), "{}", documents[0].text);
+        assert_eq!(
+            content(&documents[0].text, 0).as_str(),
+            Some(
+                "password: \"x\" \n-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+            ),
+            "{}",
+            documents[0].text
+        );
         assert_eq!(documents[0].identity, "ExtensionServiceConfig/mikrotik");
     }
 
@@ -665,7 +692,6 @@ extraArgs:
         let default = "slipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n  - mountPath: /etc/device.yaml\n    content:\n      host: router0.example.com\n";
         let parsed = SlipmeshFile::parse(&file(&[NETWORK, default, DEVICE])).unwrap();
         let documents = parsed.patches_for("node-b").unwrap();
-        assert_eq!(documents[0].sources, 2);
         assert_eq!(
             content(&documents[0].text, 0).as_str(),
             Some("host: router1.example.com\nport: 8729\nusername: admin\npassword: hunter2\n")
@@ -684,15 +710,12 @@ extraArgs:
 
         let merged = parsed.patches_for("node-a").unwrap();
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].sources, 2);
         let value: yaml_serde::Value = yaml_serde::from_str(&merged[0].text).unwrap();
         assert_eq!(value["extraArgs"]["v"].as_str(), Some("4"));
         assert_eq!(
             value["extraArgs"]["rotate-server-certificates"].as_str(),
             Some("true")
         );
-
-        assert_eq!(parsed.patches_for("node-b").unwrap()[0].sources, 1);
     }
 
     #[test]
@@ -752,18 +775,19 @@ extraArgs:
     }
 
     #[test]
-    fn a_pool_is_found_by_name_at_the_bytes_it_was_written_at() {
-        let raw = file(&[NETWORK, &pool("first", 51820), &pool("second", 51821)]);
+    fn documents_are_found_by_their_position_in_the_file() {
+        // A document of only comments holds a position too.
+        let raw = file(&[
+            NETWORK,
+            &pool("first", 51820),
+            "# nothing here yet\n",
+            &pool("second", 51821),
+        ]);
         let parsed = SlipmeshFile::parse(&raw).unwrap();
-        let span = parsed.pool_span("second").unwrap();
-        assert!(
-            raw[span.clone()].contains("name: second"),
-            "{}",
-            &raw[span.clone()]
-        );
-        assert!(!raw[span.clone()].contains("name: first"));
-        assert_eq!(span.end, raw.len());
-        assert!(parsed.pool_span("third").is_none());
+        assert_eq!(parsed.network_document(), 0);
+        assert_eq!(parsed.pool_document("first"), Some(1));
+        assert_eq!(parsed.pool_document("second"), Some(3));
+        assert_eq!(parsed.pool_document("third"), None);
     }
 
     #[test]
