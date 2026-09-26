@@ -11,6 +11,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use taloscfg::slipmesh_file::SlipmeshFile;
 use taloscfg::{edit, mesh_config, patch_file, roadwarrior, secrets};
@@ -377,15 +378,17 @@ fn settle_secrets(
     Ok(resolved)
 }
 
-/// Writes `content` to a sibling file and renames it over `path`, so an interrupted write cannot
-/// leave the file half-written - a key lost that way is an identity rotated.
+/// Replaces `path` with `content` atomically, so an interrupted write cannot leave the file
+/// half-written - a key lost that way is an identity rotated. Its permissions carry over, and a
+/// symlink is followed rather than replaced.
 fn write_replacing(path: &Path, content: &str) -> Result<()> {
-    let mut temporary = path.as_os_str().to_owned();
-    temporary.push(".tmp");
-    let temporary = PathBuf::from(temporary);
-    std::fs::write(&temporary, content)
-        .with_context(|| format!("writing {}", temporary.display()))?;
-    std::fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))
+    let target =
+        std::fs::canonicalize(path).with_context(|| format!("resolving {}", path.display()))?;
+    let mut file = atomic_write_file::AtomicWriteFile::open(&target)
+        .with_context(|| format!("opening {} for writing", target.display()))?;
+    file.write_all(content.as_bytes())
+        .and_then(|()| file.commit())
+        .with_context(|| format!("writing {}", target.display()))
 }
 
 /// Every target host's patch file, rendered and validated in memory.
@@ -589,6 +592,27 @@ installer:
             config,
             patches: dir.join("patches"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_edit_through_a_symlink_edits_its_target() {
+        let paths = setup("");
+        let target = paths.config.with_file_name("target.yaml");
+        std::fs::rename(&paths.config, &target).unwrap();
+        std::os::unix::fs::symlink(&target, &paths.config).unwrap();
+        paths.generate(None, false, false).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&paths.config)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            std::fs::read_to_string(&target)
+                .unwrap()
+                .contains("mesh_private_key")
+        );
     }
 
     #[test]

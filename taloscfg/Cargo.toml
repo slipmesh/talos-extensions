@@ -31,3 +31,4 @@ qrcode.workspace = true
 anstream = "1.0.0"
 anstyle = "1.0.14"
 yaml-rt.workspace = true
+atomic-write-file = "0.3.1"
