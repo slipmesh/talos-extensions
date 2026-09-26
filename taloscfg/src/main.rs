@@ -296,14 +296,39 @@ fn write_edited(
     write_replacing(config_path, &updated)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtensionServiceConfig<'a> {
+    api_version: &'a str,
+    kind: &'a str,
+    name: &'a str,
+    config_files: [ConfigFile<'a>; 1],
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigFile<'a> {
+    mount_path: &'a str,
+    content: &'a str,
+}
+
 /// Renders one owned `ExtensionServiceConfig` document: `name`/`mountPath` fixed by convention,
-/// `inner_yaml` (the daemon's own already-serialized config) nested under `content: |`, indented
-/// so it parses back as a YAML literal block scalar.
-fn render_extension_service_document(name: &str, mount_path: &str, inner_yaml: &str) -> String {
-    let indented: String = inner_yaml.lines().map(|l| format!("      {l}\n")).collect();
-    format!(
-        "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: {name}\nconfigFiles:\n  - mountPath: {mount_path}\n    content: |\n{indented}"
-    )
+/// `inner_yaml` - the daemon's own already-serialized config - as the file's content.
+fn render_extension_service_document(
+    name: &str,
+    mount_path: &str,
+    inner_yaml: &str,
+) -> Result<String> {
+    let document = ExtensionServiceConfig {
+        api_version: "v1alpha1",
+        kind: "ExtensionServiceConfig",
+        name,
+        config_files: [ConfigFile {
+            mount_path,
+            content: inner_yaml,
+        }],
+    };
+    yaml_serde::to_string(&document).context("serializing an ExtensionServiceConfig document")
 }
 
 /// What opens every patch file this tool writes.
@@ -450,19 +475,19 @@ fn render_hosts(
                     "awg",
                     "/etc/talos-extensions/awg.yaml",
                     &yaml_serde::to_string(&awg_cfg)?,
-                ),
+                )?,
                 render_extension_service_document(
                     "router",
                     "/etc/talos-extensions/router.yaml",
                     &yaml_serde::to_string(&router_cfg)?,
-                ),
+                )?,
             ];
             if let Some(cfg) = &nftables_cfg {
                 generated.push(render_extension_service_document(
                     "nftables",
                     "/etc/talos-extensions/nftables.yaml",
                     &yaml_serde::to_string(cfg)?,
-                ));
+                )?);
             }
 
             let path = patches_dir.join(format!("{host}.yaml"));
@@ -568,15 +593,13 @@ mod tests {
     }
 
     #[test]
-    fn render_extension_service_document_indents_content_as_a_literal_block() {
-        let doc = render_extension_service_document(
-            "awg",
-            "/etc/talos-extensions/awg.yaml",
-            "interfaces: []",
-        );
+    fn render_extension_service_document_is_the_serializers_output() {
+        let inner = "interfaces:\n- name: mesh-b\n  listen_port: 51820\n";
+        let doc = render_extension_service_document("awg", "/etc/talos-extensions/awg.yaml", inner)
+            .unwrap();
         assert_eq!(
             doc,
-            "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles:\n  - mountPath: /etc/talos-extensions/awg.yaml\n    content: |\n      interfaces: []\n"
+            "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles:\n- mountPath: /etc/talos-extensions/awg.yaml\n  content: |\n    interfaces:\n    - name: mesh-b\n      listen_port: 51820\n"
         );
     }
 
@@ -590,7 +613,8 @@ mod tests {
             "nftables",
             "/etc/talos-extensions/nftables.yaml",
             &inner,
-        );
+        )
+        .unwrap();
         let found = segments::owned_segment(&doc, "nftables").unwrap().unwrap();
         assert!(segments::is_owned(&found));
 
