@@ -16,13 +16,18 @@ use yaml_serde::Value;
 /// to Talos, not a set of values to merge.
 const PATCH_KEY: &str = "$patch";
 
-/// `overlay` merged over `base`. An overlay that is a `$patch: delete` document replaces the result
-/// outright - merging its keys into the base would turn a deletion into an edit.
+/// `overlay` merged over `base`. A `$patch: delete` document on either side is not merged: over the
+/// base it would turn a deletion into an edit, under the overlay an edit into a deletion - the
+/// overlay replaces the result outright.
 pub fn merge_document(base: Value, overlay: &Value) -> Value {
-    if overlay.get(PATCH_KEY).and_then(Value::as_str) == Some("delete") {
+    if is_deletion(overlay) || is_deletion(&base) {
         return overlay.clone();
     }
     merge(base, overlay)
+}
+
+fn is_deletion(document: &Value) -> bool {
+    document.get(PATCH_KEY).and_then(Value::as_str) == Some("delete")
 }
 
 fn merge(base: Value, overlay: &Value) -> Value {
@@ -119,6 +124,16 @@ mod tests {
         let overlay = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete");
         let merged = merge_document(
             yaml("apiVersion: v1alpha1\nkind: KubeletConfig\nextraArgs: {a: b}"),
+            &overlay,
+        );
+        assert_eq!(merged, overlay);
+    }
+
+    #[test]
+    fn a_document_over_a_delete_directive_replaces_it() {
+        let overlay = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\nextraArgs: {a: b}");
+        let merged = merge_document(
+            yaml("apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete"),
             &overlay,
         );
         assert_eq!(merged, overlay);
