@@ -284,6 +284,20 @@ plain: true
             .collect()
     }
 
+    /// A field generated but not in the overlay would never be written down, and minted anew on
+    /// every run.
+    #[test]
+    fn the_overlay_carries_every_field_the_generator_fills() {
+        let mut overlay = Vec::new();
+        macro_rules! name {
+            ($f:ident) => {
+                overlay.push(stringify!($f));
+            };
+        }
+        each_generated_field!(name);
+        assert_eq!(keys_of(&crate::obfuscation_gen::generate()), overlay);
+    }
+
     #[test]
     fn every_node_gets_its_key_written_into_its_entry() {
         let recorded = run(&slipmesh());
