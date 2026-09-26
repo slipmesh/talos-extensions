@@ -9,7 +9,7 @@ their config.
 | `awg` | `awg` | on the node, as `ext-awg` | brings up AmneziaWG interfaces and peers over netlink |
 | `router` | `router` | on the node, as `ext-router` | renders BIRD config (OSPFv3 + iBGP), supervises `bird` |
 | `nftables` | `nftables` | on the node, as `ext-nftables` | applies an nftables ruleset and keeps it applied |
-| `taloscfg` | `slipmesh-taloscfg` | on your workstation | renders every node's config from one `mesh.yaml` |
+| `taloscfg` | `slipmesh-taloscfg` | on your workstation | renders every node's patch from one `slipmesh.yaml` |
 | `common` | — | — | netlink, obfuscation types, shared route tagging |
 
 This repository produces plain binaries and nothing else. Packaging each daemon into a Talos
@@ -238,7 +238,7 @@ Whoever authors `router.yaml` is responsible for `bypass.exclude` covering this 
 every peer's) public endpoint - a blackholed endpoint takes the mesh link down with it. There is no
 cluster-wide node list a static per-node file could consult, so this is the same
 config-authoring-is-a-human-responsibility pattern documented above for `awg`'s private keys.
-`taloscfg` handles it for you when the topology comes from `mesh.yaml`.
+`taloscfg` handles it for you when the topology comes from `slipmesh.yaml`.
 
 ---
 
@@ -299,21 +299,123 @@ is a statically-linked binary built from source rather than the dynamically-link
 
 ---
 
-## `taloscfg`: one topology file, every node's config
+## `taloscfg`: one file, every node's patch
 
-`slipmesh-taloscfg` is the only crate here that doesn't run on a node. It reads a single
-`mesh.yaml` describing the whole mesh - links, ports, obfuscation, BGP AS, road-warrior pools,
-bypass lists, nftables ruleset - and writes `patches/<node>.yaml` for every node in it, each
-holding the `awg`/`router`/`nftables` `ExtensionServiceConfig` documents that
-`talosctl apply-config -p` then ships to that node.
+`slipmesh-taloscfg` is the only crate here that doesn't run on a node. It reads `slipmesh.yaml`,
+which describes the whole mesh and everything else a node's patch file carries, and writes
+`patches/<node>.yaml` for every node in it, each holding that node's Talos documents followed by the
+`awg`/`router`/`nftables` `ExtensionServiceConfig` documents that `talosctl apply-config -p` then
+ships to that node. A patch file is output only: nothing in it is read back, so edit
+`slipmesh.yaml` and regenerate rather than editing the patch.
+
+### `slipmesh.yaml`
+
+A multi-document YAML file. Every document opens with a `slipmesh:` block saying what it is; the
+block is addressed to this tool and never reaches a patch file.
+
+```yaml
+slipmesh:
+  kind: network
+cluster:
+  bgp_as: 64512
+  loopback_networks: {ipv4: "10.62.0.0/24", ipv6: "fd00:62::/120"}
+nodes:
+  - {name: node-a, node_id: "10.62.0.1", endpoint: "192.0.2.1"}
+  - {name: node-b, node_id: "10.62.0.2", endpoint: "192.0.2.2"}
+  - {name: router-1, node_id: "10.62.0.3", endpoint: "192.0.2.3"}
+mesh:
+  links:
+    - {pair: [node-a, node-b], port: 52801}
+    - {pair: [router-1, node-a], port: 52891, plain: true}
+---
+slipmesh:
+  kind: roadwarriors
+name: plain
+node_hostnames: [node-a]
+address: "198.51.100.1/24"
+listen_port: 51820
+plain: true
+clients: []
+---
+slipmesh:
+  kind: nftables
+  exclude: [router-1]
+ruleset: |
+  table inet talos_filter { ... }
+---
+slipmesh:
+  kind: patch
+  include: [node-b]
+apiVersion: v1alpha1
+kind: UnattendedInstallConfig
+installer:
+    disk: /dev/nvme0n1
+```
+
+| kind | how many | aimed by | holds |
+| --- | --- | --- | --- |
+| `network` | exactly one | — | the topology: `cluster`, `bfd`, `obfuscation`, `nodes`, `mesh`, `bypass` |
+| `roadwarriors` | one per pool | — | one pool: its address, port, nodes and clients |
+| `nftables` | any | `include`/`exclude` | a `ruleset` |
+| `patch` | any | `include`/`exclude` | a Talos document, carried into the patch of every node it reaches |
+
+`include` lists the nodes a document reaches; leave it out to reach every node. `exclude` takes
+nodes back out. Both name nodes of the `network` document, and a key the `slipmesh:` block does
+not know is an error, so a misspelled `include` cannot quietly aim a document at every node. A node
+reached by no `nftables` document gets no nftables document at all; one reached by two is an error,
+since a ruleset is one text and two cannot be merged.
+
+`patch` documents of one Talos identity - `apiVersion`, `kind`, `name` - are merged for each node:
+those without `include` first, then those naming the node, each in file order, so the specific one
+wins wherever it sits. Mappings merge key by key, an explicit `null` deletes a key, and a sequence
+replaces the one before it whole. That last part differs from Talos' own strategic merge, which
+appends to a list: appending by key needs the types Talos has and this tool does not, and appending
+without a key would leave no way to remove an element. Every document goes into the patch file
+serialized; its comments stay in `slipmesh.yaml`.
+
+A file a `patch` document carries in `configFiles[].content` may be written as YAML - a mapping or
+a list - rather than as a string. Talos takes only a string there, so the patch file gets that
+YAML's text. Written this way, each field of the file is a field of `slipmesh.yaml` like any other:
+
+```yaml
+slipmesh:
+  kind: patch
+  include: [router-1]
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: mikrotik
+configFiles:
+  - mountPath: /etc/talos-extensions/mikrotik.yaml
+    content:
+      host: router1.example.com
+      port: 8729
+      username: admin
+      password: hunter2
+```
+
+### Secrets
 
 Everything derivable is derived: interface names and link-local/loopback addressing fall out of
-the topology rather than being written by hand. Keypairs aren't derivable, so they're generated
-once and then read back out of the existing `patches/<node>.yaml` on every later run - a
-regeneration never rotates a key it has already issued, and only the public half of a peer's key
-ever appears in the other end's config. Each rendered config is validated through the real
-daemon's own `validate()` - the daemons are depended on as libraries here, so there is no second
-implementation to drift.
+the topology rather than being written by hand, and only the public half of a peer's key ever
+appears in the other end's config. Keys aren't derivable, so the tool generates them once and
+writes them into `slipmesh.yaml` itself, into the fields an operator would otherwise fill in by
+hand: `nodes[].mesh_private_key`, a pool document's `private_key`, and whichever `obfuscation`
+fields a link or pool leaves unset.
+
+Written, a value is the operator's like any other. A regeneration never rotates a key that is
+written down; deleting one does, for that node, link or pool and every peer of it. Only what the
+tool generated is written: a field set on the entry or in the global `obfuscation` is never copied
+down, and neither are `random_trailers` and `disable_cookies`, which are never generated. Taking a
+node out of the `network` document takes its key with it, so putting it back mints a new one.
+
+So `slipmesh.yaml` holds private keys in the clear, as the patch files it renders do - keep it
+where those are kept. What the tool adds goes in through [yaml-rt](https://crates.io/crates/yaml-rt),
+which changes only the lines it adds: comments and layout stay as written, and an entry written in
+flow style, `{...}`, takes an addition in flow style. It refuses a file with a line of just `---`
+inside an indented block scalar, which YAML allows; a ruleset should not carry one.
+
+Each rendered config is validated through the real daemon's own `validate()` - the daemons are
+depended on as libraries here, so there is no second implementation to drift.
 
 ```sh
 slipmesh-taloscfg generate                      # every node, into ./patches
@@ -321,15 +423,14 @@ slipmesh-taloscfg generate --node node-a --diff # one node, print what would cha
 slipmesh-taloscfg generate --check              # validate only
 ```
 
-Two properties worth knowing before you point it at a directory:
+Every run mints for the whole topology, whichever nodes it renders, and renders and validates every
+node before it writes any patch file. `--check` and `--diff` never write: when a secret would have
+to be minted they stop and name it, because a key minted and not kept would differ on the next run.
 
-- **It preserves what it doesn't own.** Only `awg`, `router` and `nftables` documents are
-  regenerated (`segments.rs`); any other document in `patches/<node>.yaml` - a hand-written
-  `machine.install.disk`, device credentials, anything - survives byte-for-byte. Editing a
-  generated document by hand, on the other hand, is pointless: the next `generate` overwrites it.
-- **It edits `mesh.yaml` in place for road warriors, comments intact.** `rw-add`/`rw-del` add or
-  remove one client entry through a format-preserving YAML patch rather than a rewrite, so a
-  hand-maintained topology file stays hand-readable:
+### Road warriors
+
+`rw-add`/`rw-del` add or remove one client in the pool's own document the same way, so the rest of
+`slipmesh.yaml` stays exactly as written:
 
 ```sh
 slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 10.62.253.5/32 --export --qr
@@ -339,23 +440,49 @@ slipmesh-taloscfg rw-del --if plain --name laptop
 
 `rw-add` generates the client's keypair and prints a ready-to-import config (optionally as a
 terminal QR code), keeping only the public half. Client private keys are never persisted -
-`rw-inspect` re-renders the rest and leaves a placeholder unless you pass the key back in.
+`rw-inspect` re-renders the rest and leaves a placeholder unless you pass the key back in. The
+pool's own key, which the config is built with, is written into the pool's document, so `generate`
+puts the same key on the wire; `rw-inspect` writes nothing and asks for `generate` first when that
+key is not written down yet.
 
 The same generated `<node>.yaml` also drives [routeros](https://github.com/slipmesh/routeros),
 which converges a MikroTik device into the mesh from it - a mesh member need not be a Talos node.
 
+### Coming from `mesh.yaml`
+
+Before `slipmesh.yaml`, the topology lived in `mesh.yaml`, and the keys and hand-written documents
+lived inside the patch files, which `generate` now overwrites without reading. Move them over by
+hand before the first run:
+
+- `mesh.yaml` without `roadwarriors` and `nftables` becomes the `kind: network` document;
+- each `roadwarriors` entry becomes a `kind: roadwarriors` document of its own, and `nftables`
+  a `kind: nftables` one;
+- each document written by hand into a patch file becomes a `kind: patch` document with
+  `include: [<node>]`;
+- the `private_key` of a node's `mesh-*` interfaces goes into that node's `mesh_private_key`, and
+  a link's `jc`...`h4` into the link's `obfuscation`;
+- the `private_key` of a pool's interface goes into the `private_key` of its `kind: roadwarriors`
+  document, and the pool's `jc`...`h4` into its `obfuscation`, unless the pool is `plain`.
+
+Anything left out is minted anew on the first run: a new identity for that node or link and every
+peer of it, and for a pool, a new server key that no client config already handed out connects to.
+
+`generate --diff` then shows what the patch files would become: with everything carried over, the
+keys and settings in them stay as they were and only their layout changes.
+
 ### Breaking changes
 
-`cluster:` refuses a field it does not know, so a name that changed fails where it is written
-rather than being ignored into a listener that silently stops being rendered:
+The top of the `network` document, its `cluster:` block and every pool refuse a field they do not
+know, so a name that changed fails where it is written rather than being ignored into a listener
+that silently stops being rendered:
 
 ```text
-cluster: unknown field `metrics_port`, expected one of `bgp_as`, `loopback_networks`,
-`bypass_refresh_interval_secs`, `awg_metrics_port`, `router_metrics_port`, `direct_interfaces`,
-... at line 15 column 3
+the `kind: network` document at line 1: cluster: unknown field `metrics_port`, expected one of
+`bgp_as`, `loopback_networks`, `bypass_refresh_interval_secs`, `awg_metrics_port`, ... at line 6
+column 3
 ```
 
-Renamed so far, each needing the same edit in `mesh.yaml` and nothing else:
+Renamed so far, each needing the same edit in `slipmesh.yaml` and nothing else:
 
 | was | is | since |
 | --- | --- | --- |

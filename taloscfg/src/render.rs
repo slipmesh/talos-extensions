@@ -1,183 +1,19 @@
-//! Per-node computation: `mesh.yaml` -> this node's `awg`/`router`/`nftables` config. Ported from
+//! Per-node computation: the topology -> this node's `awg`/`router`/`nftables` config. Ported from
 //! `slipmesh-core::desired_state`'s full-mesh-minus-self BGP/OSPF derivation, adapted to a static
 //! config file instead of live `NodeConfig`/`MeshLink` CRDs.
 //!
-//! Two secrets need resolving *once for the whole topology*, not independently per node, before
-//! any single node's config can be rendered:
-//! - A mesh link's obfuscation (`h1-h4` especially) is declared once per link in `mesh.yaml`
-//!   because AmneziaWG's magic-header substitution requires both peers to agree on the same
-//!   values - generating it independently on each end would produce two different, incompatible
-//!   values and break the link.
-//! - A node's mesh private key is one identity shared across every `mesh.links` interface on that
-//!   node; the *other* end of each link needs that node's *public* key, derived from it - so
-//!   rendering node A's config requires already knowing node B's resolved private key, not just
-//!   A's own.
-//!
-//! `ExistingState` abstracts "what's already on disk" (the idempotency tiers' middle rung) behind
-//! a trait so this module's logic stays pure and unit-testable without real file I/O; `main.rs`
-//! supplies the real implementation, reading `patches/<node>.yaml` via `segments`/`awg::config`.
+//! Every function here takes the topology's secrets already resolved - see `secrets`.
 
 use crate::addressing;
 use crate::keys;
 use crate::mesh_config::{BypassSourceEntry, MeshConfig};
-use crate::obfuscation_gen;
+use crate::secrets::{ResolvedSecrets, link_key};
 use anyhow::{Context, Result};
 use awg::config::{AwgConfig, InterfaceEntry, PeerEntry};
 use common::MetricsConfig;
-use common::Obfuscation;
 use nftables::config::NftablesConfig;
 use router::config::{AnnounceEntry, BgpPeerEntry, BypassConfig, NodeIdentity, RouterConfig};
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-
-/// What's already on disk, for the idempotency tiers that fall back to a *previous* value before
-/// generating a fresh one. `pair`/`node_name`/`pool_name` always come from `mesh.yaml` itself.
-pub trait ExistingState {
-    fn mesh_private_key(&self, node_name: &str) -> Option<String>;
-    fn mesh_link_obfuscation(&self, pair: &[String; 2]) -> Option<Obfuscation>;
-    fn roadwarrior_private_key(&self, pool_name: &str) -> Option<String>;
-    fn roadwarrior_obfuscation(&self, pool_name: &str) -> Option<Obfuscation>;
-}
-
-/// Resolved once for the whole topology - see this module's doc comment for why these two can't
-/// be resolved independently per node.
-pub struct ResolvedSecrets {
-    pub mesh_private_keys: HashMap<String, String>,
-    pub mesh_link_obfuscation: HashMap<String, Obfuscation>,
-    pub roadwarrior_private_keys: HashMap<String, String>,
-    pub roadwarrior_obfuscation: HashMap<String, Obfuscation>,
-}
-
-/// Canonical, order-independent key for a mesh link's maps (`pair`'s two names, sorted).
-fn link_key(pair: &[String; 2]) -> String {
-    let mut sorted = pair.clone();
-    sorted.sort();
-    format!("{}|{}", sorted[0], sorted[1])
-}
-
-pub(crate) fn resolve_string(
-    specific: Option<&str>,
-    existing: Option<String>,
-    generate: impl FnOnce() -> String,
-) -> String {
-    specific
-        .map(str::to_string)
-        .or(existing)
-        .unwrap_or_else(generate)
-}
-
-/// Layers `specific` (e.g. a mesh link's own `obfuscation`) over `global` (`mesh.yaml`'s top-level
-/// default) field by field, then over `existing` (the previous patch's value), then generates
-/// fresh values for whatever's still unset - see `obfuscation_gen`'s own doc comment for why that
-/// only ever fills in the "original nine" fields.
-pub(crate) fn resolve_obfuscation(
-    specific: &Obfuscation,
-    global: &Obfuscation,
-    existing: Option<&Obfuscation>,
-) -> Obfuscation {
-    let existing = existing.cloned().unwrap_or_default();
-    let generated = obfuscation_gen::generate();
-    macro_rules! field {
-        ($f:ident) => {
-            specific
-                .$f
-                .clone()
-                .or_else(|| global.$f.clone())
-                .or_else(|| existing.$f.clone())
-                .or_else(|| generated.$f.clone())
-        };
-    }
-    Obfuscation {
-        jc: field!(jc),
-        jmin: field!(jmin),
-        jmax: field!(jmax),
-        s1: field!(s1),
-        s2: field!(s2),
-        s3: field!(s3),
-        s4: field!(s4),
-        h1: field!(h1),
-        h2: field!(h2),
-        h3: field!(h3),
-        h4: field!(h4),
-        i1: field!(i1),
-        i2: field!(i2),
-        i3: field!(i3),
-        i4: field!(i4),
-        i5: field!(i5),
-        header_protection_key: field!(header_protection_key),
-        content_padding_addition: field!(content_padding_addition),
-        rekey_after_time: field!(rekey_after_time),
-        rekey_timeout: field!(rekey_timeout),
-        reject_after_time: field!(reject_after_time),
-        keepalive_timeout: field!(keepalive_timeout),
-        max_handshake_attempts: field!(max_handshake_attempts),
-        // Deliberately not `field!`: these two skip the `existing` tier. Every other field
-        // falls back to the last render because it holds a generated secret worth keeping,
-        // but a switch that fell back could never be turned off by removing it from
-        // mesh.yaml.
-        random_trailers: specific.random_trailers.or(global.random_trailers),
-        disable_cookies: specific.disable_cookies.or(global.disable_cookies),
-    }
-}
-
-pub fn resolve_secrets(mesh: &MeshConfig, existing: &impl ExistingState) -> ResolvedSecrets {
-    let mut mesh_private_keys = HashMap::new();
-    for node in &mesh.nodes {
-        let key = resolve_string(
-            node.mesh_private_key.as_deref(),
-            existing.mesh_private_key(&node.name),
-            keys::generate_private_key,
-        );
-        mesh_private_keys.insert(node.name.clone(), key);
-    }
-
-    let mut mesh_link_obfuscation = HashMap::new();
-    for link in &mesh.mesh.links {
-        // `plain` links (e.g. a RouterOS peer that can't speak AmneziaWG's extensions at all) skip
-        // resolution entirely - `resolve_obfuscation` always fills every still-unset field from a
-        // fresh random generation, which would silently turn a "no obfuscation" link back into an
-        // obfuscated one.
-        let resolved = if link.plain {
-            Obfuscation::default()
-        } else {
-            resolve_obfuscation(
-                &link.obfuscation,
-                &mesh.obfuscation,
-                existing.mesh_link_obfuscation(&link.pair).as_ref(),
-            )
-        };
-        mesh_link_obfuscation.insert(link_key(&link.pair), resolved);
-    }
-
-    let mut roadwarrior_private_keys = HashMap::new();
-    let mut roadwarrior_obfuscation = HashMap::new();
-    for pool in &mesh.roadwarriors {
-        let key = resolve_string(
-            pool.private_key.as_deref(),
-            existing.roadwarrior_private_key(&pool.name),
-            keys::generate_private_key,
-        );
-        roadwarrior_private_keys.insert(pool.name.clone(), key);
-
-        let obfuscation = if pool.plain {
-            Obfuscation::default()
-        } else {
-            resolve_obfuscation(
-                &pool.obfuscation,
-                &mesh.obfuscation,
-                existing.roadwarrior_obfuscation(&pool.name).as_ref(),
-            )
-        };
-        roadwarrior_obfuscation.insert(pool.name.clone(), obfuscation);
-    }
-
-    ResolvedSecrets {
-        mesh_private_keys,
-        mesh_link_obfuscation,
-        roadwarrior_private_keys,
-        roadwarrior_obfuscation,
-    }
-}
 
 fn parse_loopback_networks(mesh: &MeshConfig) -> Result<(Ipv4Addr, u8, Ipv6Addr, u8)> {
     let (v4_addr, v4_prefix) = common::cidr::parse_cidr(&mesh.cluster.loopback_networks.ipv4)
@@ -249,7 +85,7 @@ pub fn node_tunnel_addresses(
     )))
 }
 
-/// Full mesh minus self: every other node in `mesh.yaml`'s `nodes`, addressed by its IPv6
+/// Full mesh minus self: every other node in `slipmesh.yaml`'s `nodes`, addressed by its IPv6
 /// loopback - ported from `slipmesh-core::desired_state::bgp_peers_from`.
 pub fn bgp_peers_for(mesh: &MeshConfig, node_name: &str) -> Result<Vec<BgpPeerEntry>> {
     mesh.nodes
@@ -285,7 +121,7 @@ fn convert_bypass_source(e: &BypassSourceEntry) -> router::resolver::BypassSourc
 
 const DEFAULT_BYPASS_REFRESH_INTERVAL_SECS: u64 = 24 * 60 * 60;
 
-/// This node's bypass rules: every `mesh.yaml` `bypass[]` entry where `node == node_name`,
+/// This node's bypass rules: every `slipmesh.yaml` `bypass[]` entry where `node == node_name`,
 /// converted to `router::config`'s shape. `None` if this node has no bypass entries at all (a
 /// `router.yaml` with no `bypass` key is a normal, supported configuration).
 pub fn bypass_for(mesh: &MeshConfig, node_name: &str) -> Option<BypassConfig> {
@@ -309,18 +145,18 @@ pub fn bypass_for(mesh: &MeshConfig, node_name: &str) -> Option<BypassConfig> {
     })
 }
 
-/// Fixed generator-side convention, not a `mesh.yaml` field: every rendered node gets the same
+/// Fixed generator-side convention, not a `slipmesh.yaml` field: every rendered node gets the same
 /// two OSPF interface patterns.
 pub const OSPF_INTERFACES: [&str; 2] = ["mesh-*", "router-lo"];
 
 /// This node's `direct_interfaces`: its own override if set, else `cluster.direct_interfaces` - an
 /// override *replaces* the global value rather than extending it.
 ///
-/// Whatever `mesh.yaml` says is the whole list: this generator adds nothing of its own. It used to
+/// Whatever `slipmesh.yaml` says is the whole list: this generator adds nothing of its own. It used to
 /// add two things implicitly - a `"cni*"` serde default and a `"mesh-*"` appended whenever
 /// `tunnel_networks` was set - and both were removed deliberately. `"cni*"` named an interface
 /// owned by whichever CNI plugin happened to be installed, which stopped existing the moment that
-/// choice changed; `"mesh-*"` was correct but invisible, so a reader of `mesh.yaml` could not tell
+/// choice changed; `"mesh-*"` was correct but invisible, so a reader of `slipmesh.yaml` could not tell
 /// what a node would actually announce without reading this file too. An operator-visible list
 /// that is wrong gets noticed; an implicit one that is wrong does not.
 fn direct_interfaces_for(mesh: &MeshConfig, node_name: &str) -> Result<Vec<String>> {
@@ -383,7 +219,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
     // `direct_interfaces` have to travel together.
     //
     // This used to append `mesh-*` itself when it was missing. That silently produced a config
-    // `mesh.yaml` didn't ask for, which is how the whole `direct_interfaces` mechanism came to hide
+    // `slipmesh.yaml` didn't ask for, which is how the whole `direct_interfaces` mechanism came to hide
     // what a node actually announces - so the pairing is now enforced by refusing to render instead.
     if node_tunnel_addresses(mesh, node_name)?.is_some()
         && !direct_interfaces.iter().any(|s| s == "mesh-*")
@@ -421,7 +257,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
 /// interface name), so there's no interop reason to keep it opaque/hex like the old system's
 /// `short_id`-based naming did. `awg::config::validate`'s `IFNAMSIZ` check (name.len() <= 15) still
 /// applies - `mesh-` (5 bytes) plus a node name over 10 bytes fails generation loudly rather than
-/// silently truncating; every current `mesh.yaml` node name fits comfortably.
+/// silently truncating; every current `slipmesh.yaml` node name fits comfortably.
 fn mesh_interfaces_for(
     mesh: &MeshConfig,
     node_name: &str,
@@ -435,7 +271,7 @@ fn mesh_interfaces_for(
     // candidates for OSPFv3 (`ospf_ifa_notify3` only cares about scope, not which address), and
     // carrying two at once leaves it ambiguous which one BIRD actually sources Hello/LSA packets
     // from. Falls back to the loopback-derived link-local when `tunnel_networks` isn't set, so OSPF
-    // keeps working unchanged for any `mesh.yaml` that hasn't opted into the new scheme.
+    // keeps working unchanged for any `slipmesh.yaml` that hasn't opted into the new scheme.
     let (interface_link_local, tunnel_v4) = match own_tunnel {
         Some((v4, v6)) => (v6, Some(v4)),
         None => (own_link_local, None),
@@ -584,7 +420,7 @@ fn metrics_for(
     }))
 }
 
-/// The single global `nftables.ruleset`, verbatim, for every node - `None` if `mesh.yaml` has no
+/// The single global `nftables.ruleset`, verbatim, for every node - `None` if `slipmesh.yaml` has no
 /// `nftables` section at all (this node simply gets no rendered nftables segment).
 pub fn render_nftables_config(mesh: &MeshConfig) -> Option<NftablesConfig> {
     mesh.nftables.as_ref().map(|n| NftablesConfig {
@@ -595,213 +431,6 @@ pub fn render_nftables_config(mesh: &MeshConfig) -> Option<NftablesConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn resolve_string_prefers_specific() {
-        let s = resolve_string(Some("explicit"), Some("existing".to_string()), || {
-            "generated".to_string()
-        });
-        assert_eq!(s, "explicit");
-    }
-
-    #[test]
-    fn resolve_string_falls_back_to_existing() {
-        let s = resolve_string(None, Some("existing".to_string()), || {
-            "generated".to_string()
-        });
-        assert_eq!(s, "existing");
-    }
-
-    #[test]
-    fn resolve_string_falls_back_to_generated() {
-        let s = resolve_string(None, None, || "generated".to_string());
-        assert_eq!(s, "generated");
-    }
-
-    #[test]
-    fn resolve_obfuscation_prefers_specific_field_over_global() {
-        let specific = Obfuscation {
-            jc: Some(9),
-            ..Obfuscation::default()
-        };
-        let global = Obfuscation {
-            jc: Some(1),
-            jmin: Some(10),
-            ..Obfuscation::default()
-        };
-        let resolved = resolve_obfuscation(&specific, &global, None);
-        assert_eq!(resolved.jc, Some(9));
-        assert_eq!(resolved.jmin, Some(10));
-    }
-
-    /// The 3.1 switches are never invented: `generate()` leaves them unset, so an
-    /// unconfigured mesh stays as it was.
-    #[test]
-    fn resolve_obfuscation_carries_the_31_switches_and_never_generates_them() {
-        let global = Obfuscation {
-            random_trailers: Some(true),
-            ..Obfuscation::default()
-        };
-        let resolved = resolve_obfuscation(&Obfuscation::default(), &global, None);
-        assert_eq!(resolved.random_trailers, Some(true));
-        assert_eq!(resolved.disable_cookies, None);
-    }
-
-    /// Unlike the generated secrets around them, the switches do not fall back to what was
-    /// rendered last time: mesh.yaml is where they are decided, so dropping one there has to
-    /// turn it off rather than leave the previous render in force.
-    #[test]
-    fn resolve_obfuscation_lets_a_dropped_31_switch_go_away() {
-        let existing = Obfuscation {
-            random_trailers: Some(true),
-            h1: Some(42),
-            ..Obfuscation::default()
-        };
-        let resolved = resolve_obfuscation(
-            &Obfuscation::default(),
-            &Obfuscation::default(),
-            Some(&existing),
-        );
-        assert_eq!(resolved.random_trailers, None);
-        assert_eq!(resolved.h1, Some(42), "generated secrets still carry over");
-    }
-
-    #[test]
-    fn resolve_obfuscation_prefers_existing_over_generating_fresh() {
-        let existing = Obfuscation {
-            h1: Some(42),
-            ..Obfuscation::default()
-        };
-        let resolved = resolve_obfuscation(
-            &Obfuscation::default(),
-            &Obfuscation::default(),
-            Some(&existing),
-        );
-        assert_eq!(resolved.h1, Some(42));
-    }
-
-    #[test]
-    fn resolve_obfuscation_generates_when_nothing_else_is_set() {
-        let resolved = resolve_obfuscation(&Obfuscation::default(), &Obfuscation::default(), None);
-        assert!(resolved.jc.is_some());
-        assert!(resolved.h1.is_some());
-    }
-
-    #[test]
-    fn resolve_obfuscation_never_generates_header_protection_key() {
-        let resolved = resolve_obfuscation(&Obfuscation::default(), &Obfuscation::default(), None);
-        assert_eq!(resolved.header_protection_key, None);
-    }
-
-    struct FakeExisting {
-        mesh_keys: HashMap<String, String>,
-    }
-
-    impl ExistingState for FakeExisting {
-        fn mesh_private_key(&self, node_name: &str) -> Option<String> {
-            self.mesh_keys.get(node_name).cloned()
-        }
-        fn mesh_link_obfuscation(&self, _pair: &[String; 2]) -> Option<Obfuscation> {
-            None
-        }
-        fn roadwarrior_private_key(&self, _pool_name: &str) -> Option<String> {
-            None
-        }
-        fn roadwarrior_obfuscation(&self, _pool_name: &str) -> Option<Obfuscation> {
-            None
-        }
-    }
-
-    fn minimal_mesh_yaml() -> &'static str {
-        r#"
-cluster:
-  bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
-nodes:
-  - {name: a, node_id: "10.62.0.1"}
-  - {name: b, node_id: "10.62.0.2"}
-mesh:
-  links:
-    - {pair: [a, b], port: 51820}
-"#
-    }
-
-    #[test]
-    fn resolve_secrets_shares_the_same_generated_key_for_a_node_across_calls() {
-        let mesh: MeshConfig = serde_yaml::from_str(minimal_mesh_yaml()).unwrap();
-        let existing = FakeExisting {
-            mesh_keys: HashMap::new(),
-        };
-        let resolved = resolve_secrets(&mesh, &existing);
-        assert!(resolved.mesh_private_keys.contains_key("a"));
-        assert!(resolved.mesh_private_keys.contains_key("b"));
-        assert_ne!(
-            resolved.mesh_private_keys["a"],
-            resolved.mesh_private_keys["b"]
-        );
-    }
-
-    #[test]
-    fn resolve_secrets_uses_explicit_node_private_key() {
-        let mut mesh: MeshConfig = serde_yaml::from_str(minimal_mesh_yaml()).unwrap();
-        mesh.nodes[0].mesh_private_key = Some("explicit-key".to_string());
-        let existing = FakeExisting {
-            mesh_keys: HashMap::new(),
-        };
-        let resolved = resolve_secrets(&mesh, &existing);
-        assert_eq!(resolved.mesh_private_keys["a"], "explicit-key");
-    }
-
-    #[test]
-    fn resolve_secrets_shares_one_obfuscation_value_across_both_ends_of_a_link() {
-        let mesh: MeshConfig = serde_yaml::from_str(minimal_mesh_yaml()).unwrap();
-        let existing = FakeExisting {
-            mesh_keys: HashMap::new(),
-        };
-        let resolved = resolve_secrets(&mesh, &existing);
-        // Only one entry per link, keyed order-independently - not one per node.
-        assert_eq!(resolved.mesh_link_obfuscation.len(), 1);
-    }
-
-    #[test]
-    fn resolve_secrets_plain_link_skips_obfuscation_generation_entirely() {
-        let mut mesh: MeshConfig = serde_yaml::from_str(minimal_mesh_yaml()).unwrap();
-        mesh.mesh.links[0].plain = true;
-        let existing = FakeExisting {
-            mesh_keys: HashMap::new(),
-        };
-        let resolved = resolve_secrets(&mesh, &existing);
-        let obfuscation = &resolved.mesh_link_obfuscation[&link_key(&mesh.mesh.links[0].pair)];
-        assert_eq!(obfuscation, &Obfuscation::default());
-    }
-
-    #[test]
-    fn resolve_secrets_non_plain_link_still_generates_obfuscation() {
-        let mesh: MeshConfig = serde_yaml::from_str(minimal_mesh_yaml()).unwrap();
-        let existing = FakeExisting {
-            mesh_keys: HashMap::new(),
-        };
-        let resolved = resolve_secrets(&mesh, &existing);
-        let obfuscation = &resolved.mesh_link_obfuscation[&link_key(&mesh.mesh.links[0].pair)];
-        assert_ne!(obfuscation, &Obfuscation::default());
-    }
-
-    #[test]
-    fn resolve_secrets_plain_roadwarrior_pool_skips_obfuscation_generation_entirely() {
-        let mut mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
-        mesh.roadwarriors[0].plain = true;
-        let resolved = resolved_for(&mesh);
-        let obfuscation = &resolved.roadwarrior_obfuscation[&mesh.roadwarriors[0].name];
-        assert_eq!(obfuscation, &Obfuscation::default());
-    }
-
-    #[test]
-    fn resolve_secrets_non_plain_roadwarrior_pool_still_generates_obfuscation() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
-        let resolved = resolved_for(&mesh);
-        let obfuscation = &resolved.roadwarrior_obfuscation[&mesh.roadwarriors[0].name];
-        assert_ne!(obfuscation, &Obfuscation::default());
-    }
 
     fn three_node_mesh_yaml() -> &'static str {
         r#"
@@ -826,7 +455,7 @@ bypass:
 
     #[test]
     fn node_loopbacks_ors_node_id_onto_cluster_networks() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         let (v4, v6) = node_loopbacks(&mesh, "a").unwrap();
         assert_eq!(v4.to_string(), "10.62.0.1");
         // node_id "10.62.0.1" is the full 32-bit value (0x0a3e0001), not just its last octet, so
@@ -836,13 +465,13 @@ bypass:
 
     #[test]
     fn node_loopbacks_rejects_unknown_node() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         assert!(node_loopbacks(&mesh, "nonexistent").is_err());
     }
 
     #[test]
     fn bgp_peers_for_excludes_self_and_covers_full_mesh() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         let peers = bgp_peers_for(&mesh, "a").unwrap();
         let names: Vec<&str> = peers.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names.len(), 2);
@@ -853,7 +482,7 @@ bypass:
 
     #[test]
     fn bgp_peers_for_addresses_are_ipv6_loopbacks() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         let peers = bgp_peers_for(&mesh, "a").unwrap();
         let b = peers.iter().find(|p| p.name == "b").unwrap();
         assert_eq!(b.address, "fd00:62::a3e:2");
@@ -861,14 +490,14 @@ bypass:
 
     #[test]
     fn bypass_for_filters_by_node() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         assert!(bypass_for(&mesh, "a").is_some());
         assert!(bypass_for(&mesh, "b").is_none());
     }
 
     #[test]
     fn bypass_for_converts_literal_prefixes() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         let bypass = bypass_for(&mesh, "a").unwrap();
         assert_eq!(bypass.include.len(), 1);
         assert_eq!(bypass.include[0].kind, "literal");
@@ -881,7 +510,7 @@ bypass:
 
     #[test]
     fn render_router_config_is_valid() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "a").unwrap();
         router::config::validate(&cfg).unwrap();
         assert_eq!(cfg.bgp_as, 64512);
@@ -895,7 +524,7 @@ bypass:
     #[test]
     fn render_router_config_direct_interfaces_has_no_default() {
         // An omitted list announces nothing - it does not resurrect the old `cni*` default.
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
         assert!(cfg_a.direct_interfaces.is_empty());
@@ -905,14 +534,14 @@ bypass:
     #[test]
     fn render_router_config_omits_mesh_glob_from_direct_interfaces_when_tunnel_networks_not_configured()
      {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert!(!cfg.direct_interfaces.iter().any(|s| s == "mesh-*"));
     }
 
     #[test]
     fn render_router_config_uses_explicit_cluster_direct_interfaces() {
-        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.direct_interfaces = vec!["cni0".to_string(), "extra0".to_string()];
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert_eq!(
@@ -923,7 +552,7 @@ bypass:
 
     #[test]
     fn render_router_config_per_node_direct_interfaces_overrides_not_merges_the_global_default() {
-        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         mesh.nodes[0].direct_interfaces = Some(vec!["home".to_string()]);
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
@@ -935,7 +564,7 @@ bypass:
 
     #[test]
     fn render_router_config_per_node_override_replaces_a_nonempty_global() {
-        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.direct_interfaces = vec!["mesh-*".to_string()];
         mesh.nodes[0].direct_interfaces = Some(vec!["home".to_string()]);
         let cfg_a = render_router_config(&mesh, "a").unwrap();
@@ -946,14 +575,14 @@ bypass:
 
     #[test]
     fn render_router_config_announce_is_empty_by_default() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert!(cfg.announce.is_empty());
     }
 
     #[test]
     fn render_router_config_announces_the_configured_service_subnet_on_every_node() {
-        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.service_subnet = Some("10.60.0.0/16".to_string());
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
@@ -966,14 +595,14 @@ bypass:
 
     #[test]
     fn render_router_config_learn_is_empty_by_default() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert!(cfg.learn.is_empty());
     }
 
     #[test]
     fn render_router_config_learns_the_configured_pod_subnet_on_every_node() {
-        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.pod_subnet = Some("10.61.0.0/16".to_string());
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
@@ -984,10 +613,10 @@ bypass:
 
     /// `pod_subnet` and `direct_interfaces` are independent knobs: dropping `cni*` is what makes
     /// `learn` the *only* source of this node's podCIDR, which is the whole point of stating both
-    /// in `mesh.yaml` rather than having one imply the other.
+    /// in `slipmesh.yaml` rather than having one imply the other.
     #[test]
     fn render_router_config_learns_pod_subnet_with_direct_interfaces_emptied() {
-        let mut mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.pod_subnet = Some("10.61.0.0/16".to_string());
         mesh.cluster.direct_interfaces = vec![];
         let cfg = render_router_config(&mesh, "a").unwrap();
@@ -997,7 +626,7 @@ bypass:
 
     #[test]
     fn render_router_config_omits_bypass_for_a_node_with_none() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "b").unwrap();
         assert!(cfg.bypass.is_none());
     }
@@ -1029,15 +658,12 @@ nftables:
     }
 
     fn resolved_for(mesh: &MeshConfig) -> ResolvedSecrets {
-        let existing = FakeExisting {
-            mesh_keys: HashMap::new(),
-        };
-        resolve_secrets(mesh, &existing)
+        crate::secrets::resolve(mesh).0
     }
 
     #[test]
     fn mesh_interfaces_for_names_the_interface_after_the_peers_node_name() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         assert_eq!(ifaces.len(), 1);
@@ -1047,7 +673,7 @@ nftables:
 
     #[test]
     fn mesh_interfaces_for_is_full_tunnel_with_no_allowed_ips() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         assert_eq!(ifaces[0].peers[0].allowed_ips, None);
@@ -1055,7 +681,7 @@ nftables:
 
     #[test]
     fn mesh_interfaces_for_builds_endpoint_from_node_host_and_link_port() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         // a's interface peers toward b, which has an endpoint -> host:port using this link's port.
         let a_ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
@@ -1070,7 +696,7 @@ nftables:
 
     #[test]
     fn mesh_interfaces_for_peer_public_key_matches_the_peers_resolved_private_key() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         let expected_public =
@@ -1095,14 +721,14 @@ mesh:
 
     #[test]
     fn node_tunnel_addresses_is_none_when_not_configured() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         assert!(node_tunnel_addresses(&mesh, "a").unwrap().is_none());
     }
 
     #[test]
     fn node_tunnel_addresses_ors_node_id_onto_cluster_networks() {
         let mesh: MeshConfig =
-            serde_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+            yaml_serde::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
         let (v4, v6) = node_tunnel_addresses(&mesh, "a").unwrap().unwrap();
         assert_eq!(v4.to_string(), "10.62.1.1");
         assert_eq!(v6.to_string(), "fd00:63::1");
@@ -1111,7 +737,7 @@ mesh:
     #[test]
     fn mesh_interfaces_for_uses_tunnel_ipv6_as_the_sole_link_local_when_configured() {
         let mesh: MeshConfig =
-            serde_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+            yaml_serde::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         // The tunnel IPv6 address (also link-local) replaces the loopback-derived link-local
@@ -1124,7 +750,7 @@ mesh:
 
     #[test]
     fn mesh_interfaces_for_uses_the_loopback_derived_link_local_when_not_configured() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         assert_eq!(ifaces[0].addresses, vec!["fe80::a3e:1/64".to_string()]);
@@ -1136,9 +762,9 @@ mesh:
         // OSPF here is IPv6-only (`ospf v3`) and silently ignores IPv4 addresses entirely, so
         // `protocol direct` on `mesh-*` is the only thing that can get it into BGP, same as
         // `direct1` already does for `router-lo`'s own IPv4 loopback. Previously appended
-        // silently; now a hard error, so `mesh.yaml` states what a node announces.
+        // silently; now a hard error, so `slipmesh.yaml` states what a node announces.
         let mesh: MeshConfig =
-            serde_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+            yaml_serde::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
         let err = render_router_config(&mesh, "a").unwrap_err().to_string();
         assert!(err.contains("mesh-*"), "unexpected error: {err}");
         assert!(err.contains("tunnel_networks"), "unexpected error: {err}");
@@ -1147,7 +773,7 @@ mesh:
     #[test]
     fn render_router_config_does_not_duplicate_mesh_glob_if_already_present() {
         let mut mesh: MeshConfig =
-            serde_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+            yaml_serde::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
         mesh.cluster.direct_interfaces = vec!["mesh-*".to_string()];
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert_eq!(
@@ -1161,7 +787,7 @@ mesh:
 
     #[test]
     fn mesh_interfaces_for_a_node_with_no_links_is_empty() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         assert!(
             mesh_interfaces_for(&mesh, "c", &resolved)
@@ -1172,7 +798,7 @@ mesh:
 
     #[test]
     fn roadwarrior_interfaces_for_builds_a_tracked_peer_per_client() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = roadwarrior_interfaces_for(&mesh, "a", &resolved);
         assert_eq!(ifaces.len(), 1);
@@ -1187,14 +813,14 @@ mesh:
 
     #[test]
     fn roadwarrior_interfaces_for_a_node_not_in_node_hostnames_is_empty() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         assert!(roadwarrior_interfaces_for(&mesh, "c", &resolved).is_empty());
     }
 
     #[test]
     fn render_awg_config_combines_mesh_and_roadwarrior_interfaces_and_is_valid() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
         awg::config::validate(&cfg).unwrap();
@@ -1203,9 +829,9 @@ mesh:
 
     #[test]
     fn every_rendered_peer_carries_the_name_it_has_in_mesh_yaml() {
-        // Straight from mesh.yaml: the node on the far end of a link, the client's own name in a
+        // Straight from slipmesh.yaml: the node on the far end of a link, the client's own name in a
         // pool. It only ever reaches the `peer_name` metric label - nothing decides on it.
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
 
@@ -1222,7 +848,7 @@ mesh:
     #[test]
     fn render_router_config_runs_the_exporter_only_on_a_configured_port() {
         let base = mesh_and_roadwarriors_yaml();
-        let mesh: MeshConfig = serde_yaml::from_str(base).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(base).unwrap();
         assert_eq!(render_router_config(&mesh, "a").unwrap().metrics, None);
 
         let yaml = base.replace(
@@ -1230,7 +856,7 @@ mesh:
             "  bgp_as: 64512
   router_metrics_port: 9324",
         );
-        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
         let listen = render_router_config(&mesh, "a")
             .unwrap()
             .metrics
@@ -1247,7 +873,7 @@ mesh:
             "  bgp_as: 64512
   router_metrics_port: 0",
         );
-        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
         assert!(render_router_config(&mesh, "a").is_err());
     }
 
@@ -1255,14 +881,14 @@ mesh:
     fn render_awg_config_refuses_a_metrics_port_of_zero() {
         let yaml = mesh_and_roadwarriors_yaml()
             .replace("  bgp_as: 64512", "  bgp_as: 64512\n  awg_metrics_port: 0");
-        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
         let resolved = resolved_for(&mesh);
         assert!(render_awg_config(&mesh, "a", &resolved).is_err());
     }
 
     #[test]
     fn render_awg_config_has_no_metrics_section_when_no_port_is_configured() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
         assert_eq!(cfg.metrics, None);
@@ -1274,7 +900,7 @@ mesh:
             "  bgp_as: 64512",
             "  bgp_as: 64512\n  awg_metrics_port: 9586",
         );
-        let mesh: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
+        let mesh: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
         let resolved = resolved_for(&mesh);
 
         // The same address `node_loopbacks` hands `ext-router` as node.loopback_addresses, so the
@@ -1285,18 +911,5 @@ mesh:
             Some("10.62.0.2:9586")
         );
         awg::config::validate(&cfg).unwrap();
-    }
-
-    #[test]
-    fn render_nftables_config_carries_the_global_ruleset_verbatim() {
-        let mesh: MeshConfig = serde_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
-        let cfg = render_nftables_config(&mesh).unwrap();
-        assert_eq!(cfg.ruleset, "table inet talos_filter {}");
-    }
-
-    #[test]
-    fn render_nftables_config_is_none_when_mesh_yaml_has_no_nftables_section() {
-        let mesh: MeshConfig = serde_yaml::from_str(three_node_mesh_yaml()).unwrap();
-        assert!(render_nftables_config(&mesh).is_none());
     }
 }
