@@ -9,11 +9,14 @@
 use crate::document;
 use crate::merge::merge_document;
 use crate::mesh_config::{self, MeshConfig, NftablesTopology, RoadwarriorPool};
-use crate::segments::OWNED_NAMES;
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::ops::Range;
 use yaml_serde::Value;
+
+/// The `ExtensionServiceConfig` names this tool generates itself, and so refuses in a `patch`
+/// document. Talos keeps `name` unique per `kind`, so the pair is the whole identity.
+pub const OWNED_NAMES: [&str; 3] = ["awg", "router", "nftables"];
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Debug)]
 #[serde(rename_all = "lowercase")]

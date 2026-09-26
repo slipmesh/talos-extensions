@@ -449,24 +449,23 @@ key is not written down yet.
 The same generated `<node>.yaml` also drives [routeros](https://github.com/slipmesh/routeros),
 which converges a MikroTik device into the mesh from it - a mesh member need not be a Talos node.
 
-### Migrating from `mesh.yaml`
+### Coming from `mesh.yaml`
 
 Before `slipmesh.yaml`, the topology lived in `mesh.yaml`, and the keys and hand-written documents
-lived inside the patch files. `slipmesh-migrate` moves both, once:
+lived inside the patch files, which `generate` now overwrites without reading. Move them over by
+hand before the first run:
 
-```sh
-slipmesh-migrate --mesh mesh.yaml --patches-dir patches --out slipmesh.yaml
-slipmesh-taloscfg generate --diff
-```
+- `mesh.yaml` without `roadwarriors` and `nftables` becomes the `kind: network` document;
+- each `roadwarriors` entry becomes a `kind: roadwarriors` document of its own, and `nftables`
+  a `kind: nftables` one;
+- each document written by hand into a patch file becomes a `kind: patch` document with
+  `include: [<node>]`;
+- the `private_key` of a node's `mesh-*` interfaces goes into that node's `mesh_private_key`, and
+  a link's `jc`...`h4` into the link's `obfuscation` - anything left out is minted anew on the
+  first run, which is a new identity for that node or link and every peer of it.
 
-It writes the new file and nothing else, and refuses to overwrite it. Each hand-written document
-in a patch file becomes a `patch` document for that node, the keys and obfuscation the patch files
-carry are written into the fields of `slipmesh.yaml` they belong to, and the ruleset reaches every
-node as it did. It changes no behaviour, so
-the diff after it shows only the header `generate` now writes at the top of each patch file. A
-warning that something was minted means a key was in neither `mesh.yaml` nor the patch files - for
-a node that already had one, that is a new identity. Until `generate` has run, the patch files hold
-the only copy of anything the migration missed, so keep them until then.
+`generate --diff` then shows what the patch files would become: with everything carried over, the
+keys and settings in them stay as they were and only their layout changes.
 
 ### Breaking changes
 
@@ -489,7 +488,7 @@ Renamed so far, each needing the same edit in `slipmesh.yaml` and nothing else:
 No aliases are kept. This is a 0.x generator versioned with the file it reads, and a name that
 means one thing in the tool and another in the file is worse than a build that stops.
 
-Install both binaries with `cargo install --path taloscfg`.
+Install it with `cargo install --path taloscfg`.
 
 ---
 

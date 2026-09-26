@@ -217,17 +217,8 @@ pub fn documents(raw: &str) -> Result<Vec<(Range<usize>, String)>> {
         .collect())
 }
 
-/// Splits a patch file's raw text into trimmed segments, in file order. Empty input yields no
-/// segments (a from-scratch file has nothing to preserve).
-///
-/// What each segment drops is its markers and the whitespace around it - see
-/// `segments::render_file`, which writes those back. For byte-exact ranges instead, use [`spans`].
-pub fn split(raw: &str) -> Result<Vec<String>> {
-    Ok(documents(raw)?.into_iter().map(|(_, text)| text).collect())
-}
-
-/// The segment's text with the document markers inside it removed - `segments::render_file` writes
-/// its own. Everything else survives, including the line endings the file was written with.
+/// The segment's text with the document markers inside it removed. Everything else survives,
+/// including the line endings the file was written with.
 fn without_markers(raw: &str, segment: Range<usize>, markers: &[Range<usize>]) -> String {
     let mut out = String::with_capacity(segment.len());
     let mut cursor = segment.start;
@@ -245,6 +236,11 @@ fn without_markers(raw: &str, segment: Range<usize>, markers: &[Range<usize>]) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each document's text, in file order.
+    fn split(raw: &str) -> Result<Vec<String>> {
+        Ok(documents(raw)?.into_iter().map(|(_, text)| text).collect())
+    }
 
     /// Rebuilds the file from its spans - what every "leaves the rest alone" claim below rests on.
     fn rejoin(raw: &str) -> String {

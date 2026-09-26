@@ -11,10 +11,6 @@ description = "Offline generator for Talos machine-config patches (awg mesh/road
 name = "slipmesh-taloscfg"
 path = "src/main.rs"
 
-[[bin]]
-name = "slipmesh-migrate"
-path = "src/bin/slipmesh-migrate.rs"
-
 # The daemon crates come in for their config types only - `default-features = false` leaves the
 # netlink-backed modules out, which is what lets this generator build off Linux.
 [dependencies]
