@@ -6,6 +6,7 @@ pub mod keys;
 pub mod merge;
 pub mod mesh_config;
 pub mod obfuscation_gen;
+pub mod patch_file;
 pub mod render;
 pub mod roadwarrior;
 pub mod secrets;
