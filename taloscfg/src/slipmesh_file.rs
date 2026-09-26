@@ -118,7 +118,7 @@ pub struct HostDocument {
     pub identity: String,
     pub text: String,
     /// How many `patch` documents it was merged from. More than one means it was re-serialized,
-    /// which loses its comments.
+    /// which loses its comments - as does a content written as YAML.
     pub sources: usize,
 }
 
@@ -316,20 +316,19 @@ impl SlipmeshFile {
                     .copied()
                     .collect();
                 let text = match sources.as_slice() {
-                    [only] => contents_as_text(&only.text, &only.value)?,
                     [first, rest @ ..] => {
-                        let mut merged = rest.iter().fold(first.value.clone(), |base, patch| {
+                        let mut document = rest.iter().fold(first.value.clone(), |base, patch| {
                             merge_document(base, &patch.value)
                         });
-                        for (_, file) in written_contents(&mut merged) {
-                            let text = yaml_serde::to_string(&*file)
-                                .context("serializing a file's contents")?;
-                            *file = Value::String(text);
+                        let contents_rewritten = contents_as_text(&mut document)?;
+                        if rest.is_empty() && !contents_rewritten {
+                            first.text.clone()
+                        } else {
+                            yaml_serde::to_string(&document)
+                                .context("serializing a patch document")?
+                                .trim_end()
+                                .to_owned()
                         }
-                        yaml_serde::to_string(&merged)
-                            .context("serializing a merged patch")?
-                            .trim_end()
-                            .to_owned()
                     }
                     [] => unreachable!("every identity comes from at least one document"),
                 };
@@ -366,47 +365,27 @@ impl SlipmeshFile {
     }
 }
 
-/// The `configFiles[].content` values of `document` written as a mapping or a list rather than a
-/// string, with their indices.
+/// Replaces each `configFiles[].content` of `document` written as a mapping or a list with that
+/// YAML's text, returning whether there was any.
 ///
-/// Such a content is the file's contents given as YAML. Talos takes only a string there, so it goes
-/// out as that YAML's text; written this way, each field of the file is a field of `slipmesh.yaml`
-/// and can be encrypted on its own, a password without the host beside it.
-fn written_contents(document: &mut Value) -> Vec<(usize, &mut Value)> {
+/// Such a content is the file's contents given as YAML, each of its fields a field of
+/// `slipmesh.yaml` like any other. Talos takes only a string there.
+fn contents_as_text(document: &mut Value) -> Result<bool> {
     let Some(files) = document
         .get_mut("configFiles")
         .and_then(Value::as_sequence_mut)
     else {
-        return Vec::new();
+        return Ok(false);
     };
-    files
-        .iter_mut()
-        .enumerate()
-        .filter_map(|(index, file)| Some((index, file.get_mut("content")?)))
-        .filter(|(_, content)| content.is_mapping() || content.is_sequence())
-        .collect()
-}
-
-/// `text` - the document `value` was parsed from - with each content written as YAML replaced by a
-/// literal block of that YAML's text, and every other byte as it was.
-fn contents_as_text(text: &str, value: &Value) -> Result<String> {
-    let mut value = value.clone();
-    let mut out = text.to_owned();
-    // From the last file back, so that the spans of those before it still hold.
-    for (index, content) in written_contents(&mut value).into_iter().rev() {
-        let yaml = yaml_serde::to_string(&*content).context("serializing a file's contents")?;
-        let parsed = yamlpath::Document::new(out.as_str()).context("parsing a patch document")?;
-        let pair = parsed
-            .query_pretty(&yamlpath::route!["configFiles", index, "content"])
-            .with_context(|| format!("locating configFiles[{index}].content"))?;
-        let start = pair.location.byte_span.0;
-        let end = yamlpatch::find_content_end(&pair, &parsed);
-        let column = start - out[..start].rfind('\n').map_or(0, |i| i + 1);
-        let indent = " ".repeat(column + 2);
-        let block: String = yaml.lines().map(|l| format!("\n{indent}{l}")).collect();
-        out.replace_range(start..end, &format!("content: |{block}"));
+    let mut rewritten = false;
+    for content in files.iter_mut().filter_map(|file| file.get_mut("content")) {
+        if content.is_mapping() || content.is_sequence() {
+            let text = yaml_serde::to_string(&*content).context("serializing a file's contents")?;
+            *content = Value::String(text);
+            rewritten = true;
+        }
     }
-    Ok(out)
+    Ok(rewritten)
 }
 
 /// What Talos keys a document by - two `patch` documents with the same one are merged.
@@ -669,12 +648,12 @@ extraArgs:
     }
 
     #[test]
-    fn a_content_mapping_changes_nothing_else_in_its_document() {
+    fn a_document_with_content_written_as_yaml_goes_out_as_the_serializer_writes_it() {
         let parsed = SlipmeshFile::parse(&file(&[NETWORK, DEVICE])).unwrap();
         let text = &parsed.patches_for("node-b").unwrap()[0].text;
-        assert!(
-            text.starts_with("# the device the converger talks to\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n  - mountPath: /etc/device.yaml\n    content: |\n      host: router1.example.com\n"),
-            "{text}"
+        assert_eq!(
+            text,
+            "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n- mountPath: /etc/device.yaml\n  content: |\n    host: router1.example.com\n    port: 8729\n    username: admin\n    password: hunter2"
         );
     }
 

@@ -376,7 +376,7 @@ into the patch file as written; a merged one is re-serialized, which loses its c
 
 A file a `patch` document carries in `configFiles[].content` may be written as YAML - a mapping or
 a list - rather than as a string. Talos takes only a string there, so the patch file gets that
-YAML's text; comments inside it do not carry over. Written this way, each field of the file is a
+YAML's text, and the document goes in re-serialized, without its comments. Written this way, each field of the file is a
 field of `slipmesh.yaml` like any other:
 
 ```yaml
