@@ -353,9 +353,13 @@ impl SlipmeshFile {
                     merge_document(base, &patch.value)
                 });
                 contents_as_text(&mut document)?;
-                let text = yaml_serde::to_string(&document)
-                    .context("serializing a patch document")?
-                    .trim_end()
+                let serialized =
+                    yaml_serde::to_string(&document).context("serializing a patch document")?;
+                // One line break, the one the serializer ends with: any more belong to a `|+`
+                // block scalar's value.
+                let text = serialized
+                    .strip_suffix('\n')
+                    .unwrap_or(&serialized)
                     .to_owned();
                 Ok(HostDocument {
                     identity: identity.to_string(),
@@ -684,6 +688,14 @@ extraArgs:
             text,
             "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n- mountPath: /etc/device.yaml\n  content: |\n    host: router1.example.com\n    port: 8729\n    username: admin\n    password: hunter2"
         );
+    }
+
+    #[test]
+    fn a_content_ending_in_blank_lines_keeps_them() {
+        let patch = "slipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: script\nconfigFiles:\n  - mountPath: /etc/script\n    content: \"run\\n\\n\\n\"\n";
+        let parsed = SlipmeshFile::parse(&file(&[NETWORK, patch])).unwrap();
+        let text = &parsed.patches_for("node-a").unwrap()[0].text;
+        assert_eq!(content(text, 0).as_str(), Some("run\n\n\n"), "{text}");
     }
 
     #[test]
