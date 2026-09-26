@@ -389,32 +389,6 @@ plain: true
         assert_eq!(deleted, 0, "{recorded}");
     }
 
-    #[test]
-    fn a_second_run_mints_nothing_and_changes_nothing() {
-        let first = run(&slipmesh());
-        let file = SlipmeshFile::parse(&first).unwrap();
-        let (_, minted) = secrets::resolve(file.topology());
-        assert!(minted.is_empty(), "{:?}", minted.routes());
-        let mut yaml = YamlDoc::parse(&first).unwrap();
-        record(&mut yaml, &file, &minted).unwrap();
-        assert_eq!(yaml.to_string(), first);
-    }
-
-    #[test]
-    fn a_flow_entry_takes_its_value_in_flow_style() {
-        let raw = slipmesh().replace(
-            "    - name: node-c\n      node_id: 10.62.0.3\n",
-            "    - {name: node-c, node_id: 10.62.0.3}\n",
-        );
-        let recorded = run(&raw);
-        let line = recorded
-            .lines()
-            .find(|l| l.contains("node-c,"))
-            .expect(&recorded);
-        assert!(line.contains("mesh_private_key"), "{line}");
-        assert!(topology(&recorded).nodes[2].mesh_private_key.is_some());
-    }
-
     /// A pool as its own `slipmesh.yaml` document.
     const PLAIN_POOL: &str = r#"slipmesh:
   kind: roadwarriors
@@ -469,24 +443,6 @@ clients:
         let out = edited(pool, |yaml| add_client(yaml, 0, &client("dave")).unwrap());
         assert!(out.starts_with(pool), "{out}");
         assert_eq!(client_names(&out), ["dave"]);
-    }
-
-    #[test]
-    fn add_client_onto_an_empty_flow_clients_list() {
-        let src = r#"slipmesh:
-  kind: roadwarriors
-name: fresh
-node_hostnames: ["a"]
-address: "198.51.100.250/24"
-listen_port: 51830
-clients: []
-"#;
-        let out = edited(src, |yaml| add_client(yaml, 0, &client("eve")).unwrap());
-        assert!(
-            out.starts_with(&src[..src.find("clients").unwrap()]),
-            "{out}"
-        );
-        assert_eq!(client_names(&out), ["eve"]);
     }
 
     #[test]

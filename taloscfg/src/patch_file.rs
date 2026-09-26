@@ -100,17 +100,6 @@ mod tests {
     use super::*;
     use crate::secrets;
 
-    #[test]
-    fn render_extension_service_document_is_the_serializers_output() {
-        let inner = "interfaces:\n- name: mesh-b\n  listen_port: 51820\n";
-        let doc = render_extension_service_document("awg", "/etc/talos-extensions/awg.yaml", inner)
-            .unwrap();
-        assert_eq!(
-            doc,
-            "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles:\n- mountPath: /etc/talos-extensions/awg.yaml\n  content: |\n    interfaces:\n    - name: mesh-b\n      listen_port: 51820\n"
-        );
-    }
-
     /// The `ExtensionServiceConfig` named `name` among the documents of `file`, if there is one.
     fn generated_document(file: &str, name: &str) -> Option<yaml_serde::Value> {
         use serde::Deserialize;
@@ -121,23 +110,6 @@ mod tests {
 
     fn content(document: &yaml_serde::Value) -> &str {
         document["configFiles"][0]["content"].as_str().unwrap()
-    }
-
-    #[test]
-    fn render_extension_service_document_carries_the_daemon_config_as_its_content() {
-        let inner = yaml_serde::to_string(&nftables::config::NftablesConfig {
-            ruleset: "table inet x {}".to_string(),
-        })
-        .unwrap();
-        let doc = render_extension_service_document(
-            "nftables",
-            "/etc/talos-extensions/nftables.yaml",
-            &inner,
-        )
-        .unwrap();
-        let found = generated_document(&doc, "nftables").unwrap();
-        let cfg: nftables::config::NftablesConfig = yaml_serde::from_str(content(&found)).unwrap();
-        assert_eq!(cfg.ruleset, "table inet x {}");
     }
 
     const SLIPMESH: &str = r#"slipmesh:

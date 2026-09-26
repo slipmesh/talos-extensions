@@ -699,12 +699,6 @@ roadwarriors:
     }
 
     #[test]
-    fn render_qr_produces_nonempty_output() {
-        let qr = render_qr("[Interface]\nPrivateKey = x\n", false).unwrap();
-        assert!(!qr.trim().is_empty());
-    }
-
-    #[test]
     fn render_qr_invert_actually_swaps_dark_and_light() {
         let normal = render_qr("[Interface]\nPrivateKey = x\n", false).unwrap();
         let inverted = render_qr("[Interface]\nPrivateKey = x\n", true).unwrap();

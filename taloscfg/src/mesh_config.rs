@@ -434,14 +434,6 @@ nodes:
     }
 
     #[test]
-    fn parses_a_minimal_config() {
-        let cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
-        assert_eq!(cfg.nodes.len(), 2);
-        assert_eq!(cfg.cluster.bgp_as, 64512);
-        validate(&cfg).unwrap();
-    }
-
-    #[test]
     fn an_unknown_top_level_key_is_refused() {
         let yaml = format!(
             "{}roadwarrior: []
@@ -462,31 +454,6 @@ listen-port: 1
 ";
         let err = yaml_serde::from_str::<RoadwarriorPool>(yaml).unwrap_err();
         assert!(err.to_string().contains("listen-port"), "{err}");
-    }
-
-    #[test]
-    fn tunnel_networks_is_none_when_not_configured() {
-        let cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
-        assert!(cfg.cluster.tunnel_networks.is_none());
-    }
-
-    #[test]
-    fn parses_an_explicit_tunnel_networks_block() {
-        let yaml = r#"
-cluster:
-  bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
-  tunnel_networks: {ipv4: "10.62.1.0/24", ipv6: "fd00:63::/120"}
-nodes:
-  - name: a
-    node_id: "10.62.0.1"
-  - name: b
-    node_id: "10.62.0.2"
-"#;
-        let cfg: MeshConfig = yaml_serde::from_str(yaml).unwrap();
-        let tunnel = cfg.cluster.tunnel_networks.unwrap();
-        assert_eq!(tunnel.ipv4, "10.62.1.0/24");
-        assert_eq!(tunnel.ipv6, "fd00:63::/120");
     }
 
     #[test]

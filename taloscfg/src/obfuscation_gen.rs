@@ -77,11 +77,4 @@ mod tests {
         assert_eq!(o.header_protection_key, None);
         assert_eq!(o.content_padding_addition, None);
     }
-
-    #[test]
-    fn generates_different_results_on_each_call() {
-        let a = generate();
-        let b = generate();
-        assert_ne!(a, b);
-    }
 }

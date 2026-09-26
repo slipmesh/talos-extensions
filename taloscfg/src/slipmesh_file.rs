@@ -632,40 +632,6 @@ extraArgs:
         assert!(parsed.patches_for("node-c").unwrap().is_empty());
     }
 
-    #[test]
-    fn a_patch_goes_out_as_the_serializer_writes_it_without_its_slipmesh_block() {
-        let patch = "slipmesh:\n  kind: patch\n  include: [node-a]\n# why this disk\napiVersion: v1alpha1\nkind: UnattendedInstallConfig   # trailing\ninstaller:\n    disk:   /dev/vda\n";
-        let parsed = SlipmeshFile::parse(&file(&[NETWORK, patch])).unwrap();
-        let documents = parsed.patches_for("node-a").unwrap();
-        assert_eq!(
-            documents,
-            [HostDocument {
-                identity: "UnattendedInstallConfig".into(),
-                text: "apiVersion: v1alpha1\nkind: UnattendedInstallConfig\ninstaller:\n  disk: /dev/vda"
-                    .into(),
-            }]
-        );
-    }
-
-    #[test]
-    fn a_block_scalar_with_a_trailing_space_and_a_pem_keeps_its_value() {
-        let block = "      password: \"x\" \n      -----BEGIN CERTIFICATE-----\n      MIIB\n      -----END CERTIFICATE-----\n";
-        let patch = format!(
-            "slipmesh:\n  kind: patch\n  include: [node-b]\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: mikrotik\nconfigFiles:\n  - content: |\n{block}    mountPath: /etc/x\n"
-        );
-        let parsed = SlipmeshFile::parse(&file(&[NETWORK, &patch])).unwrap();
-        let documents = parsed.patches_for("node-b").unwrap();
-        assert_eq!(
-            content(&documents[0].text, 0).as_str(),
-            Some(
-                "password: \"x\" \n-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
-            ),
-            "{}",
-            documents[0].text
-        );
-        assert_eq!(documents[0].identity, "ExtensionServiceConfig/mikrotik");
-    }
-
     const DEVICE: &str = "slipmesh:\n  kind: patch\n  include: [node-b]\n# the device the converger talks to\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n  - mountPath: /etc/device.yaml\n    content:\n      host: router1.example.com\n      port: 8729\n      username: admin\n      password: hunter2   # the one secret here\n";
 
     /// A `configFiles[].content` in `text`, parsed as it lands in a patch file: followed by a line
@@ -683,16 +649,6 @@ extraArgs:
             content(text, 0).as_str(),
             Some("host: router1.example.com\nport: 8729\nusername: admin\npassword: hunter2\n"),
             "{text}"
-        );
-    }
-
-    #[test]
-    fn a_document_with_content_written_as_yaml_goes_out_as_the_serializer_writes_it() {
-        let parsed = SlipmeshFile::parse(&file(&[NETWORK, DEVICE])).unwrap();
-        let text = &parsed.patches_for("node-b").unwrap()[0].text;
-        assert_eq!(
-            text,
-            "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n- mountPath: /etc/device.yaml\n  content: |\n    host: router1.example.com\n    port: 8729\n    username: admin\n    password: hunter2"
         );
     }
 

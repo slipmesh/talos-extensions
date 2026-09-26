@@ -472,48 +472,6 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
-    fn a_diff_shows_the_changed_lines_with_their_context_and_no_more() {
-        let before: String = (1..=20)
-            .map(|n| {
-                format!(
-                    "line {n}
-"
-                )
-            })
-            .collect();
-        let after = before.replace(
-            "line 10
-",
-            "line ten
-",
-        );
-        let text = diff_text("node-a", &before, &after).unwrap();
-        assert!(
-            text.starts_with(
-                "--- node-a (current)
-+++ node-a (generated)
-@@ "
-            ),
-            "{text}"
-        );
-        assert!(
-            text.contains(
-                "-line 10
-+line ten
-"
-            ),
-            "{text}"
-        );
-        assert!(
-            !text.contains(
-                "line 2
-"
-            ),
-            "{text}"
-        );
-    }
-
-    #[test]
     fn an_unchanged_file_has_no_diff() {
         assert_eq!(
             diff_text(

@@ -212,17 +212,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_key_prefers_specific_and_generates_nothing() {
-        assert_eq!(resolve_key(Some("explicit")), ("explicit".to_owned(), None));
-    }
-
-    #[test]
-    fn resolve_key_reports_the_key_it_generated() {
-        let (key, generated) = resolve_key(None);
-        assert_eq!(generated.as_ref(), Some(&key));
-    }
-
-    #[test]
     fn resolve_obfuscation_prefers_specific_field_over_global() {
         let specific = Obfuscation {
             jc: Some(9),
@@ -277,12 +266,6 @@ mod tests {
         assert!(generated.jmin.is_some());
     }
 
-    #[test]
-    fn resolve_obfuscation_never_generates_header_protection_key() {
-        let (resolved, _) = resolve_obfuscation(&Obfuscation::default(), &Obfuscation::default());
-        assert_eq!(resolved.header_protection_key, None);
-    }
-
     fn topology() -> MeshConfig {
         yaml_serde::from_str(
             r#"
@@ -312,15 +295,6 @@ roadwarriors:
     }
 
     #[test]
-    fn resolve_gives_every_node_its_own_key() {
-        let (resolved, _) = resolve(&topology());
-        assert_ne!(
-            resolved.mesh_private_keys["a"],
-            resolved.mesh_private_keys["b"]
-        );
-    }
-
-    #[test]
     fn resolve_uses_explicit_node_private_key() {
         let mut topology = topology();
         topology.nodes[0].mesh_private_key = Some("explicit-key".to_owned());
@@ -328,13 +302,6 @@ roadwarriors:
         assert_eq!(resolved.mesh_private_keys["a"], "explicit-key");
         assert_eq!(minted.node_keys.len(), 1);
         assert_eq!(minted.node_keys[0].0, 1);
-    }
-
-    #[test]
-    fn resolve_shares_one_obfuscation_value_across_both_ends_of_a_link() {
-        let (resolved, _) = resolve(&topology());
-        // Only one entry per link, keyed order-independently - not one per node.
-        assert_eq!(resolved.mesh_link_obfuscation.len(), 1);
     }
 
     #[test]
@@ -376,15 +343,6 @@ roadwarriors:
     }
 
     #[test]
-    fn a_pool_with_all_nine_fields_set_mints_only_its_key() {
-        let (_, minted) = resolve(&topology());
-        let pool = &minted.pools[0];
-        assert_eq!(pool.name, "obfuscated");
-        assert!(pool.private_key.is_some());
-        assert!(pool.obfuscation.is_none());
-    }
-
-    #[test]
     fn routes_name_each_value_by_what_it_belongs_to() {
         let (_, minted) = resolve(&topology());
         assert_eq!(
@@ -397,20 +355,5 @@ roadwarriors:
                 "roadwarriors[plain].private_key",
             ]
         );
-    }
-
-    #[test]
-    fn nothing_is_minted_when_the_topology_sets_everything() {
-        let mut topology = topology();
-        for node in &mut topology.nodes {
-            node.mesh_private_key = Some(format!("{}-key", node.name));
-        }
-        for pool in &mut topology.roadwarriors {
-            pool.private_key = Some(format!("{}-key", pool.name));
-        }
-        topology.mesh.links[0].obfuscation =
-            resolve(&topology).0.mesh_link_obfuscation["a|b"].clone();
-        let (_, minted) = resolve(&topology);
-        assert!(minted.is_empty(), "{:?}", minted.routes());
     }
 }

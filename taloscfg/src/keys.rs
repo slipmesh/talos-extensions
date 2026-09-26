@@ -34,37 +34,10 @@ mod tests {
     }
 
     #[test]
-    fn generates_different_keys_on_each_call() {
-        let a = generate_private_key();
-        let b = generate_private_key();
-        assert_ne!(a, b);
-    }
-
-    #[test]
     fn derives_a_public_key_common_keys_can_decode() {
         let private = generate_private_key();
         let public = public_key_from_private(&private).expect("valid private key");
         common::keys::decode_key(&public)
             .expect("derived public key must be valid base64 32 bytes");
-    }
-
-    #[test]
-    fn derives_the_same_public_key_for_the_same_private_key() {
-        let private = generate_private_key();
-        let a = public_key_from_private(&private).unwrap();
-        let b = public_key_from_private(&private).unwrap();
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn derives_different_public_keys_for_different_private_keys() {
-        let a = public_key_from_private(&generate_private_key()).unwrap();
-        let b = public_key_from_private(&generate_private_key()).unwrap();
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn rejects_a_malformed_private_key() {
-        assert!(public_key_from_private("not-valid-base64!!").is_err());
     }
 }

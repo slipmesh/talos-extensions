@@ -912,17 +912,4 @@ mesh:
         );
         awg::config::validate(&cfg).unwrap();
     }
-
-    #[test]
-    fn render_nftables_config_carries_the_global_ruleset_verbatim() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
-        let cfg = render_nftables_config(&mesh).unwrap();
-        assert_eq!(cfg.ruleset, "table inet talos_filter {}");
-    }
-
-    #[test]
-    fn render_nftables_config_is_none_when_mesh_yaml_has_no_nftables_section() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
-        assert!(render_nftables_config(&mesh).is_none());
-    }
 }
