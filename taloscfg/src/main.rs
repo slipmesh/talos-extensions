@@ -249,9 +249,16 @@ fn rw_inspect(
     invert: bool,
     config_path: &Path,
 ) -> Result<()> {
-    let (_, mut yaml, file) = read_slipmesh(config_path)?;
+    let (_, _, file) = read_slipmesh(config_path)?;
     let topology = file.topology()?;
-    let (secrets, _) = settle_secrets(config_path, &mut yaml, &file, true)?;
+    let (secrets, minted) = secrets::resolve(&topology);
+    // Only this pool's: a config rendered with a key that is never written down would not connect.
+    anyhow::ensure!(
+        !minted.pools.iter().any(|pool| pool.name == if_),
+        "{} lacks the secrets of pool {if_:?} - run `slipmesh-taloscfg generate` to mint and \
+         write them",
+        config_path.display()
+    );
 
     let text = roadwarrior::inspect(&topology, &secrets, if_, name, private_key, endpoint)?;
 
@@ -864,5 +871,28 @@ clients:
 
         paths.generate(None, false, false).unwrap();
         inspect().unwrap();
+    }
+
+    #[test]
+    fn rw_inspect_needs_no_secret_but_its_pools() {
+        let paths = setup(POOLS);
+        paths.generate(None, false, false).unwrap();
+        let unkeyed = paths.config().replacen(
+            "nodes:\n",
+            "nodes:\n  - {name: e, node_id: \"10.62.0.5\"}\n",
+            1,
+        );
+        std::fs::write(&paths.config, &unkeyed).unwrap();
+        rw_inspect(
+            "second",
+            "carol",
+            None,
+            None,
+            true,
+            false,
+            false,
+            &paths.config,
+        )
+        .unwrap();
     }
 }
