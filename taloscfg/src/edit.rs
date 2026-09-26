@@ -1,23 +1,24 @@
-//! What a run minted, and the field of `slipmesh.yaml` each value is written into: a node's
-//! `mesh_private_key`, the obfuscation fields a link or pool left unset, a pool's `private_key`.
+//! Every edit `taloscfg` makes to `slipmesh.yaml`: minted secrets written into the fields they
+//! belong to, roadwarrior clients added and removed.
 //!
-//! Written, a value is the operator's like any other: the next run mints nothing, and deleting it
-//! mints a new identity for that node, link or pool, and for every peer that refers to it. Only
-//! what the run generated is written - a field set on the entry or in the global `obfuscation` is
-//! never copied down, and neither are the switches that are never generated.
+//! Written, a minted value is the operator's like any other: the next run mints nothing, and
+//! deleting it mints a new identity for that node, link or pool, and for every peer that refers to
+//! it. Only what the run generated is written - a field set on the entry or in the global
+//! `obfuscation` is never copied down, and neither are the switches that are never generated.
 //!
-//! The values go in through `yaml-rt` overlays: each document is read into a struct that names only
-//! the fields written here, and written back as the smallest edit, so everything else in the file
-//! stays as the operator wrote it.
+//! Edits go in through `yaml-rt` overlays: each document is read into a struct that names only the
+//! fields written here, and written back as the smallest edit, so everything else in the file stays
+//! as the operator wrote it.
 
-use crate::mesh_config::MeshConfig;
-use crate::render::{ResolvedSecrets, link_key};
+use crate::mesh_config::RoadwarriorClient;
+use crate::secrets::Minted;
 use crate::slipmesh_file::SlipmeshFile;
 use anyhow::{Context, Result};
 use common::Obfuscation;
 use yaml_rt::{YamlDoc, YamlRt};
 
 /// The obfuscation fields the generator mints - `obfuscation_gen` fills these nine and no others.
+/// Its own overlay because `common::Obfuscation` cannot take a `YamlRt` derive from this crate.
 #[derive(YamlRt, Default, Debug, Clone, PartialEq)]
 struct GeneratedObfuscation {
     #[yaml(skip_serializing_if = "Option::is_none")]
@@ -55,26 +56,12 @@ macro_rules! each_generated_field {
 }
 
 impl GeneratedObfuscation {
-    /// The fields of `resolved` none of `layers` set - the ones this run generated.
-    fn of(resolved: &Obfuscation, layers: &[&Obfuscation]) -> Option<Self> {
-        let mut generated = Self::default();
-        macro_rules! take {
-            ($f:ident) => {
-                if layers.iter().all(|layer| layer.$f.is_none()) {
-                    generated.$f = resolved.$f;
-                }
-            };
-        }
-        each_generated_field!(take);
-        (generated != Self::default()).then_some(generated)
-    }
-
-    /// `self` with every field `other` sets taken from it.
-    fn fill(&mut self, other: &Self) {
+    /// `self` with every field `generated` sets taken from it.
+    fn fill(&mut self, generated: &Obfuscation) {
         macro_rules! fill {
             ($f:ident) => {
-                if other.$f.is_some() {
-                    self.$f = other.$f;
+                if generated.$f.is_some() {
+                    self.$f = generated.$f;
                 }
             };
         }
@@ -116,154 +103,99 @@ struct PoolDocument {
     obfuscation: Option<GeneratedObfuscation>,
 }
 
-/// One pool's minted values.
-#[derive(Default)]
-struct PoolMinted {
-    private_key: Option<String>,
-    obfuscation: Option<GeneratedObfuscation>,
+/// A pool document as far as its clients go - every other field of it is carried over as written.
+#[derive(YamlRt)]
+struct PoolClients {
+    #[yaml(default)]
+    clients: Vec<ClientFields>,
 }
 
-/// The values a run minted, each with the field it goes in.
-#[derive(Default)]
-pub struct Minted {
-    /// By the node's position in `nodes`.
-    node_keys: Vec<(usize, String)>,
-    /// By the link's position in `mesh.links`.
-    link_obfuscation: Vec<(usize, GeneratedObfuscation)>,
-    /// By the pool's name.
-    pools: Vec<(String, PoolMinted)>,
-    /// How a message names each value.
-    names: Vec<String>,
+/// One client entry as `rw-add` writes it.
+#[derive(YamlRt)]
+struct ClientFields {
+    name: String,
+    public_key: String,
+    allowed_ips: Vec<String>,
 }
 
-/// What `resolved` holds that `topology` leaves unset.
-pub fn minted(topology: &MeshConfig, resolved: &ResolvedSecrets) -> Result<Minted> {
-    let mut out = Minted::default();
-
-    for (index, node) in topology.nodes.iter().enumerate() {
-        if node.mesh_private_key.is_some() {
-            continue;
+/// Writes every value of `minted` into its field of `yaml`, the `slipmesh.yaml` `file` was read
+/// from.
+pub fn record(yaml: &mut YamlDoc, file: &SlipmeshFile, minted: &Minted) -> Result<()> {
+    if !minted.node_keys.is_empty() || !minted.link_obfuscation.is_empty() {
+        let index = file.network_document();
+        let mut network: NetworkDocument = yaml.read_document(index)?;
+        for (node, key) in &minted.node_keys {
+            network
+                .nodes
+                .get_mut(*node)
+                .context("a node the network document does not have")?
+                .mesh_private_key = Some(key.clone());
         }
-        let key = resolved
-            .mesh_private_keys
-            .get(&node.name)
-            .with_context(|| format!("no key resolved for node {:?}", node.name))?;
-        out.node_keys.push((index, key.clone()));
-        out.names
-            .push(format!("nodes[{}].mesh_private_key", node.name));
+        for (link, generated) in &minted.link_obfuscation {
+            network
+                .mesh
+                .as_mut()
+                .and_then(|mesh| mesh.links.get_mut(*link))
+                .context("a link the network document does not have")?
+                .obfuscation
+                .get_or_insert_with(Default::default)
+                .fill(generated);
+        }
+        yaml.write_document(index, &network)?;
     }
 
-    for (index, link) in topology.mesh.links.iter().enumerate() {
-        if link.plain {
-            continue;
+    for pool_minted in &minted.pools {
+        let name = &pool_minted.name;
+        let index = file
+            .pool_document(name)
+            .with_context(|| format!("pool {name:?} is in no document"))?;
+        let mut pool: PoolDocument = yaml.read_document(index)?;
+        if let Some(key) = &pool_minted.private_key {
+            pool.private_key = Some(key.clone());
         }
-        let pair = link_key(&link.pair);
-        let generated = resolved
-            .mesh_link_obfuscation
-            .get(&pair)
-            .and_then(|resolved| {
-                GeneratedObfuscation::of(resolved, &[&link.obfuscation, &topology.obfuscation])
-            });
-        if let Some(generated) = generated {
-            out.link_obfuscation.push((index, generated));
-            out.names.push(format!("mesh.links[{pair}].obfuscation"));
+        if let Some(generated) = &pool_minted.obfuscation {
+            pool.obfuscation
+                .get_or_insert_with(Default::default)
+                .fill(generated);
         }
+        yaml.write_document(index, &pool)?;
     }
-
-    for pool in &topology.roadwarriors {
-        let mut minted = PoolMinted::default();
-        if pool.private_key.is_none() {
-            let key = resolved
-                .roadwarrior_private_keys
-                .get(&pool.name)
-                .with_context(|| format!("no key resolved for pool {:?}", pool.name))?;
-            minted.private_key = Some(key.clone());
-            out.names
-                .push(format!("roadwarriors[{}].private_key", pool.name));
-        }
-        if !pool.plain {
-            minted.obfuscation =
-                resolved
-                    .roadwarrior_obfuscation
-                    .get(&pool.name)
-                    .and_then(|resolved| {
-                        GeneratedObfuscation::of(
-                            resolved,
-                            &[&pool.obfuscation, &topology.obfuscation],
-                        )
-                    });
-            if minted.obfuscation.is_some() {
-                out.names
-                    .push(format!("roadwarriors[{}].obfuscation", pool.name));
-            }
-        }
-        if minted.private_key.is_some() || minted.obfuscation.is_some() {
-            out.pools.push((pool.name.clone(), minted));
-        }
-    }
-
-    Ok(out)
+    Ok(())
 }
 
-impl Minted {
-    pub fn is_empty(&self) -> bool {
-        self.names.is_empty()
-    }
+/// Adds `client` to the `clients` of the pool at `document` in `yaml`. Everything outside that one
+/// sequence - comments, the rest of the pool, formatting - is untouched.
+pub fn add_client(yaml: &mut YamlDoc, document: usize, client: &RoadwarriorClient) -> Result<()> {
+    let mut pool: PoolClients = yaml.read_document(document)?;
+    pool.clients.push(ClientFields {
+        name: client.name.clone(),
+        public_key: client.public_key.clone(),
+        allowed_ips: client.allowed_ips.clone(),
+    });
+    yaml.write_document(document, &pool)?;
+    Ok(())
+}
 
-    /// Where each value goes, the way a message names it.
-    pub fn routes(&self) -> Vec<String> {
-        self.names.clone()
-    }
-
-    /// Writes every value into its field of `yaml`, the `slipmesh.yaml` `file` was read from.
-    pub fn record(&self, yaml: &mut YamlDoc, file: &SlipmeshFile) -> Result<()> {
-        if !self.node_keys.is_empty() || !self.link_obfuscation.is_empty() {
-            let index = file.network_document();
-            let mut network: NetworkDocument = yaml.read_document(index)?;
-            for (node, key) in &self.node_keys {
-                network
-                    .nodes
-                    .get_mut(*node)
-                    .context("a node the network document does not have")?
-                    .mesh_private_key = Some(key.clone());
-            }
-            for (link, generated) in &self.link_obfuscation {
-                network
-                    .mesh
-                    .as_mut()
-                    .and_then(|mesh| mesh.links.get_mut(*link))
-                    .context("a link the network document does not have")?
-                    .obfuscation
-                    .get_or_insert_with(Default::default)
-                    .fill(generated);
-            }
-            yaml.write_document(index, &network)?;
-        }
-
-        for (name, minted) in &self.pools {
-            let index = file
-                .pool_document(name)
-                .with_context(|| format!("pool {name:?} is in no document"))?;
-            let mut pool: PoolDocument = yaml.read_document(index)?;
-            if let Some(key) = &minted.private_key {
-                pool.private_key = Some(key.clone());
-            }
-            if let Some(generated) = &minted.obfuscation {
-                pool.obfuscation
-                    .get_or_insert_with(Default::default)
-                    .fill(generated);
-            }
-            yaml.write_document(index, &pool)?;
-        }
-        Ok(())
-    }
+/// Removes `clients[client_index]` from the pool at `document` in `yaml`, line and all - same
+/// "everything else untouched" guarantee as `add_client`.
+pub fn remove_client(yaml: &mut YamlDoc, document: usize, client_index: usize) -> Result<()> {
+    let clients = yaml
+        .get_path_in_document(document, &["clients"])?
+        .context("pool has no clients list")?;
+    let mut position = 0;
+    yaml.sequence_editor(clients)?.retain(|_, _| {
+        let keep = position != client_index;
+        position += 1;
+        keep
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::{NothingStored, resolve_secrets};
-    use common::Obfuscation;
+    use crate::mesh_config::MeshConfig;
+    use crate::secrets;
 
     const NINE: [&str; 9] = ["jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4"];
 
@@ -329,16 +261,12 @@ plain: true
         format!("{NETWORK}{POOLS}")
     }
 
-    /// One run: resolve with nothing stored, write down what was minted.
+    /// One run: resolve, write down what was minted.
     fn run(raw: &str) -> String {
         let mut yaml = YamlDoc::parse(raw).unwrap();
         let file = SlipmeshFile::read(raw, &yaml).unwrap();
-        let topology = file.topology().unwrap();
-        let resolved = resolve_secrets(&topology, &NothingStored);
-        minted(&topology, &resolved)
-            .unwrap()
-            .record(&mut yaml, &file)
-            .unwrap();
+        let (_, minted) = secrets::resolve(&file.topology().unwrap());
+        record(&mut yaml, &file, &minted).unwrap();
         yaml.to_string()
     }
 
@@ -451,11 +379,10 @@ plain: true
     fn a_second_run_mints_nothing_and_changes_nothing() {
         let first = run(&slipmesh());
         let file = SlipmeshFile::parse(&first).unwrap();
-        let topology = file.topology().unwrap();
-        let minted = minted(&topology, &resolve_secrets(&topology, &NothingStored)).unwrap();
+        let (_, minted) = secrets::resolve(&file.topology().unwrap());
         assert!(minted.is_empty(), "{:?}", minted.routes());
         let mut yaml = YamlDoc::parse(&first).unwrap();
-        minted.record(&mut yaml, &file).unwrap();
+        record(&mut yaml, &file, &minted).unwrap();
         assert_eq!(yaml.to_string(), first);
     }
 
@@ -474,21 +401,91 @@ plain: true
         assert!(topology(&recorded).nodes[2].mesh_private_key.is_some());
     }
 
+    /// A pool as its own `slipmesh.yaml` document.
+    const PLAIN_POOL: &str = r#"slipmesh:
+  kind: roadwarriors
+name: plain
+node_hostnames: ["a", "b"]
+address: "198.51.100.1/24"
+listen_port: 51820
+plain: true
+clients:
+  - {name: alice, public_key: "AAA=", allowed_ips: ["198.51.100.41/32"]}
+  - {name: bob, public_key: "BBB=", allowed_ips: ["198.51.100.32/32"]}
+"#;
+
+    fn client(name: &str) -> RoadwarriorClient {
+        RoadwarriorClient {
+            name: name.to_owned(),
+            public_key: format!("{name}="),
+            allowed_ips: vec!["198.51.100.99/32".to_owned()],
+            advanced_security: false,
+        }
+    }
+
+    /// `source` after `edit`, as the text it comes back as.
+    fn edited(source: &str, edit: impl FnOnce(&mut YamlDoc)) -> String {
+        let mut yaml = YamlDoc::parse(source).unwrap();
+        edit(&mut yaml);
+        yaml.to_string()
+    }
+
+    fn client_names(source: &str) -> Vec<String> {
+        let value: yaml_serde::Value = yaml_serde::from_str(source).unwrap();
+        value["clients"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
     #[test]
-    fn routes_name_each_value_by_what_it_belongs_to() {
-        let raw = slipmesh();
-        let topology = topology(&raw);
-        let minted = minted(&topology, &resolve_secrets(&topology, &NothingStored)).unwrap();
+    fn add_client_appends_and_leaves_the_rest_untouched() {
+        let out = edited(PLAIN_POOL, |yaml| {
+            add_client(yaml, 0, &client("dave")).unwrap()
+        });
+        assert!(out.starts_with(PLAIN_POOL), "{out}");
+        assert_eq!(client_names(&out), ["alice", "bob", "dave"]);
+    }
+
+    #[test]
+    fn add_client_starts_the_list_a_pool_lacks() {
+        let pool = PLAIN_POOL.split("clients:").next().unwrap();
+        let out = edited(pool, |yaml| add_client(yaml, 0, &client("dave")).unwrap());
+        assert!(out.starts_with(pool), "{out}");
+        assert_eq!(client_names(&out), ["dave"]);
+    }
+
+    #[test]
+    fn add_client_onto_an_empty_flow_clients_list() {
+        let src = r#"slipmesh:
+  kind: roadwarriors
+name: fresh
+node_hostnames: ["a"]
+address: "198.51.100.250/24"
+listen_port: 51830
+clients: []
+"#;
+        let out = edited(src, |yaml| add_client(yaml, 0, &client("eve")).unwrap());
+        assert!(
+            out.starts_with(&src[..src.find("clients").unwrap()]),
+            "{out}"
+        );
+        assert_eq!(client_names(&out), ["eve"]);
+    }
+
+    #[test]
+    fn remove_client_deletes_exactly_the_target() {
+        let out = edited(PLAIN_POOL, |yaml| {
+            remove_client(yaml, 0, 0).unwrap() // alice
+        });
         assert_eq!(
-            minted.routes(),
-            [
-                "nodes[node-a].mesh_private_key",
-                "nodes[node-b].mesh_private_key",
-                "nodes[node-c].mesh_private_key",
-                "mesh.links[node-a|node-b].obfuscation",
-                "roadwarriors[obfuscated].private_key",
-                "roadwarriors[plain].private_key",
-            ]
+            out,
+            PLAIN_POOL.replace(
+                "  - {name: alice, public_key: \"AAA=\", allowed_ips: [\"198.51.100.41/32\"]}\n",
+                ""
+            )
         );
     }
 }

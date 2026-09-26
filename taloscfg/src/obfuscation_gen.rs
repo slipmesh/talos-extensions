@@ -1,9 +1,9 @@
-//! Random AmneziaWG obfuscation parameters, used only as the last-resort tier of the idempotency
-//! rule (explicit in `mesh.yaml` -> already in the existing patch -> generate here). Deliberately
+//! Random AmneziaWG obfuscation parameters, for whatever `slipmesh.yaml` leaves unset - see
+//! `secrets`, which writes what was generated back into the field it belongs to. Deliberately
 //! scoped to "the original nine" (`jc/jmin/jmax/s1/s2/h1-h4` - see `docs/extension-services.md`'s
 //! own framing of that set vs. the AmneziaWG 3.0 additions): those are the only params with a
 //! well-known safe range from AmneziaWG's own defaults/docs. `s3/s4/i1-i5/header_protection_key`
-//! and the timing knobs are left `None` unless `mesh.yaml` sets them explicitly - no established
+//! and the timing knobs are left `None` unless `slipmesh.yaml` sets them explicitly - no established
 //! safe default exists for them, and `header_protection_key` specifically must match between both
 //! ends of a link, which a per-node independent random draw cannot guarantee on its own.
 

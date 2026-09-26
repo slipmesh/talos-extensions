@@ -1,4 +1,4 @@
-//! Schema for `mesh.yaml` - the single source of truth this whole generator renders per-node
+//! Schema for `slipmesh.yaml` - the single source of truth this whole generator renders per-node
 //! `awg`/`router`/`nftables` `ExtensionServiceConfig` content from. Deliberately one file for all
 //! four concerns (mesh links, roadwarriors, BGP/OSPF, nftables) rather than one file per daemon -
 //! they already share the same node/topology facts (`nodes`, `cluster.loopback_networks`), and
@@ -18,7 +18,7 @@ use std::net::Ipv4Addr;
 pub struct BfdConfig {
     #[serde(default)]
     pub enable: bool,
-    /// Flattened, so `bfd:` in mesh.yaml reads as one block: `enable`, then any of `min_rx_ms`,
+    /// Flattened, so `bfd:` in slipmesh.yaml reads as one block: `enable`, then any of `min_rx_ms`,
     /// `min_tx_ms`, `multiplier`. Omitted settings take the defaults stated on `BfdSettings`.
     #[serde(default, flatten)]
     pub settings: BfdSettings,
@@ -126,7 +126,7 @@ pub struct ClusterConfig {
     /// `mesh-*`/awg tunnel interface (not just `router-lo`). The IPv4 half is the confirmed fix this
     /// exists for: `mesh-*` interfaces otherwise carry no IPv4 address at all, so NAT/MASQUERADE has
     /// nothing valid to pick as a source when service-subnet traffic egresses via one. The IPv6 half
-    /// is deliberately ALSO link-local-scoped (`mesh.yaml`'s value lives inside `fe80::/10`, same as
+    /// is deliberately ALSO link-local-scoped (`slipmesh.yaml`'s value lives inside `fe80::/10`, same as
     /// the interface's existing OSPFv3-driving link-local) rather than a globally-scoped address -
     /// there's no live IPv6 masquerade need in this cluster (`service_subnet` is IPv4-only). Being
     /// link-local lets it *replace* rather than duplicate the loopback-derived link-local `render.rs`
@@ -134,7 +134,7 @@ pub struct ClusterConfig {
     /// address doing double duty (tunnel identity + OSPFv3 Hello/LSA source) instead of two competing
     /// ones on the same interface, which would leave it ambiguous which one BIRD actually uses.
     /// `None` (unlike `loopback_networks`, which is always present) preserves today's link-local-only
-    /// behavior for any `mesh.yaml` that hasn't opted in yet.
+    /// behavior for any `slipmesh.yaml` that hasn't opted in yet.
     #[serde(default)]
     pub tunnel_networks: Option<TunnelNetworks>,
 }
@@ -205,7 +205,7 @@ pub struct MeshLink {
     /// AmneziaWG's extensions (e.g. RouterOS, which only speaks stock WireGuard). Skips obfuscation
     /// generation/resolution entirely rather than resolving to an all-fields-`None` `Obfuscation`
     /// that then gets silently overwritten by a *future* run's random generation the moment nothing
-    /// else fills a field in - `render.rs`'s `resolve_secrets` checks this before even calling
+    /// else fills a field in - `secrets::resolve` checks this before even calling
     /// `resolve_obfuscation`, so a plain link never round-trips through generation at all.
     #[serde(default)]
     pub plain: bool,
@@ -269,7 +269,7 @@ pub struct BypassEntry {
 }
 
 /// Same shape as `router::config::BypassSourceEntry` - re-declared here (not reused directly)
-/// because `mesh.yaml`'s `bypass[]` is a flat list keyed by `node`, not yet split per-node the way
+/// because `slipmesh.yaml`'s `bypass[]` is a flat list keyed by `node`, not yet split per-node the way
 /// `router::config::BypassConfig` expects; `render.rs` does that split, constructing the real
 /// `router::config` type from these fields.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -301,7 +301,7 @@ pub struct NftablesTopology {
     pub ruleset: String,
 }
 
-/// Pure validation, no I/O: referential integrity across `mesh.yaml`'s own cross-references
+/// Pure validation, no I/O: referential integrity across `slipmesh.yaml`'s own cross-references
 /// (`mesh.links[].pair`, `roadwarriors[].node_hostnames`, `bypass[].node` must all name real
 /// `nodes[].name` entries) plus structural invariants this generator's own rendering logic
 /// depends on (unique ports per node, non-empty `nodes`). Does **not** validate the

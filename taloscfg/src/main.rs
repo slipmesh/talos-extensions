@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use taloscfg::slipmesh_file::SlipmeshFile;
-use taloscfg::{mesh_config, minted, render, roadwarrior};
+use taloscfg::{edit, mesh_config, render, roadwarrior, secrets};
 use yaml_rt::YamlDoc;
 
 #[derive(Parser)]
@@ -191,10 +191,8 @@ fn rw_add(
     let secrets = settle_secrets(config_path, &mut yaml, &file, false)?;
     yaml.commit_edits()?;
 
-    let client_config = roadwarrior::add(
+    let added = roadwarrior::add(
         &topology,
-        &mut yaml,
-        document,
         &secrets,
         if_,
         name,
@@ -204,13 +202,14 @@ fn rw_add(
         export,
         qr,
     )?;
+    edit::add_client(&mut yaml, document, &added.client)?;
     write_edits(config_path, &yaml)?;
     println!(
         "added {name:?} to roadwarriors pool {if_:?} in {}",
         config_path.display()
     );
 
-    if let Some((_, text)) = client_config {
+    if let Some((_, text)) = added.config {
         if export {
             println!("\n{text}");
         }
@@ -226,10 +225,12 @@ fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
     let topology = file.topology()?;
     let document = pool_document(&file, &topology, if_)?;
 
-    let public_key = roadwarrior::del(&topology, &mut yaml, document, if_, name)?;
+    let (index, client) = roadwarrior::find_client(&topology, if_, name)?;
+    edit::remove_client(&mut yaml, document, index)?;
     write_edits(config_path, &yaml)?;
     println!(
-        "removed {name:?} (public_key {public_key:?}) from roadwarriors pool {if_:?} in {}",
+        "removed {name:?} (public_key {:?}) from roadwarriors pool {if_:?} in {}",
+        client.public_key,
         config_path.display()
     );
     Ok(())
@@ -399,10 +400,8 @@ fn settle_secrets(
     yaml: &mut YamlDoc,
     file: &SlipmeshFile,
     dry_run: bool,
-) -> Result<render::ResolvedSecrets> {
-    let topology = file.topology()?;
-    let resolved = render::resolve_secrets(&topology, &render::NothingStored);
-    let minted = minted::minted(&topology, &resolved)?;
+) -> Result<secrets::ResolvedSecrets> {
+    let (resolved, minted) = secrets::resolve(&file.topology()?);
     if minted.is_empty() {
         return Ok(resolved);
     }
@@ -412,7 +411,7 @@ fn settle_secrets(
         "{} lacks {routes} - run `slipmesh-taloscfg generate` to mint and write them",
         config_path.display()
     );
-    minted.record(yaml, file)?;
+    edit::record(yaml, file, &minted)?;
     println!("minted {routes} into {}", config_path.display());
     Ok(resolved)
 }
@@ -431,7 +430,7 @@ fn write_replacing(path: &Path, content: &str) -> Result<()> {
 /// Every target host's patch file, rendered and validated in memory.
 fn render_hosts(
     file: &SlipmeshFile,
-    resolved: &render::ResolvedSecrets,
+    resolved: &secrets::ResolvedSecrets,
     targets: &[&str],
     patches_dir: &Path,
 ) -> Result<Vec<HostFile>> {
