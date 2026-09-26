@@ -258,8 +258,7 @@ impl SlipmeshFile {
             let identity = Identity::of(&patch.value);
             let Some(kind) = &identity.kind else {
                 bail!(
-                    "{}: has no Talos `kind`, so it has no identity to merge by - a bare \
-                     `machine:` belongs in patch-common.yaml",
+                    "{}: has no Talos `kind`, so it has no identity to merge by",
                     patch.at()
                 );
             };
