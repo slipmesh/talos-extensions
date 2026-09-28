@@ -187,7 +187,7 @@ interfaces:
         allowed_ips: ["10.99.0.5/32"]
         advanced_security: true
 "#;
-        let cfg: AwgConfig = serde_yaml::from_str(yaml).unwrap();
+        let cfg: AwgConfig = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(cfg.interfaces.len(), 2);
         assert_eq!(cfg.interfaces[0].peers[0].allowed_ips, None);
         assert_eq!(
@@ -362,7 +362,7 @@ interfaces:
 
     #[test]
     fn a_config_without_a_metrics_section_parses_and_validates() {
-        let cfg: AwgConfig = serde_yaml::from_str("interfaces: []").unwrap();
+        let cfg: AwgConfig = yaml_serde::from_str("interfaces: []").unwrap();
         assert_eq!(cfg.metrics, None);
         validate(&cfg).unwrap();
     }
@@ -370,8 +370,8 @@ interfaces:
     #[test]
     fn a_metrics_section_round_trips_through_yaml() {
         let cfg = with_metrics("10.0.0.1:9586");
-        let yaml = serde_yaml::to_string(&cfg).unwrap();
-        assert_eq!(serde_yaml::from_str::<AwgConfig>(&yaml).unwrap(), cfg);
+        let yaml = yaml_serde::to_string(&cfg).unwrap();
+        assert_eq!(yaml_serde::from_str::<AwgConfig>(&yaml).unwrap(), cfg);
     }
 
     #[test]

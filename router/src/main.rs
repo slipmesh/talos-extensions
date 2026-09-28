@@ -85,7 +85,7 @@ async fn run() -> Result<()> {
         .await
         .with_context(|| format!("failed to read config file {CONFIG_PATH}"))?;
     let cfg: RouterConfig =
-        serde_yaml::from_str(&raw).context("failed to parse config file as YAML")?;
+        yaml_serde::from_str(&raw).context("failed to parse config file as YAML")?;
     config::validate(&cfg).context("config validation failed")?;
 
     tracing::info!(

@@ -401,7 +401,7 @@ kind: asn
 label: "some vendor"
 asns: ["AS15169"]
 "#;
-        let entry: BypassSourceEntry = serde_yaml::from_str(yaml).unwrap();
+        let entry: BypassSourceEntry = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(entry.kind, "asn");
         assert_eq!(entry.asns, Some(vec!["AS15169".to_string()]));
     }
