@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-28
+
+### Added ✨
+
+- Generate patch files from slipmesh.yaml
+
+### Fixed 🐛
+
+- Take rustls 0.23.45 for RUSTSEC-2026-0285
+
 ## [0.2.2] - 2026-09-11
 
 ### Build system 🛠️
