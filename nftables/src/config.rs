@@ -38,7 +38,7 @@ mod tests {
     #[test]
     fn parses_a_minimal_config() {
         let cfg: NftablesConfig =
-            serde_yaml::from_str("ruleset: |\n  table inet talos_filter {}\n").unwrap();
+            yaml_serde::from_str("ruleset: |\n  table inet talos_filter {}\n").unwrap();
         assert_eq!(cfg.ruleset.trim(), "table inet talos_filter {}");
         assert!(validate(&cfg).is_ok());
     }

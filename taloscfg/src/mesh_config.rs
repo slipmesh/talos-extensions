@@ -1,4 +1,4 @@
-//! Schema for `mesh.yaml` - the single source of truth this whole generator renders per-node
+//! Schema for `slipmesh.yaml` - the single source of truth this whole generator renders per-node
 //! `awg`/`router`/`nftables` `ExtensionServiceConfig` content from. Deliberately one file for all
 //! four concerns (mesh links, roadwarriors, BGP/OSPF, nftables) rather than one file per daemon -
 //! they already share the same node/topology facts (`nodes`, `cluster.loopback_networks`), and
@@ -18,13 +18,15 @@ use std::net::Ipv4Addr;
 pub struct BfdConfig {
     #[serde(default)]
     pub enable: bool,
-    /// Flattened, so `bfd:` in mesh.yaml reads as one block: `enable`, then any of `min_rx_ms`,
+    /// Flattened, so `bfd:` in slipmesh.yaml reads as one block: `enable`, then any of `min_rx_ms`,
     /// `min_tx_ms`, `multiplier`. Omitted settings take the defaults stated on `BfdSettings`.
     #[serde(default, flatten)]
     pub settings: BfdSettings,
 }
 
+/// Strict for the same reason `ClusterConfig` is.
 #[derive(Deserialize, Debug, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct MeshConfig {
     pub cluster: ClusterConfig,
     /// Off unless asked for: BFD trades constant control traffic on every mesh link for
@@ -124,7 +126,7 @@ pub struct ClusterConfig {
     /// `mesh-*`/awg tunnel interface (not just `router-lo`). The IPv4 half is the confirmed fix this
     /// exists for: `mesh-*` interfaces otherwise carry no IPv4 address at all, so NAT/MASQUERADE has
     /// nothing valid to pick as a source when service-subnet traffic egresses via one. The IPv6 half
-    /// is deliberately ALSO link-local-scoped (`mesh.yaml`'s value lives inside `fe80::/10`, same as
+    /// is deliberately ALSO link-local-scoped (`slipmesh.yaml`'s value lives inside `fe80::/10`, same as
     /// the interface's existing OSPFv3-driving link-local) rather than a globally-scoped address -
     /// there's no live IPv6 masquerade need in this cluster (`service_subnet` is IPv4-only). Being
     /// link-local lets it *replace* rather than duplicate the loopback-derived link-local `render.rs`
@@ -132,7 +134,7 @@ pub struct ClusterConfig {
     /// address doing double duty (tunnel identity + OSPFv3 Hello/LSA source) instead of two competing
     /// ones on the same interface, which would leave it ambiguous which one BIRD actually uses.
     /// `None` (unlike `loopback_networks`, which is always present) preserves today's link-local-only
-    /// behavior for any `mesh.yaml` that hasn't opted in yet.
+    /// behavior for any `slipmesh.yaml` that hasn't opted in yet.
     #[serde(default)]
     pub tunnel_networks: Option<TunnelNetworks>,
 }
@@ -203,13 +205,15 @@ pub struct MeshLink {
     /// AmneziaWG's extensions (e.g. RouterOS, which only speaks stock WireGuard). Skips obfuscation
     /// generation/resolution entirely rather than resolving to an all-fields-`None` `Obfuscation`
     /// that then gets silently overwritten by a *future* run's random generation the moment nothing
-    /// else fills a field in - `render.rs`'s `resolve_secrets` checks this before even calling
+    /// else fills a field in - `secrets::resolve` checks this before even calling
     /// `resolve_obfuscation`, so a plain link never round-trips through generation at all.
     #[serde(default)]
     pub plain: bool,
 }
 
+/// Strict for the same reason `ClusterConfig` is.
 #[derive(Deserialize, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct RoadwarriorPool {
     pub name: String,
     /// Which nodes terminate connections for this pool - each gets its own `InterfaceEntry` for
@@ -265,7 +269,7 @@ pub struct BypassEntry {
 }
 
 /// Same shape as `router::config::BypassSourceEntry` - re-declared here (not reused directly)
-/// because `mesh.yaml`'s `bypass[]` is a flat list keyed by `node`, not yet split per-node the way
+/// because `slipmesh.yaml`'s `bypass[]` is a flat list keyed by `node`, not yet split per-node the way
 /// `router::config::BypassConfig` expects; `render.rs` does that split, constructing the real
 /// `router::config` type from these fields.
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -297,7 +301,7 @@ pub struct NftablesTopology {
     pub ruleset: String,
 }
 
-/// Pure validation, no I/O: referential integrity across `mesh.yaml`'s own cross-references
+/// Pure validation, no I/O: referential integrity across `slipmesh.yaml`'s own cross-references
 /// (`mesh.links[].pair`, `roadwarriors[].node_hostnames`, `bypass[].node` must all name real
 /// `nodes[].name` entries) plus structural invariants this generator's own rendering logic
 /// depends on (unique ports per node, non-empty `nodes`). Does **not** validate the
@@ -430,36 +434,26 @@ nodes:
     }
 
     #[test]
-    fn parses_a_minimal_config() {
-        let cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
-        assert_eq!(cfg.nodes.len(), 2);
-        assert_eq!(cfg.cluster.bgp_as, 64512);
-        validate(&cfg).unwrap();
+    fn an_unknown_top_level_key_is_refused() {
+        let yaml = format!(
+            "{}roadwarrior: []
+",
+            minimal_yaml()
+        );
+        let err = yaml_serde::from_str::<MeshConfig>(&yaml).unwrap_err();
+        assert!(err.to_string().contains("roadwarrior"), "{err}");
     }
 
     #[test]
-    fn tunnel_networks_is_none_when_not_configured() {
-        let cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
-        assert!(cfg.cluster.tunnel_networks.is_none());
-    }
-
-    #[test]
-    fn parses_an_explicit_tunnel_networks_block() {
-        let yaml = r#"
-cluster:
-  bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
-  tunnel_networks: {ipv4: "10.62.1.0/24", ipv6: "fd00:63::/120"}
-nodes:
-  - name: a
-    node_id: "10.62.0.1"
-  - name: b
-    node_id: "10.62.0.2"
-"#;
-        let cfg: MeshConfig = serde_yaml::from_str(yaml).unwrap();
-        let tunnel = cfg.cluster.tunnel_networks.unwrap();
-        assert_eq!(tunnel.ipv4, "10.62.1.0/24");
-        assert_eq!(tunnel.ipv6, "fd00:63::/120");
+    fn an_unknown_roadwarriors_pool_key_is_refused() {
+        let yaml = "name: plain
+node_hostnames: [a]
+address: 10.0.0.1/24
+listen_port: 51820
+listen-port: 1
+";
+        let err = yaml_serde::from_str::<RoadwarriorPool>(yaml).unwrap_err();
+        assert!(err.to_string().contains("listen-port"), "{err}");
     }
 
     #[test]
@@ -470,7 +464,7 @@ nodes:
 
     #[test]
     fn rejects_duplicate_node_names() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.nodes[1].name = "a".to_string();
         assert!(validate(&cfg).is_err());
     }
@@ -480,7 +474,7 @@ nodes:
         // Two distinct nodes sharing a node_id would silently collide onto the same loopback
         // address and the same mesh interface name on any node linked to both - must fail here,
         // not surface downstream as a confusing "duplicate interface name" from awg::config.
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.nodes[1].node_id = cfg.nodes[0].node_id.clone();
         let err = validate(&cfg).unwrap_err();
         assert!(err.to_string().contains("node_id"), "error was: {err}");
@@ -488,14 +482,14 @@ nodes:
 
     #[test]
     fn rejects_a_node_id_that_is_not_a_valid_ipv4_address() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.nodes[0].node_id = "not-an-ip".to_string();
         assert!(validate(&cfg).is_err());
     }
 
     #[test]
     fn rejects_mesh_link_referencing_unknown_node() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "ghost".to_string()],
             port: 51820,
@@ -507,7 +501,7 @@ nodes:
 
     #[test]
     fn rejects_mesh_link_to_self() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "a".to_string()],
             port: 51820,
@@ -519,7 +513,7 @@ nodes:
 
     #[test]
     fn accepts_two_links_on_the_same_node_with_different_ports() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.nodes.push(NodeEntry {
             name: "c".to_string(),
             node_id: "10.62.0.3".to_string(),
@@ -544,7 +538,7 @@ nodes:
 
     #[test]
     fn rejects_duplicate_port_on_the_same_node() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.nodes.push(NodeEntry {
             name: "c".to_string(),
             node_id: "10.62.0.3".to_string(),
@@ -569,7 +563,7 @@ nodes:
 
     #[test]
     fn rejects_roadwarriors_pool_referencing_unknown_node() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),
             node_hostnames: vec!["ghost".to_string()],
@@ -588,7 +582,7 @@ nodes:
 
     #[test]
     fn rejects_roadwarriors_pool_with_empty_node_hostnames() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),
             node_hostnames: vec![],
@@ -607,7 +601,7 @@ nodes:
 
     #[test]
     fn rejects_duplicate_roadwarrior_client_public_key_in_one_pool() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.roadwarriors.push(RoadwarriorPool {
             name: "eu".to_string(),
             node_hostnames: vec!["a".to_string()],
@@ -639,7 +633,7 @@ nodes:
 
     #[test]
     fn rejects_bypass_entry_referencing_unknown_node() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.bypass.push(BypassEntry {
             node: "ghost".to_string(),
             include: vec![],
@@ -650,7 +644,7 @@ nodes:
 
     #[test]
     fn accepts_roadwarriors_and_mesh_sharing_a_node_with_distinct_ports() {
-        let mut cfg: MeshConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: MeshConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "b".to_string()],
             port: 51820,

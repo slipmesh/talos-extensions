@@ -1,21 +1,14 @@
-//! `rw-add`/`rw-del`/`rw-inspect` - manage `mesh.yaml`'s `roadwarriors[].clients` entries and
-//! render/print client-side configs, without disturbing anything else in that hand-edited file
-//! (comments, existing flow-style entries, unrelated pools).
-//!
-//! `mesh.yaml` is edited via `yamlpatch` (comment/format-preserving YAML patch operations, part
-//! of the `zizmor` project), addressed by numeric `Route` (no path-predicate syntax - the pool/
-//! client index has to be found by hand first, see `find_pool`/`find_client_index`), not by a
-//! hand-rolled text scan: a scan cannot add an entry without reflowing what surrounds it.
+//! `rw-add`/`rw-del`/`rw-inspect` - a roadwarriors pool's clients: the entry a new client gets,
+//! the client found by name, and the client-side config rendered as text or a QR code. Editing
+//! `slipmesh.yaml` is `edit`'s.
 
 use crate::addressing;
-use crate::existing::FileExistingState;
 use crate::keys;
 use crate::mesh_config::{MeshConfig, RoadwarriorClient, RoadwarriorPool};
-use crate::render::{self, ExistingState};
+use crate::secrets::ResolvedSecrets;
 use anyhow::{Context, Result, bail};
 use common::Obfuscation;
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::Path;
 
 /// A private key we know (was just generated, or given via `--public-key`'s absence) vs. one we
 /// never had (given via `--public-key`, or looking up an existing client with `rw-inspect`).
@@ -25,13 +18,11 @@ pub enum ClientPrivateKey {
     Unknown,
 }
 
-/// Finds a `roadwarriors[]` pool by `name`, returning its index (needed for `yamlpath::Route`,
-/// which addresses by position, not by a `name==` predicate) alongside the pool itself.
-fn find_pool<'a>(mesh: &'a MeshConfig, if_: &str) -> Result<(usize, &'a RoadwarriorPool)> {
+/// Finds a roadwarriors pool by `name`, erring with the names there are.
+pub fn find_pool<'a>(mesh: &'a MeshConfig, if_: &str) -> Result<&'a RoadwarriorPool> {
     mesh.roadwarriors
         .iter()
-        .enumerate()
-        .find(|(_, p)| p.name == if_)
+        .find(|p| p.name == if_)
         .with_context(|| {
             let known: Vec<&str> = mesh.roadwarriors.iter().map(|p| p.name.as_str()).collect();
             format!("unknown roadwarriors pool {if_:?} - known pools: {known:?}")
@@ -88,37 +79,30 @@ fn check_not_duplicate(pool: &RoadwarriorPool, name: &str, public_key: &str) -> 
     Ok(())
 }
 
-/// The pool's own resolved server identity: private key (mesh.yaml explicit -> existing
-/// `patches/<node>.yaml` -> fresh generation, same tiers `generate` itself uses) and obfuscation
-/// (empty for a `plain` pool, resolved the same way otherwise) - never a second, independently
-/// generated set of values that could drift from what `generate` actually puts on the wire.
-fn resolve_pool_identity(
-    mesh: &MeshConfig,
+/// The pool's server identity, taken from the secrets `generate` resolves - never a second,
+/// independently generated set of values that could drift from what `generate` actually puts on
+/// the wire.
+fn pool_identity(
     pool: &RoadwarriorPool,
-    patches_dir: &Path,
+    secrets: &ResolvedSecrets,
 ) -> Result<(String, Obfuscation)> {
-    let existing = FileExistingState::new(mesh, patches_dir)?;
-    let private_key = render::resolve_string(
-        pool.private_key.as_deref(),
-        existing.roadwarrior_private_key(&pool.name),
-        keys::generate_private_key,
-    );
-    let obfuscation = if pool.plain {
-        Obfuscation::default()
-    } else {
-        render::resolve_obfuscation(
-            &pool.obfuscation,
-            &mesh.obfuscation,
-            existing.roadwarrior_obfuscation(&pool.name).as_ref(),
-        )
-    };
+    let private_key = secrets
+        .roadwarrior_private_keys
+        .get(&pool.name)
+        .with_context(|| format!("no private key resolved for pool {:?}", pool.name))?
+        .clone();
+    let obfuscation = secrets
+        .roadwarrior_obfuscation
+        .get(&pool.name)
+        .cloned()
+        .unwrap_or_default();
     Ok((private_key, obfuscation))
 }
 
 /// The pool's endpoint(s): every `node_hostnames` entry's `nodes[].endpoint` + `pool.listen_port`.
 /// First one is the config's primary `Endpoint`, the rest are noted as alternates - `primary`
 /// (`--endpoint`) picks which `node_hostnames` entry that is, instead of always the first one in
-/// mesh.yaml's own order; the rest keep their relative order behind it.
+/// slipmesh.yaml's own order; the rest keep their relative order behind it.
 fn pool_endpoints(
     mesh: &MeshConfig,
     pool: &RoadwarriorPool,
@@ -254,7 +238,7 @@ pub(crate) fn render_client_config(
 /// background, the visual opposite of standard (dark-on-light) QR polarity. The official
 /// WireGuard app's own scanner rejects the un-inverted default there; AmneziaWG's and a plain
 /// camera read either polarity fine.
-pub(crate) fn render_qr(config_text: &str, invert: bool) -> Result<String> {
+pub fn render_qr(config_text: &str, invert: bool) -> Result<String> {
     let code = qrcode::QrCode::new(config_text).context("encoding client config as a QR code")?;
     let mut renderer = code.render::<qrcode::render::unicode::Dense1x2>();
     if invert {
@@ -268,121 +252,18 @@ pub(crate) fn render_qr(config_text: &str, invert: bool) -> Result<String> {
     Ok(renderer.build())
 }
 
-/// `yaml_serde::Value` for one flow-style client entry - name/public_key/allowed_ips, matching
-/// `RoadwarriorClient`'s own field set.
-fn client_value(name: &str, public_key: &str, allowed_ips: &[String]) -> yaml_serde::Value {
-    let mut map = yaml_serde::Mapping::new();
-    map.insert("name".into(), name.into());
-    map.insert("public_key".into(), public_key.into());
-    map.insert(
-        "allowed_ips".into(),
-        yaml_serde::Value::Sequence(allowed_ips.iter().map(|s| s.as_str().into()).collect()),
-    );
-    yaml_serde::Value::Mapping(map)
+/// What `rw-add` makes: the entry to add to the pool, and the client config if one was asked for.
+pub struct Added {
+    pub client: RoadwarriorClient,
+    pub config: Option<(ClientPrivateKey, String)>,
 }
 
-/// `yamlpatch::serialize_flow` pads `{ ` / ` }` - mesh.yaml's existing convention doesn't.
-fn flow_style(value: &yaml_serde::Value) -> Result<String> {
-    let s = yamlpatch::serialize_flow(value).context("rendering flow-style YAML")?;
-    let s = s
-        .strip_prefix("{ ")
-        .map(|rest| format!("{{{rest}"))
-        .unwrap_or(s);
-    let s = s
-        .strip_suffix(" }")
-        .map(|rest| format!("{rest}}}"))
-        .unwrap_or(s);
-    Ok(s)
-}
-
-/// Appends one flow-style item to an existing block-sequence feature, in the same style
-/// `mesh.yaml`'s existing client entries already use.
-fn append_flow_item(
-    doc: &yamlpath::Document,
-    feature: &yamlpath::Feature,
-    value: &yaml_serde::Value,
-) -> Result<String> {
-    let indent = yamlpatch::extract_leading_whitespace(doc, feature);
-    let value_str = flow_style(value)?;
-    let insertion_point = yamlpatch::find_content_end(feature, doc);
-    let source = doc.source();
-    let needs_leading_newline = !source[..insertion_point].ends_with('\n');
-    let mut new_item = String::new();
-    if needs_leading_newline {
-        new_item.push('\n');
-    }
-    new_item.push_str(&format!("{indent}- {value_str}"));
-    let mut result = source.to_string();
-    result.insert_str(insertion_point, &new_item);
-    Ok(result)
-}
-
-/// A pool whose `clients:` is still `[]` (empty flow sequence) doesn't go through
-/// `append_flow_item` - `yamlpath`/`yamlpatch` only support appending onto a *block* sequence.
-/// Replace the `[]` span directly with a one-item block sequence instead.
-fn replace_empty_flow_sequence(
-    doc: &yamlpath::Document,
-    feature: &yamlpath::Feature,
-    value: &yaml_serde::Value,
-) -> Result<String> {
-    let indent = yamlpatch::extract_leading_whitespace(doc, feature);
-    let value_str = flow_style(value)?;
-    let (start, end) = feature.location.byte_span;
-    let mut result = doc.source().to_string();
-    result.replace_range(start..end, &format!("\n{indent}- {value_str}"));
-    Ok(result)
-}
-
-/// Adds one client to `roadwarriors[pool_index].clients` in `source`, returning the whole updated
-/// file. Everything outside that one sequence - comments, other pools, unrelated formatting - is
-/// untouched.
-pub(crate) fn add_client_to_yaml(
-    source: &str,
-    pool_index: usize,
-    value: &yaml_serde::Value,
-) -> Result<String> {
-    let doc = yamlpath::Document::new(source).context("parsing mesh.yaml")?;
-    let route = yamlpath::route!["roadwarriors", pool_index, "clients"];
-    let feature = yamlpatch::route_to_feature_exact(&route, &doc)
-        .context("querying clients list")?
-        .context("pool has no clients list")?;
-    match yamlpatch::Style::from_feature(&feature, &doc) {
-        yamlpatch::Style::BlockSequence => append_flow_item(&doc, &feature, value),
-        yamlpatch::Style::FlowSequence if doc.extract(&feature).trim() == "[]" => {
-            replace_empty_flow_sequence(&doc, &feature, value)
-        }
-        other => {
-            bail!("clients list has unsupported YAML style {other:?} - expected a block sequence")
-        }
-    }
-}
-
-/// Removes `roadwarriors[pool_index].clients[client_index]` from `source`, returning the whole
-/// updated file - same "everything else untouched" guarantee as `add_client_to_yaml`.
-pub(crate) fn remove_client_from_yaml(
-    source: &str,
-    pool_index: usize,
-    client_index: usize,
-) -> Result<String> {
-    let doc = yamlpath::Document::new(source).context("parsing mesh.yaml")?;
-    let route = yamlpath::route!["roadwarriors", pool_index, "clients", client_index];
-    let patch = yamlpatch::Patch {
-        route,
-        operation: yamlpatch::Op::Remove,
-    };
-    let out = yamlpatch::apply_yaml_patches(&doc, std::slice::from_ref(&patch))
-        .context("removing client from mesh.yaml")?;
-    Ok(out.source().to_string())
-}
-
-/// `rw-add`: validates, resolves/generates the client's keypair, patches `mesh.yaml`, and
-/// (if `export`/`qr`) prints the client config/QR. Returns the updated `mesh.yaml` content for
-/// the caller to write - this module never touches the filesystem itself, see `main.rs`.
+/// `rw-add`: validates, resolves/generates the client's keypair, and (if `export`/`qr`) renders
+/// the client config. Writing the entry into `slipmesh.yaml` is `edit::add_client`'s.
 #[allow(clippy::too_many_arguments)]
 pub fn add(
     mesh: &MeshConfig,
-    source: &str,
-    patches_dir: &Path,
+    secrets: &ResolvedSecrets,
     if_: &str,
     name: &str,
     allowed_ips_raw: &str,
@@ -390,14 +271,14 @@ pub fn add(
     endpoint: Option<&str>,
     export: bool,
     qr: bool,
-) -> Result<(String, Option<(ClientPrivateKey, String)>)> {
+) -> Result<Added> {
     if public_key.is_none() && !export && !qr {
         bail!(
             "a private key would be generated and then lost - pass --export and/or --qr, or give --public-key"
         );
     }
 
-    let (pool_index, pool) = find_pool(mesh, if_)?;
+    let pool = find_pool(mesh, if_)?;
 
     let allowed_ips: Vec<String> = allowed_ips_raw
         .split(',')
@@ -416,37 +297,45 @@ pub fn add(
 
     check_not_duplicate(pool, name, &resolved_public_key)?;
 
-    let value = client_value(name, &resolved_public_key, &allowed_ips);
-    let updated = add_client_to_yaml(source, pool_index, &value)?;
-
-    let config = if export || qr {
-        let (server_private_key, obfuscation) = resolve_pool_identity(mesh, pool, patches_dir)?;
-        let server_public_key = keys::public_key_from_private(&server_private_key)?;
-        let endpoints = pool_endpoints(mesh, pool, endpoint)?;
-        let text = render_client_config(
-            &client_private_key,
-            &allowed_ips,
-            resolve_dns(mesh, pool).as_deref(),
-            &server_public_key,
-            &endpoints,
-            &obfuscation,
-        );
-        Some((client_private_key, text))
-    } else {
-        None
+    let client = RoadwarriorClient {
+        name: name.to_owned(),
+        public_key: resolved_public_key,
+        allowed_ips,
+        advanced_security: false,
     };
 
-    Ok((updated, config))
+    if !(export || qr) {
+        return Ok(Added {
+            client,
+            config: None,
+        });
+    }
+    let (server_private_key, obfuscation) = pool_identity(pool, secrets)?;
+    let server_public_key = keys::public_key_from_private(&server_private_key)?;
+    let endpoints = pool_endpoints(mesh, pool, endpoint)?;
+    let text = render_client_config(
+        &client_private_key,
+        &client.allowed_ips,
+        resolve_dns(mesh, pool).as_deref(),
+        &server_public_key,
+        &endpoints,
+        &obfuscation,
+    );
+    Ok(Added {
+        client,
+        config: Some((client_private_key, text)),
+    })
 }
 
-/// `rw-del`: patches `mesh.yaml` to remove the named client, returning the updated content and
-/// the removed client (name printed by `main.rs` for an operator-facing audit line).
-pub fn del(mesh: &MeshConfig, source: &str, if_: &str, name: &str) -> Result<(String, String)> {
-    let (pool_index, pool) = find_pool(mesh, if_)?;
-    let client_index = find_client_index(pool, name)?;
-    let public_key = pool.clients[client_index].public_key.clone();
-    let updated = remove_client_from_yaml(source, pool_index, client_index)?;
-    Ok((updated, public_key))
+/// Client `name` of pool `if_`, with its position in the pool's `clients` - what `rw-del` removes.
+pub fn find_client<'a>(
+    mesh: &'a MeshConfig,
+    if_: &str,
+    name: &str,
+) -> Result<(usize, &'a RoadwarriorClient)> {
+    let pool = find_pool(mesh, if_)?;
+    let index = find_client_index(pool, name)?;
+    Ok((index, &pool.clients[index]))
 }
 
 /// `rw-inspect`: re-renders an existing client's config/QR - never writes anything. The private
@@ -454,17 +343,16 @@ pub fn del(mesh: &MeshConfig, source: &str, if_: &str, name: &str) -> Result<(St
 /// config always carries the placeholder.
 pub fn inspect(
     mesh: &MeshConfig,
-    patches_dir: &Path,
+    secrets: &ResolvedSecrets,
     if_: &str,
     name: &str,
     private_key: Option<&str>,
     endpoint: Option<&str>,
 ) -> Result<String> {
-    let (_, pool) = find_pool(mesh, if_)?;
-    let client_index = find_client_index(pool, name)?;
-    let client: &RoadwarriorClient = &pool.clients[client_index];
+    let pool = find_pool(mesh, if_)?;
+    let (_, client) = find_client(mesh, if_, name)?;
 
-    let (server_private_key, obfuscation) = resolve_pool_identity(mesh, pool, patches_dir)?;
+    let (server_private_key, obfuscation) = pool_identity(pool, secrets)?;
     let server_public_key = keys::public_key_from_private(&server_private_key)?;
     let endpoints = pool_endpoints(mesh, pool, endpoint)?;
     let client_private_key = match private_key {
@@ -472,7 +360,7 @@ pub fn inspect(
             let derived = keys::public_key_from_private(pk).context("--private-key")?;
             anyhow::ensure!(
                 derived == client.public_key,
-                "--private-key doesn't match {name:?}'s stored public_key in mesh.yaml \
+                "--private-key doesn't match {name:?}'s stored public_key in slipmesh.yaml \
                  (derived {derived:?}, expected {:?}) - wrong key, or wrong client",
                 client.public_key
             );
@@ -531,13 +419,17 @@ roadwarriors:
     }
 
     fn mesh() -> MeshConfig {
-        serde_yaml::from_str(fixture()).unwrap()
+        yaml_serde::from_str(fixture()).unwrap()
+    }
+
+    fn secrets(mesh: &MeshConfig) -> ResolvedSecrets {
+        crate::secrets::resolve(mesh).0
     }
 
     #[test]
     fn pool_endpoints_defaults_to_node_hostnames_order() {
         let m = mesh();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
         let endpoints = pool_endpoints(&m, pool, None).unwrap();
         assert_eq!(endpoints, vec!["192.0.2.10:51820", "192.0.2.11:51820"]);
     }
@@ -545,7 +437,7 @@ roadwarriors:
     #[test]
     fn pool_endpoints_promotes_the_requested_endpoint_to_primary() {
         let m = mesh();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
         let endpoints = pool_endpoints(&m, pool, Some("b")).unwrap();
         assert_eq!(endpoints, vec!["192.0.2.11:51820", "192.0.2.10:51820"]);
     }
@@ -553,7 +445,7 @@ roadwarriors:
     #[test]
     fn pool_endpoints_errors_on_an_endpoint_not_in_node_hostnames() {
         let m = mesh();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
         let err = pool_endpoints(&m, pool, Some("ghost")).unwrap_err();
         assert!(err.to_string().contains("ghost"), "error was: {err}");
     }
@@ -568,16 +460,8 @@ roadwarriors:
                 r#"{{name: alice, public_key: "{alice_pub}", allowed_ips: ["198.51.100.41/32"]}}"#
             ),
         );
-        let m: MeshConfig = serde_yaml::from_str(&yaml).unwrap();
-        let cfg = inspect(
-            &m,
-            Path::new("/nonexistent"),
-            "plain",
-            "alice",
-            Some(&alice_priv),
-            None,
-        )
-        .unwrap();
+        let m: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
+        let cfg = inspect(&m, &secrets(&m), "plain", "alice", Some(&alice_priv), None).unwrap();
         assert!(cfg.contains(&format!("PrivateKey = {alice_priv}")));
         assert!(!cfg.contains("<enter your private key here>"));
     }
@@ -586,15 +470,7 @@ roadwarriors:
     fn inspect_rejects_a_private_key_that_does_not_match_the_stored_public_key() {
         let m = mesh();
         let wrong_priv = keys::generate_private_key();
-        let err = inspect(
-            &m,
-            Path::new("/nonexistent"),
-            "plain",
-            "alice",
-            Some(&wrong_priv),
-            None,
-        )
-        .unwrap_err();
+        let err = inspect(&m, &secrets(&m), "plain", "alice", Some(&wrong_priv), None).unwrap_err();
         assert!(
             err.to_string().contains("doesn't match"),
             "error was: {err}"
@@ -604,7 +480,7 @@ roadwarriors:
     #[test]
     fn resolve_dns_falls_back_to_service_subnet_derived_coredns_ip() {
         let m = mesh();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
         assert_eq!(resolve_dns(&m, pool), Some("100.64.0.10".to_string()));
     }
 
@@ -625,8 +501,8 @@ roadwarriors:
     dns: "9.9.9.9"
     clients: []
 "#;
-        let m: MeshConfig = serde_yaml::from_str(yaml).unwrap();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let m: MeshConfig = yaml_serde::from_str(yaml).unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
         assert_eq!(resolve_dns(&m, pool), Some("9.9.9.9".to_string()));
     }
 
@@ -645,8 +521,8 @@ roadwarriors:
     plain: true
     clients: []
 "#;
-        let m: MeshConfig = serde_yaml::from_str(yaml).unwrap();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let m: MeshConfig = yaml_serde::from_str(yaml).unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
         assert_eq!(resolve_dns(&m, pool), None);
     }
 
@@ -691,7 +567,7 @@ roadwarriors:
     #[test]
     fn find_client_index_errors_with_known_names_on_miss() {
         let m = mesh();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
         let err = find_client_index(pool, "nope").unwrap_err();
         assert!(err.to_string().contains("alice"), "error was: {err}");
     }
@@ -699,79 +575,29 @@ roadwarriors:
     #[test]
     fn check_not_duplicate_rejects_existing_name() {
         let m = mesh();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
         assert!(check_not_duplicate(pool, "alice", "fresh-key=").is_err());
     }
 
     #[test]
     fn check_not_duplicate_rejects_existing_public_key() {
         let m = mesh();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
         assert!(check_not_duplicate(pool, "fresh-name", "AAA=").is_err());
     }
 
     #[test]
     fn check_not_duplicate_accepts_a_genuinely_new_client() {
         let m = mesh();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
         assert!(check_not_duplicate(pool, "dave", "DDD=").is_ok());
-    }
-
-    #[test]
-    fn add_client_to_yaml_appends_flow_style_and_leaves_the_rest_untouched() {
-        let value = client_value("dave", "DDD=", &["198.51.100.99/32".to_string()]);
-        let out = add_client_to_yaml(fixture(), 0, &value).unwrap();
-        assert!(
-            out.contains(
-                r#"- {name: dave, public_key: "DDD=", allowed_ips: ["198.51.100.99/32"]}"#
-            )
-        );
-        // untouched: the other pool, and its own clients/obfuscation
-        assert!(out.contains("carol"));
-        assert!(out.contains("jc: 4"));
-        assert!(out.contains("h4: 2070706730"));
-        // untouched: existing entries in the same pool
-        assert!(
-            out.contains(r#"{name: alice, public_key: "AAA=", allowed_ips: ["198.51.100.41/32"]}"#)
-        );
-    }
-
-    #[test]
-    fn add_client_to_yaml_errors_on_unknown_pool_index() {
-        let value = client_value("dave", "DDD=", &["198.51.100.99/32".to_string()]);
-        assert!(add_client_to_yaml(fixture(), 99, &value).is_err());
-    }
-
-    #[test]
-    fn remove_client_from_yaml_deletes_exactly_the_target() {
-        let out = remove_client_from_yaml(fixture(), 0, 0).unwrap(); // alice
-        assert!(!out.contains("alice"));
-        assert!(out.contains("bob"));
-        assert!(out.contains("carol"));
-        assert!(out.contains("jc: 4"));
-    }
-
-    #[test]
-    fn append_onto_an_empty_flow_clients_list() {
-        let src = r#"roadwarriors:
-  - name: fresh
-    node_hostnames: ["a"]
-    address: "198.51.100.250/24"
-    listen_port: 51830
-    clients: []
-"#;
-        let value = client_value("eve", "EEE=", &["198.51.100.5/32".to_string()]);
-        let out = add_client_to_yaml(src, 0, &value).unwrap();
-        assert!(
-            out.contains(r#"- {name: eve, public_key: "EEE=", allowed_ips: ["198.51.100.5/32"]}"#)
-        );
     }
 
     #[test]
     fn render_client_config_includes_amneziawg_fields_for_a_non_plain_pool() {
         let m = mesh();
-        let (_, pool) = find_pool(&m, "obfuscation").unwrap();
-        let (server_key, obf) = resolve_pool_identity(&m, pool, Path::new("/nonexistent")).unwrap();
+        let pool = find_pool(&m, "obfuscation").unwrap();
+        let (server_key, obf) = pool_identity(pool, &secrets(&m)).unwrap();
         let server_pub = keys::public_key_from_private(&server_key).unwrap();
         let endpoints = pool_endpoints(&m, pool, None).unwrap();
         let cfg = render_client_config(
@@ -794,8 +620,8 @@ roadwarriors:
     #[test]
     fn render_client_config_omits_amneziawg_fields_for_a_plain_pool() {
         let m = mesh();
-        let (_, pool) = find_pool(&m, "plain").unwrap();
-        let (server_key, obf) = resolve_pool_identity(&m, pool, Path::new("/nonexistent")).unwrap();
+        let pool = find_pool(&m, "plain").unwrap();
+        let (server_key, obf) = pool_identity(pool, &secrets(&m)).unwrap();
         assert_eq!(obf, Obfuscation::default());
         let server_pub = keys::public_key_from_private(&server_key).unwrap();
         let endpoints = pool_endpoints(&m, pool, None).unwrap();
@@ -814,85 +640,62 @@ roadwarriors:
         assert!(!cfg.contains("# Name"));
     }
 
-    #[test]
-    fn add_requires_export_or_qr_when_public_key_is_omitted() {
+    /// `add` of client `dave` to the `plain` pool.
+    fn add_to_plain(public_key: Option<&str>, export: bool) -> Result<Added> {
         let m = mesh();
-        let err = add(
+        add(
             &m,
-            fixture(),
-            Path::new("/nonexistent"),
+            &secrets(&m),
             "plain",
             "dave",
             "198.51.100.99",
+            public_key,
             None,
-            None,
-            false,
+            export,
             false,
         )
-        .unwrap_err();
+    }
+
+    #[test]
+    fn add_requires_export_or_qr_when_public_key_is_omitted() {
+        let err = add_to_plain(None, false).err().unwrap();
         assert!(err.to_string().contains("lost"), "error was: {err}");
     }
 
     #[test]
     fn add_with_public_key_and_no_export_succeeds_with_no_config() {
-        let m = mesh();
-        let (updated, config) = add(
-            &m,
-            fixture(),
-            Path::new("/nonexistent"),
-            "plain",
-            "dave",
-            "198.51.100.99",
-            Some("DDD="),
-            None,
-            false,
-            false,
-        )
-        .unwrap();
-        assert!(updated.contains("dave"));
-        assert!(config.is_none());
+        let added = add_to_plain(Some("DDD="), false).unwrap();
+        assert_eq!(added.client.name, "dave");
+        assert_eq!(added.client.public_key, "DDD=");
+        assert_eq!(added.client.allowed_ips, ["198.51.100.99/32"]);
+        assert!(added.config.is_none());
     }
 
     #[test]
     fn add_without_public_key_but_with_export_generates_and_returns_a_key() {
-        let m = mesh();
-        let (updated, config) = add(
-            &m,
-            fixture(),
-            Path::new("/nonexistent"),
-            "plain",
-            "dave",
-            "198.51.100.99",
-            None,
-            None,
-            true,
-            false,
-        )
-        .unwrap();
-        assert!(updated.contains("dave"));
-        let (key, text) = config.unwrap();
-        assert!(matches!(key, ClientPrivateKey::Known(_)));
+        let added = add_to_plain(None, true).unwrap();
+        let (key, text) = added.config.unwrap();
+        let ClientPrivateKey::Known(key) = key else {
+            panic!("no key returned");
+        };
+        assert_eq!(
+            keys::public_key_from_private(&key).unwrap(),
+            added.client.public_key
+        );
         assert!(!text.contains("<enter your private key here>"));
     }
 
     #[test]
-    fn del_removes_the_named_client_and_returns_its_public_key() {
+    fn find_client_returns_the_client_and_its_position() {
         let m = mesh();
-        let (updated, public_key) = del(&m, fixture(), "plain", "alice").unwrap();
-        assert!(!updated.contains("alice"));
-        assert_eq!(public_key, "AAA=");
+        let (index, client) = find_client(&m, "plain", "bob").unwrap();
+        assert_eq!(index, 1);
+        assert_eq!(client.public_key, "BBB=");
     }
 
     #[test]
-    fn del_on_unknown_client_errors() {
-        let m = mesh();
-        assert!(del(&m, fixture(), "plain", "nope").is_err());
-    }
-
-    #[test]
-    fn render_qr_produces_nonempty_output() {
-        let qr = render_qr("[Interface]\nPrivateKey = x\n", false).unwrap();
-        assert!(!qr.trim().is_empty());
+    fn find_client_on_unknown_client_errors() {
+        assert!(find_client(&mesh(), "plain", "nope").is_err());
     }
 
     #[test]
@@ -905,15 +708,7 @@ roadwarriors:
     #[test]
     fn inspect_renders_the_same_config_shape_as_add_with_a_placeholder_key() {
         let m = mesh();
-        let cfg = inspect(
-            &m,
-            Path::new("/nonexistent"),
-            "obfuscation",
-            "carol",
-            None,
-            None,
-        )
-        .unwrap();
+        let cfg = inspect(&m, &secrets(&m), "obfuscation", "carol", None, None).unwrap();
         assert!(cfg.contains("<enter your private key here>"));
         assert!(cfg.contains("Address = 203.0.113.22/32"));
         assert!(cfg.contains("Jc = 4"));

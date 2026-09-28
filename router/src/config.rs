@@ -307,7 +307,7 @@ bgp_as: 64512
 ",
             minimal_yaml()
         );
-        let cfg: RouterConfig = serde_yaml::from_str(&yaml).unwrap();
+        let cfg: RouterConfig = yaml_serde::from_str(&yaml).unwrap();
         let err = validate(&cfg).unwrap_err().to_string();
         assert!(err.contains("wildcard"), "unexpected error: {err}");
     }
@@ -323,7 +323,7 @@ bgp_as: 64512
 ",
             minimal_yaml()
         );
-        let cfg: RouterConfig = serde_yaml::from_str(&yaml).unwrap();
+        let cfg: RouterConfig = yaml_serde::from_str(&yaml).unwrap();
         assert_eq!(cfg.bfd.as_ref().unwrap().multiplier, BFD_DEFAULT_MULTIPLIER);
         let err = validate(&cfg).unwrap_err().to_string();
         assert!(err.contains("min_rx_ms"), "unexpected error: {err}");
@@ -331,7 +331,7 @@ bgp_as: 64512
 
     #[test]
     fn parses_a_minimal_config() {
-        let cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         assert_eq!(cfg.bgp_as, 64512);
         assert!(cfg.bgp_peers.is_empty());
         assert!(cfg.bypass.is_none());
@@ -364,7 +364,7 @@ bypass:
     - kind: literal
       prefixes: [{net: "10.0.0.0/8"}]
 "#;
-        let cfg: RouterConfig = serde_yaml::from_str(yaml).unwrap();
+        let cfg: RouterConfig = yaml_serde::from_str(yaml).unwrap();
         validate(&cfg).unwrap();
         assert_eq!(cfg.bgp_peers.len(), 2);
         assert_eq!(cfg.bypass.as_ref().unwrap().refresh_interval_secs, 3600);
@@ -392,21 +392,21 @@ bypass:
 
     #[test]
     fn rejects_missing_ipv4_loopback() {
-        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.node.loopback_addresses = vec!["fd00::1/128".to_string()];
         assert!(validate(&cfg).is_err());
     }
 
     #[test]
     fn rejects_missing_ipv6_loopback() {
-        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.node.loopback_addresses = vec!["10.62.0.1/32".to_string()];
         assert!(validate(&cfg).is_err());
     }
 
     #[test]
     fn rejects_duplicate_peer_names() {
-        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.bgp_peers = vec![
             BgpPeerEntry {
                 name: "fra".to_string(),
@@ -422,7 +422,7 @@ bypass:
 
     #[test]
     fn rejects_ipv4_peer_address() {
-        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.bgp_peers = vec![BgpPeerEntry {
             name: "fra".to_string(),
             address: "10.0.0.2".to_string(),
@@ -432,14 +432,14 @@ bypass:
 
     #[test]
     fn rejects_malformed_learn_cidr() {
-        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.learn = vec!["not-a-cidr".to_string()];
         assert!(validate(&cfg).is_err());
     }
 
     #[test]
     fn rejects_malformed_announce_cidr() {
-        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.announce = vec![AnnounceEntry {
             net: "not-a-cidr".to_string(),
             label: None,
@@ -449,7 +449,7 @@ bypass:
 
     #[test]
     fn rejects_unknown_bypass_kind() {
-        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.bypass = Some(BypassConfig {
             refresh_interval_secs: default_bypass_refresh_interval_secs(),
             include: vec![BypassSourceEntry {
@@ -467,14 +467,14 @@ bypass:
 
     #[test]
     fn rejects_as0() {
-        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.bgp_as = 0;
         assert!(validate(&cfg).is_err());
     }
 
     #[test]
     fn rejects_zero_bypass_refresh_interval() {
-        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.bypass = Some(BypassConfig {
             refresh_interval_secs: 0,
             include: vec![],
@@ -485,7 +485,7 @@ bypass:
 
     #[test]
     fn rejects_literal_bypass_without_prefixes() {
-        let mut cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let mut cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         cfg.bypass = Some(BypassConfig {
             refresh_interval_secs: default_bypass_refresh_interval_secs(),
             include: vec![BypassSourceEntry {
@@ -503,7 +503,7 @@ bypass:
 
     #[test]
     fn accepts_empty_ospf_interfaces_and_learn() {
-        let cfg: RouterConfig = serde_yaml::from_str(minimal_yaml()).unwrap();
+        let cfg: RouterConfig = yaml_serde::from_str(minimal_yaml()).unwrap();
         assert!(cfg.ospf_interfaces.is_empty());
         assert!(cfg.learn.is_empty());
         validate(&cfg).unwrap();
