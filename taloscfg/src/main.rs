@@ -77,6 +77,10 @@ enum Command {
         /// scanner rejects that, while AmneziaWG's and a plain camera don't care either way.
         #[arg(long)]
         invert: bool,
+        /// Write the generated private key into the client's entry in place of its public key, so
+        /// rw-inspect can re-render the full config later.
+        #[arg(long = "keep-private")]
+        keep_private: bool,
         #[arg(long, default_value = "slipmesh.yaml")]
         config: PathBuf,
     },
@@ -95,8 +99,8 @@ enum Command {
         if_: String,
         #[arg(long)]
         name: String,
-        /// This client's private key, if you happen to have it (never persisted by rw-add, so
-        /// normally unknown) - fills in the config in full instead of a placeholder.
+        /// This client's private key, if you have it and rw-add did not keep it - fills in the
+        /// config in full instead of a placeholder.
         #[arg(long = "private-key")]
         private_key: Option<String>,
         /// Which of the pool's node_hostnames to put first as the live Endpoint (default: the
@@ -137,6 +141,7 @@ fn main() -> Result<()> {
             export,
             qr,
             invert,
+            keep_private,
             config,
         } => rw_add(
             &if_,
@@ -147,6 +152,7 @@ fn main() -> Result<()> {
             export,
             qr,
             invert,
+            keep_private,
             &config,
         ),
         Command::RwDel { if_, name, config } => rw_del(&if_, &name, &config),
@@ -182,6 +188,7 @@ fn rw_add(
     export: bool,
     qr: bool,
     invert: bool,
+    keep_private: bool,
     config_path: &Path,
 ) -> Result<()> {
     let (_, mut yaml, file) = read_slipmesh(config_path)?;
@@ -202,6 +209,7 @@ fn rw_add(
         endpoint,
         export,
         qr,
+        keep_private,
     )?;
     edit::add_client(&mut yaml, document, &added.client)?;
     write_edits(config_path, &yaml)?;
@@ -734,6 +742,7 @@ clients:
             false,
             false,
             false,
+            false,
             &paths.config,
         )
         .unwrap();
@@ -772,6 +781,7 @@ clients:
             false,
             false,
             false,
+            false,
             &paths.config,
         )
         .unwrap_err();
@@ -793,6 +803,7 @@ clients:
             true,
             false,
             false,
+            false,
             &paths.config,
         )
         .unwrap();
@@ -801,6 +812,41 @@ clients:
         assert!(topology.roadwarriors[0].private_key.is_some());
         assert_eq!(topology.roadwarriors[0].clients[0].name, "dave");
         paths.generate(None, true, false).unwrap();
+    }
+
+    #[test]
+    fn rw_add_keeping_the_private_key_lets_rw_inspect_render_the_config_in_full() {
+        let paths = setup(POOLS);
+        rw_add(
+            "first",
+            "dave",
+            "198.51.100.99",
+            None,
+            None,
+            false,
+            false,
+            false,
+            true,
+            &paths.config,
+        )
+        .unwrap();
+
+        let config = paths.config();
+        let first = &config[pool_bounds(&config, "first")];
+        assert!(
+            first.contains("private_key:") && !first.contains("public_key"),
+            "{first}"
+        );
+        let topology = paths.topology();
+        let dave = &topology.roadwarriors[0].clients[0];
+        let private = dave.private_key.as_deref().unwrap();
+        assert_eq!(
+            taloscfg::keys::public_key_from_private(private).unwrap(),
+            dave.public_key
+        );
+        let (secrets, _) = secrets::resolve(&topology);
+        let text = roadwarrior::inspect(&topology, &secrets, "first", "dave", None, None).unwrap();
+        assert!(text.contains(&format!("PrivateKey = {private}")), "{text}");
     }
 
     #[test]

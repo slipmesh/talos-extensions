@@ -439,8 +439,11 @@ slipmesh-taloscfg rw-del --if plain --name laptop
 ```
 
 `rw-add` generates the client's keypair and prints a ready-to-import config (optionally as a
-terminal QR code), keeping only the public half. Client private keys are never persisted -
-`rw-inspect` re-renders the rest and leaves a placeholder unless you pass the key back in. The
+terminal QR code), keeping only the public half. `rw-inspect` re-renders the rest and leaves a
+placeholder unless you pass the key back in. With `--keep-private`, `rw-add` writes the private key
+into the client's entry as `private_key`, in place of `public_key`, and `rw-inspect` renders the
+config in full from it; the public key is derived from it wherever it is needed. A client entry
+holds one of the two keys, never both. The
 pool's own key, which the config is built with, is written into the pool's document, so `generate`
 puts the same key on the wire; `rw-inspect` writes nothing and asks for `generate` first when that
 key is not written down yet.

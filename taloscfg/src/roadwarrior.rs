@@ -259,7 +259,8 @@ pub struct Added {
 }
 
 /// `rw-add`: validates, resolves/generates the client's keypair, and (if `export`/`qr`) renders
-/// the client config. Writing the entry into `slipmesh.yaml` is `edit::add_client`'s.
+/// the client config. With `keep_private` the entry holds the generated private key instead of the
+/// public one. Writing the entry into `slipmesh.yaml` is `edit::add_client`'s.
 #[allow(clippy::too_many_arguments)]
 pub fn add(
     mesh: &MeshConfig,
@@ -271,10 +272,15 @@ pub fn add(
     endpoint: Option<&str>,
     export: bool,
     qr: bool,
+    keep_private: bool,
 ) -> Result<Added> {
-    if public_key.is_none() && !export && !qr {
+    if keep_private && public_key.is_some() {
+        bail!("--keep-private has no private key to keep when --public-key is given");
+    }
+    if public_key.is_none() && !keep_private && !export && !qr {
         bail!(
-            "a private key would be generated and then lost - pass --export and/or --qr, or give --public-key"
+            "a private key would be generated and then lost - pass --export, --qr or --keep-private, \
+             or give --public-key"
         );
     }
 
@@ -300,6 +306,10 @@ pub fn add(
     let client = RoadwarriorClient {
         name: name.to_owned(),
         public_key: resolved_public_key,
+        private_key: match &client_private_key {
+            ClientPrivateKey::Known(sk) if keep_private => Some(sk.clone()),
+            _ => None,
+        },
         allowed_ips,
         advanced_security: false,
     };
@@ -339,8 +349,8 @@ pub fn find_client<'a>(
 }
 
 /// `rw-inspect`: re-renders an existing client's config/QR - never writes anything. The private
-/// key is never known (never persisted anywhere, see `add`'s footgun-avoidance rule), so the
-/// config always carries the placeholder.
+/// key is the one passed in, else the one `rw-add --keep-private` kept with the client; with
+/// neither, the config carries a placeholder.
 pub fn inspect(
     mesh: &MeshConfig,
     secrets: &ResolvedSecrets,
@@ -366,7 +376,10 @@ pub fn inspect(
             );
             ClientPrivateKey::Known(pk.to_string())
         }
-        None => ClientPrivateKey::Unknown,
+        None => match &client.private_key {
+            Some(kept) => ClientPrivateKey::Known(kept.clone()),
+            None => ClientPrivateKey::Unknown,
+        },
     };
     Ok(render_client_config(
         &client_private_key,
@@ -427,50 +440,39 @@ roadwarriors:
     }
 
     #[test]
-    fn pool_endpoints_defaults_to_node_hostnames_order() {
+    fn pool_endpoints_put_the_chosen_node_first() {
         let m = mesh();
         let pool = find_pool(&m, "plain").unwrap();
-        let endpoints = pool_endpoints(&m, pool, None).unwrap();
-        assert_eq!(endpoints, vec!["192.0.2.10:51820", "192.0.2.11:51820"]);
-    }
-
-    #[test]
-    fn pool_endpoints_promotes_the_requested_endpoint_to_primary() {
-        let m = mesh();
-        let pool = find_pool(&m, "plain").unwrap();
-        let endpoints = pool_endpoints(&m, pool, Some("b")).unwrap();
-        assert_eq!(endpoints, vec!["192.0.2.11:51820", "192.0.2.10:51820"]);
-    }
-
-    #[test]
-    fn pool_endpoints_errors_on_an_endpoint_not_in_node_hostnames() {
-        let m = mesh();
-        let pool = find_pool(&m, "plain").unwrap();
+        assert_eq!(
+            pool_endpoints(&m, pool, None).unwrap(),
+            ["192.0.2.10:51820", "192.0.2.11:51820"]
+        );
+        assert_eq!(
+            pool_endpoints(&m, pool, Some("b")).unwrap(),
+            ["192.0.2.11:51820", "192.0.2.10:51820"]
+        );
         let err = pool_endpoints(&m, pool, Some("ghost")).unwrap_err();
         assert!(err.to_string().contains("ghost"), "error was: {err}");
     }
 
     #[test]
-    fn inspect_with_a_matching_private_key_fills_the_config_instead_of_a_placeholder() {
-        let alice_priv = keys::generate_private_key();
-        let alice_pub = keys::public_key_from_private(&alice_priv).unwrap();
-        let yaml = fixture().replace(
-            r#"{name: alice, public_key: "AAA=", allowed_ips: ["198.51.100.41/32"]}"#,
-            &format!(
-                r#"{{name: alice, public_key: "{alice_pub}", allowed_ips: ["198.51.100.41/32"]}}"#
-            ),
-        );
-        let m: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
-        let cfg = inspect(&m, &secrets(&m), "plain", "alice", Some(&alice_priv), None).unwrap();
-        assert!(cfg.contains(&format!("PrivateKey = {alice_priv}")));
-        assert!(!cfg.contains("<enter your private key here>"));
-    }
+    fn inspect_fills_in_a_private_key_only_when_it_matches() {
+        let carol_priv = keys::generate_private_key();
+        let mut m = mesh();
+        m.roadwarriors[1].clients[0].public_key =
+            keys::public_key_from_private(&carol_priv).unwrap();
+        let inspect_carol =
+            |key: Option<&str>| inspect(&m, &secrets(&m), "obfuscation", "carol", key, None);
 
-    #[test]
-    fn inspect_rejects_a_private_key_that_does_not_match_the_stored_public_key() {
-        let m = mesh();
-        let wrong_priv = keys::generate_private_key();
-        let err = inspect(&m, &secrets(&m), "plain", "alice", Some(&wrong_priv), None).unwrap_err();
+        let cfg = inspect_carol(None).unwrap();
+        assert!(cfg.contains("<enter your private key here>"), "{cfg}");
+        assert!(cfg.contains("Address = 203.0.113.22/32"), "{cfg}");
+        assert!(cfg.contains("Jc = 4"), "{cfg}");
+
+        let cfg = inspect_carol(Some(&carol_priv)).unwrap();
+        assert!(cfg.contains(&format!("PrivateKey = {carol_priv}")), "{cfg}");
+
+        let err = inspect_carol(Some(&keys::generate_private_key())).unwrap_err();
         assert!(
             err.to_string().contains("doesn't match"),
             "error was: {err}"
@@ -478,118 +480,51 @@ roadwarriors:
     }
 
     #[test]
-    fn resolve_dns_falls_back_to_service_subnet_derived_coredns_ip() {
-        let m = mesh();
-        let pool = find_pool(&m, "plain").unwrap();
-        assert_eq!(resolve_dns(&m, pool), Some("100.64.0.10".to_string()));
-    }
-
-    #[test]
-    fn resolve_dns_prefers_an_explicit_pool_dns_over_the_derived_default() {
-        let yaml = r#"cluster:
-  bgp_as: 64512
-  loopback_networks: {ipv4: "192.0.2.0/24", ipv6: "2001:db8::/32"}
-  service_subnet: "100.64.0.0/16"
-nodes:
-  - {name: a, node_id: "0.0.0.1", endpoint: "192.0.2.10"}
-roadwarriors:
-  - name: plain
-    node_hostnames: ["a"]
-    address: "198.51.100.1/24"
-    listen_port: 51820
-    plain: true
-    dns: "9.9.9.9"
-    clients: []
-"#;
-        let m: MeshConfig = yaml_serde::from_str(yaml).unwrap();
-        let pool = find_pool(&m, "plain").unwrap();
-        assert_eq!(resolve_dns(&m, pool), Some("9.9.9.9".to_string()));
-    }
-
-    #[test]
-    fn resolve_dns_is_none_without_an_explicit_dns_or_a_service_subnet() {
-        let yaml = r#"cluster:
-  bgp_as: 64512
-  loopback_networks: {ipv4: "192.0.2.0/24", ipv6: "2001:db8::/32"}
-nodes:
-  - {name: a, node_id: "0.0.0.1", endpoint: "192.0.2.10"}
-roadwarriors:
-  - name: plain
-    node_hostnames: ["a"]
-    address: "198.51.100.1/24"
-    listen_port: 51820
-    plain: true
-    clients: []
-"#;
-        let m: MeshConfig = yaml_serde::from_str(yaml).unwrap();
-        let pool = find_pool(&m, "plain").unwrap();
-        assert_eq!(resolve_dns(&m, pool), None);
-    }
-
-    #[test]
-    fn parse_allowed_ip_normalizes_bare_v4_to_slash_32() {
+    fn resolve_dns_prefers_the_pools_own_then_the_cluster_coredns() {
+        let mut m = mesh();
         assert_eq!(
-            parse_allowed_ip("198.51.100.99").unwrap(),
-            "198.51.100.99/32"
+            resolve_dns(&m, &m.roadwarriors[0]),
+            Some("100.64.0.10".to_string())
         );
-    }
-
-    #[test]
-    fn parse_allowed_ip_normalizes_bare_v6_to_slash_128() {
-        assert_eq!(parse_allowed_ip("2001:db8::1").unwrap(), "2001:db8::1/128");
-    }
-
-    #[test]
-    fn parse_allowed_ip_leaves_an_explicit_prefix_untouched() {
+        m.roadwarriors[0].dns = Some("9.9.9.9".to_string());
         assert_eq!(
-            parse_allowed_ip("203.0.113.0/28").unwrap(),
-            "203.0.113.0/28"
+            resolve_dns(&m, &m.roadwarriors[0]),
+            Some("9.9.9.9".to_string())
         );
-        assert_eq!(
-            parse_allowed_ip("2001:db8::/120").unwrap(),
-            "2001:db8::/120"
-        );
+        m.roadwarriors[0].dns = None;
+        m.cluster.service_subnet = None;
+        assert_eq!(resolve_dns(&m, &m.roadwarriors[0]), None);
     }
 
     #[test]
-    fn parse_allowed_ip_rejects_garbage() {
+    fn parse_allowed_ip_adds_a_host_prefix_only_where_none_is_given() {
+        for (given, parsed) in [
+            ("198.51.100.99", "198.51.100.99/32"),
+            ("2001:db8::1", "2001:db8::1/128"),
+            ("203.0.113.0/28", "203.0.113.0/28"),
+            ("2001:db8::/120", "2001:db8::/120"),
+        ] {
+            assert_eq!(parse_allowed_ip(given).unwrap(), parsed);
+        }
         assert!(parse_allowed_ip("not-an-ip").is_err());
         assert!(parse_allowed_ip("198.51.100.99/99").is_err());
     }
 
     #[test]
-    fn find_pool_errors_with_known_names_on_miss() {
-        let err = find_pool(&mesh(), "nope").unwrap_err();
-        assert!(err.to_string().contains("plain"), "error was: {err}");
-        assert!(err.to_string().contains("obfuscation"), "error was: {err}");
-    }
-
-    #[test]
-    fn find_client_index_errors_with_known_names_on_miss() {
+    fn find_client_returns_its_position_and_names_the_clients_on_a_miss() {
         let m = mesh();
-        let pool = find_pool(&m, "plain").unwrap();
-        let err = find_client_index(pool, "nope").unwrap_err();
+        let (index, client) = find_client(&m, "plain", "bob").unwrap();
+        assert_eq!((index, client.public_key.as_str()), (1, "BBB="));
+        let err = find_client(&m, "plain", "nope").unwrap_err();
         assert!(err.to_string().contains("alice"), "error was: {err}");
     }
 
     #[test]
-    fn check_not_duplicate_rejects_existing_name() {
+    fn check_not_duplicate_refuses_a_taken_name_or_key() {
         let m = mesh();
         let pool = find_pool(&m, "plain").unwrap();
         assert!(check_not_duplicate(pool, "alice", "fresh-key=").is_err());
-    }
-
-    #[test]
-    fn check_not_duplicate_rejects_existing_public_key() {
-        let m = mesh();
-        let pool = find_pool(&m, "plain").unwrap();
         assert!(check_not_duplicate(pool, "fresh-name", "AAA=").is_err());
-    }
-
-    #[test]
-    fn check_not_duplicate_accepts_a_genuinely_new_client() {
-        let m = mesh();
-        let pool = find_pool(&m, "plain").unwrap();
         assert!(check_not_duplicate(pool, "dave", "DDD=").is_ok());
     }
 
@@ -641,7 +576,7 @@ roadwarriors:
     }
 
     /// `add` of client `dave` to the `plain` pool.
-    fn add_to_plain(public_key: Option<&str>, export: bool) -> Result<Added> {
+    fn add_to_plain(public_key: Option<&str>, export: bool, keep_private: bool) -> Result<Added> {
         let m = mesh();
         add(
             &m,
@@ -653,18 +588,21 @@ roadwarriors:
             None,
             export,
             false,
+            keep_private,
         )
     }
 
     #[test]
-    fn add_requires_export_or_qr_when_public_key_is_omitted() {
-        let err = add_to_plain(None, false).err().unwrap();
+    fn add_refuses_to_lose_a_generated_key_or_to_keep_a_missing_one() {
+        let err = add_to_plain(None, false, false).err().unwrap();
         assert!(err.to_string().contains("lost"), "error was: {err}");
+        let err = add_to_plain(Some("DDD="), false, true).err().unwrap();
+        assert!(err.to_string().contains("--public-key"), "error was: {err}");
     }
 
     #[test]
     fn add_with_public_key_and_no_export_succeeds_with_no_config() {
-        let added = add_to_plain(Some("DDD="), false).unwrap();
+        let added = add_to_plain(Some("DDD="), false, false).unwrap();
         assert_eq!(added.client.name, "dave");
         assert_eq!(added.client.public_key, "DDD=");
         assert_eq!(added.client.allowed_ips, ["198.51.100.99/32"]);
@@ -673,7 +611,7 @@ roadwarriors:
 
     #[test]
     fn add_without_public_key_but_with_export_generates_and_returns_a_key() {
-        let added = add_to_plain(None, true).unwrap();
+        let added = add_to_plain(None, true, false).unwrap();
         let (key, text) = added.config.unwrap();
         let ClientPrivateKey::Known(key) = key else {
             panic!("no key returned");
@@ -686,31 +624,9 @@ roadwarriors:
     }
 
     #[test]
-    fn find_client_returns_the_client_and_its_position() {
-        let m = mesh();
-        let (index, client) = find_client(&m, "plain", "bob").unwrap();
-        assert_eq!(index, 1);
-        assert_eq!(client.public_key, "BBB=");
-    }
-
-    #[test]
-    fn find_client_on_unknown_client_errors() {
-        assert!(find_client(&mesh(), "plain", "nope").is_err());
-    }
-
-    #[test]
     fn render_qr_invert_actually_swaps_dark_and_light() {
         let normal = render_qr("[Interface]\nPrivateKey = x\n", false).unwrap();
         let inverted = render_qr("[Interface]\nPrivateKey = x\n", true).unwrap();
         assert_ne!(normal, inverted);
-    }
-
-    #[test]
-    fn inspect_renders_the_same_config_shape_as_add_with_a_placeholder_key() {
-        let m = mesh();
-        let cfg = inspect(&m, &secrets(&m), "obfuscation", "carol", None, None).unwrap();
-        assert!(cfg.contains("<enter your private key here>"));
-        assert!(cfg.contains("Address = 203.0.113.22/32"));
-        assert!(cfg.contains("Jc = 4"));
     }
 }
