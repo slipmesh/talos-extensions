@@ -20,6 +20,7 @@ use yaml_rt::YamlDoc;
 #[derive(Parser)]
 #[command(
     name = env!("CARGO_BIN_NAME"),
+    bin_name = env!("CARGO_BIN_NAME"),
     version,
     about = "Generates Talos machine-config patches for awg/router/nftables from slipmesh.yaml"
 )]

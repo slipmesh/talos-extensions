@@ -23,6 +23,7 @@ async fn main() -> std::process::ExitCode {
         .without_time()
         .with_ansi(false)
         .init();
+    tracing::info!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
 
     match run().await {
         Ok(()) => unreachable!("run() only returns via the infinite handshake loop or an Err"),
