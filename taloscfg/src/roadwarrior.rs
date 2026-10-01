@@ -259,7 +259,8 @@ pub struct Added {
 }
 
 /// `rw-add`: validates, resolves/generates the client's keypair, and (if `export`/`qr`) renders
-/// the client config. Writing the entry into `slipmesh.yaml` is `edit::add_client`'s.
+/// the client config. With `keep_private` the entry holds the generated private key instead of the
+/// public one. Writing the entry into `slipmesh.yaml` is `edit::add_client`'s.
 #[allow(clippy::too_many_arguments)]
 pub fn add(
     mesh: &MeshConfig,
@@ -271,10 +272,15 @@ pub fn add(
     endpoint: Option<&str>,
     export: bool,
     qr: bool,
+    keep_private: bool,
 ) -> Result<Added> {
-    if public_key.is_none() && !export && !qr {
+    if keep_private && public_key.is_some() {
+        bail!("--keep-private has no private key to keep when --public-key is given");
+    }
+    if public_key.is_none() && !keep_private && !export && !qr {
         bail!(
-            "a private key would be generated and then lost - pass --export and/or --qr, or give --public-key"
+            "a private key would be generated and then lost - pass --export, --qr or --keep-private, \
+             or give --public-key"
         );
     }
 
@@ -300,6 +306,10 @@ pub fn add(
     let client = RoadwarriorClient {
         name: name.to_owned(),
         public_key: resolved_public_key,
+        private_key: match &client_private_key {
+            ClientPrivateKey::Known(sk) if keep_private => Some(sk.clone()),
+            _ => None,
+        },
         allowed_ips,
         advanced_security: false,
     };
@@ -339,8 +349,8 @@ pub fn find_client<'a>(
 }
 
 /// `rw-inspect`: re-renders an existing client's config/QR - never writes anything. The private
-/// key is never known (never persisted anywhere, see `add`'s footgun-avoidance rule), so the
-/// config always carries the placeholder.
+/// key is the one passed in, else the one `rw-add --keep-private` kept with the client; with
+/// neither, the config carries a placeholder.
 pub fn inspect(
     mesh: &MeshConfig,
     secrets: &ResolvedSecrets,
@@ -366,7 +376,10 @@ pub fn inspect(
             );
             ClientPrivateKey::Known(pk.to_string())
         }
-        None => ClientPrivateKey::Unknown,
+        None => match &client.private_key {
+            Some(kept) => ClientPrivateKey::Known(kept.clone()),
+            None => ClientPrivateKey::Unknown,
+        },
     };
     Ok(render_client_config(
         &client_private_key,
@@ -641,7 +654,7 @@ roadwarriors:
     }
 
     /// `add` of client `dave` to the `plain` pool.
-    fn add_to_plain(public_key: Option<&str>, export: bool) -> Result<Added> {
+    fn add_to_plain(public_key: Option<&str>, export: bool, keep_private: bool) -> Result<Added> {
         let m = mesh();
         add(
             &m,
@@ -653,18 +666,25 @@ roadwarriors:
             None,
             export,
             false,
+            keep_private,
         )
     }
 
     #[test]
+    fn add_cannot_keep_a_private_key_it_was_not_given() {
+        let err = add_to_plain(Some("DDD="), false, true).err().unwrap();
+        assert!(err.to_string().contains("--public-key"), "error was: {err}");
+    }
+
+    #[test]
     fn add_requires_export_or_qr_when_public_key_is_omitted() {
-        let err = add_to_plain(None, false).err().unwrap();
+        let err = add_to_plain(None, false, false).err().unwrap();
         assert!(err.to_string().contains("lost"), "error was: {err}");
     }
 
     #[test]
     fn add_with_public_key_and_no_export_succeeds_with_no_config() {
-        let added = add_to_plain(Some("DDD="), false).unwrap();
+        let added = add_to_plain(Some("DDD="), false, false).unwrap();
         assert_eq!(added.client.name, "dave");
         assert_eq!(added.client.public_key, "DDD=");
         assert_eq!(added.client.allowed_ips, ["198.51.100.99/32"]);
@@ -673,7 +693,7 @@ roadwarriors:
 
     #[test]
     fn add_without_public_key_but_with_export_generates_and_returns_a_key() {
-        let added = add_to_plain(None, true).unwrap();
+        let added = add_to_plain(None, true, false).unwrap();
         let (key, text) = added.config.unwrap();
         let ClientPrivateKey::Known(key) = key else {
             panic!("no key returned");

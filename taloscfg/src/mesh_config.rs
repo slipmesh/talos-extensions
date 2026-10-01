@@ -247,14 +247,58 @@ pub struct RoadwarriorPool {
     pub clients: Vec<RoadwarriorClient>,
 }
 
+/// A client is written down by one of its keys: `public_key` when its private key stays with the
+/// client, `private_key` when `rw-add --keep-private` kept it here - the public key is then derived
+/// from it, so the two can never disagree.
 #[derive(Deserialize, Debug, PartialEq)]
+#[serde(try_from = "ClientEntry")]
 pub struct RoadwarriorClient {
     pub name: String,
     pub public_key: String,
-    #[serde(default)]
+    pub private_key: Option<String>,
     pub allowed_ips: Vec<String>,
-    #[serde(default)]
     pub advanced_security: bool,
+}
+
+#[derive(Deserialize)]
+struct ClientEntry {
+    name: String,
+    #[serde(default)]
+    public_key: Option<String>,
+    #[serde(default)]
+    private_key: Option<String>,
+    #[serde(default)]
+    allowed_ips: Vec<String>,
+    #[serde(default)]
+    advanced_security: bool,
+}
+
+impl TryFrom<ClientEntry> for RoadwarriorClient {
+    type Error = String;
+
+    fn try_from(entry: ClientEntry) -> Result<Self, Self::Error> {
+        let name = entry.name;
+        let public_key = match (entry.public_key, &entry.private_key) {
+            (Some(public), None) => public,
+            (None, Some(private)) => crate::keys::public_key_from_private(private)
+                .map_err(|e| format!("client {name:?}: private_key: {e:#}"))?,
+            (None, None) => {
+                return Err(format!("client {name:?}: needs public_key or private_key"));
+            }
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "client {name:?}: public_key or private_key, not both"
+                ));
+            }
+        };
+        Ok(Self {
+            name,
+            public_key,
+            private_key: entry.private_key,
+            allowed_ips: entry.allowed_ips,
+            advanced_security: entry.advanced_security,
+        })
+    }
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -431,6 +475,20 @@ nodes:
   - name: b
     node_id: "10.62.0.2"
 "#
+    }
+
+    #[test]
+    fn a_client_needs_exactly_one_of_its_keys() {
+        let neither = yaml_serde::from_str::<RoadwarriorClient>("{name: laptop}").unwrap_err();
+        assert!(neither.to_string().contains("laptop"), "{neither}");
+
+        let private = crate::keys::generate_private_key();
+        let public = crate::keys::public_key_from_private(&private).unwrap();
+        let both = yaml_serde::from_str::<RoadwarriorClient>(&format!(
+            "{{name: laptop, public_key: \"{public}\", private_key: \"{private}\"}}"
+        ))
+        .unwrap_err();
+        assert!(both.to_string().contains("not both"), "{both}");
     }
 
     #[test]
@@ -617,12 +675,14 @@ listen-port: 1
                 RoadwarriorClient {
                     name: "alice".to_string(),
                     public_key: "k".to_string(),
+                    private_key: None,
                     allowed_ips: vec!["10.62.253.5/32".to_string()],
                     advanced_security: false,
                 },
                 RoadwarriorClient {
                     name: "bob".to_string(),
                     public_key: "k".to_string(),
+                    private_key: None,
                     allowed_ips: vec!["10.62.253.6/32".to_string()],
                     advanced_security: false,
                 },

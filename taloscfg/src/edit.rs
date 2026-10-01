@@ -110,11 +110,15 @@ struct PoolClients {
     clients: Vec<ClientFields>,
 }
 
-/// One client entry as `rw-add` writes it.
+/// One client entry as `rw-add` writes it: by its private key when that was kept, else by its
+/// public key - never both.
 #[derive(YamlRt)]
 struct ClientFields {
     name: String,
-    public_key: String,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    public_key: Option<String>,
+    #[yaml(skip_serializing_if = "Option::is_none")]
+    private_key: Option<String>,
     allowed_ips: Vec<String>,
 }
 
@@ -169,7 +173,11 @@ pub fn add_client(yaml: &mut YamlDoc, document: usize, client: &RoadwarriorClien
     let mut pool: PoolClients = yaml.read_document(document)?;
     pool.clients.push(ClientFields {
         name: client.name.clone(),
-        public_key: client.public_key.clone(),
+        public_key: client
+            .private_key
+            .is_none()
+            .then(|| client.public_key.clone()),
+        private_key: client.private_key.clone(),
         allowed_ips: client.allowed_ips.clone(),
     });
     yaml.write_document(document, &pool)?;
@@ -406,6 +414,7 @@ clients:
         RoadwarriorClient {
             name: name.to_owned(),
             public_key: format!("{name}="),
+            private_key: None,
             allowed_ips: vec!["198.51.100.99/32".to_owned()],
             advanced_security: false,
         }
