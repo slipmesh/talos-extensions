@@ -19,11 +19,11 @@ router = { path = "router", default-features = false }
 nftables = { path = "nftables", default-features = false }
 
 anyhow = "1.0.104"
-clap = { version = "4.6.6", features = ["derive"] }
+clap = { version = "4.6.7", features = ["derive"] }
 askama = { version = "0.16.1", default-features = false, features = ["derive", "alloc"] }
 base64 = "0.23.1"
 futures = "0.3.34"
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "json"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tokio = { version = "1.53.1" }
@@ -34,7 +34,7 @@ yaml_serde = "0.10"
 # Lossless YAML editing: `taloscfg` writes what it mints, and the clients `rw-add` adds, into the
 # hand-edited slipmesh.yaml through its typed overlays, which change only the lines they add and
 # leave comments and layout as written.
-yaml-rt = "0.3.0"
+yaml-rt = "0.3.2"
 # QR code encoder - de-facto standard for this in Rust (18M+ downloads). Used by `rw-add`/
 # `rw-inspect --qr` to print a scannable client config straight to the terminal.
 qrcode = "0.14.1"
@@ -44,7 +44,7 @@ qrcode = "0.14.1"
 # `server` feature over crates that are already built and already audited here. One route, no TLS,
 # no routing - but request-line parsing, malformed input and half-close are not worth re-deriving.
 hyper = { version = "1.11.1", features = ["server", "http1"] }
-hyper-util = { version = "0.1.20", features = ["tokio"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
 http-body-util = "0.1.5"
 # Hyper's own body type; already in the lock graph via the same reqwest dependency.
 bytes = "1.12.1"
