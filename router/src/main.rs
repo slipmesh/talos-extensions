@@ -42,6 +42,7 @@ async fn main() -> ExitCode {
         .without_time()
         .with_ansi(false)
         .init();
+    tracing::info!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
 
     match run().await {
         Ok(()) => unreachable!("run() only returns via bird exiting, which is always an Err"),

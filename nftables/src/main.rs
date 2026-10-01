@@ -35,6 +35,7 @@ async fn main() -> ExitCode {
         .without_time()
         .with_ansi(false)
         .init();
+    tracing::info!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
 
     match run().await {
         Ok(()) => {
