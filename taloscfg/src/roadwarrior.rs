@@ -486,13 +486,14 @@ roadwarriors:
             resolve_dns(&m, &m.roadwarriors[0]),
             Some("100.64.0.10".to_string())
         );
-        m.cluster.service_subnet = None;
-        assert_eq!(resolve_dns(&m, &m.roadwarriors[0]), None);
         m.roadwarriors[0].dns = Some("9.9.9.9".to_string());
         assert_eq!(
             resolve_dns(&m, &m.roadwarriors[0]),
             Some("9.9.9.9".to_string())
         );
+        m.roadwarriors[0].dns = None;
+        m.cluster.service_subnet = None;
+        assert_eq!(resolve_dns(&m, &m.roadwarriors[0]), None);
     }
 
     #[test]
