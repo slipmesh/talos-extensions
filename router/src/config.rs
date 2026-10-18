@@ -78,9 +78,8 @@ pub struct RouterConfig {
     /// doc comment) - whoever authors `router.yaml` decides what belongs here.
     #[serde(default)]
     pub direct_interfaces: Vec<String>,
-    /// IPv4 CIDR ranges (not exact per-peer `/32`s) - any kernel-learned route inside one of these
-    /// ranges is re-announced over iBGP. See `bird.rs`'s module doc comment for why this stays
-    /// IPv4-only.
+    /// IPv4 CIDRs - any kernel-learned route equal to or inside one of these is re-announced over
+    /// iBGP. See `bird.rs`'s module doc comment for why this stays IPv4-only.
     #[serde(default)]
     pub learn: Vec<String>,
     #[serde(default)]

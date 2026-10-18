@@ -196,12 +196,29 @@ fn announce_for(mesh: &MeshConfig) -> Vec<AnnounceEntry> {
 /// Non-empty `learn` is also what switches on `bird.conf`'s `if source = RTS_INHERIT then accept`
 /// in the iBGP export filter - the two are one mechanism, not two, so there's deliberately no way
 /// to configure a `learn` scope that gets imported but never re-announced.
-fn learn_for(mesh: &MeshConfig) -> Vec<String> {
-    mesh.cluster
-        .pod_subnet
-        .as_ref()
-        .map(|net| vec![net.clone()])
-        .unwrap_or_default()
+///
+/// A node terminating a roadwarriors pool also learns each client's IPv4 `allowed_ips` - the
+/// routes `awg` installs while that client's handshake is fresh. A pool runs on several nodes
+/// under one address, so without them every other node routes a client's traffic into its own
+/// copy of the pool's interface, where no peer holds it. They are the clients' exact prefixes,
+/// not the pool's: under `learn all` the pool range would also pick up the connected route every
+/// pool node carries for its own address, and announce the pool from all of them at once.
+fn learn_for(mesh: &MeshConfig, node_name: &str) -> Result<Vec<String>> {
+    let mut learn: Vec<String> = mesh.cluster.pod_subnet.iter().cloned().collect();
+    let client_routes = mesh
+        .roadwarriors
+        .iter()
+        .filter(|pool| pool.node_hostnames.iter().any(|n| n == node_name))
+        .flat_map(|pool| pool.clients.iter())
+        .flat_map(|client| client.allowed_ips.iter());
+    for cidr in client_routes {
+        let (addr, _) = common::cidr::parse_cidr(cidr)
+            .with_context(|| format!("roadwarriors client allowed_ips {cidr:?}"))?;
+        if addr.is_ipv4() && !learn.contains(cidr) {
+            learn.push(cidr.clone());
+        }
+    }
+    Ok(learn)
 }
 
 pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<RouterConfig> {
@@ -239,7 +256,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         bfd: mesh.bfd.enable.then(|| mesh.bfd.settings.clone()),
         ospf_interfaces: OSPF_INTERFACES.iter().map(|s| s.to_string()).collect(),
         direct_interfaces,
-        learn: learn_for(mesh),
+        learn: learn_for(mesh, node_name)?,
         announce: announce_for(mesh),
         bypass: bypass_for(mesh, node_name),
         metrics: metrics_for(
@@ -622,6 +639,38 @@ bypass:
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert_eq!(cfg.learn, vec!["10.61.0.0/16".to_string()]);
         assert!(!cfg.direct_interfaces.iter().any(|s| s == "cni*"));
+    }
+
+    #[test]
+    fn render_router_config_learns_roadwarrior_client_routes_on_the_pools_nodes() {
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let cfg = render_router_config(&mesh, "a").unwrap();
+        assert_eq!(cfg.learn, vec!["10.99.0.5/32".to_string()]);
+    }
+
+    #[test]
+    fn render_router_config_learns_no_roadwarrior_routes_outside_the_pool() {
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let cfg = render_router_config(&mesh, "b").unwrap();
+        assert!(cfg.learn.is_empty());
+    }
+
+    #[test]
+    fn render_router_config_learns_roadwarrior_routes_after_the_pod_subnet_and_ipv4_only() {
+        let mut mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        mesh.cluster.pod_subnet = Some("10.61.0.0/16".to_string());
+        mesh.roadwarriors[0].clients[0]
+            .allowed_ips
+            .extend(["fd00:99::5/128".to_string(), "10.98.5.0/24".to_string()]);
+        let cfg = render_router_config(&mesh, "a").unwrap();
+        assert_eq!(
+            cfg.learn,
+            vec![
+                "10.61.0.0/16".to_string(),
+                "10.99.0.5/32".to_string(),
+                "10.98.5.0/24".to_string(),
+            ]
+        );
     }
 
     #[test]

@@ -223,9 +223,11 @@ declares it all:
   matching an interface's address - fed straight into BIRD's own `interface` clause, so nothing
   here needs to know what `awg` actually named its interfaces;
 - `direct_interfaces` - interfaces whose own addresses should be announced (`protocol direct`);
-- `learn` - IPv4 CIDR *ranges*, not exact per-peer `/32`s: any kernel route falling inside one is
-  picked up and re-announced over iBGP, whoever installed it. This is how a node's pod subnet gets
-  announced without naming the CNI's interface;
+- `learn` - IPv4 CIDRs: any kernel route equal to or inside one is picked up and re-announced over
+  iBGP, whoever installed it. This is how a node's pod subnet gets announced without naming the
+  CNI's interface, and how a roadwarrior client's route, installed by `awg` on whichever pool node
+  it is connected to, reaches the other nodes - `taloscfg` lists each client's `allowed_ips` on
+  its pool's nodes;
 - `announce` - static routes to redistribute;
 - `bypass` (optional) - RIPEstat/DNS-resolved blackhole routes, refreshed on an interval. This
   part stays "live", unlike everything else in this workspace, since resolving ASN/geoip/DNS
