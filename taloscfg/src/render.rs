@@ -188,10 +188,10 @@ fn announce_for(mesh: &MeshConfig) -> Vec<AnnounceEntry> {
         .unwrap_or_default()
 }
 
-/// This cluster's kernel-`learn` scope - the pod range, if configured. See
-/// `ClusterConfig::pod_subnet`'s doc comment for why the node's own podCIDR arrives this way
-/// rather than through `direct_interfaces`. Same on every node, for the same reason
-/// `announce_for` is.
+/// This node's kernel-`learn` scope: the pod range, if configured, plus the routes of the
+/// roadwarrior clients this node may terminate. See `ClusterConfig::pod_subnet`'s doc comment for
+/// why the node's own podCIDR arrives this way rather than through `direct_interfaces`; the pod
+/// range is the same on every node, for the same reason `announce_for` is.
 ///
 /// Non-empty `learn` is also what switches on `bird.conf`'s `if source = RTS_INHERIT then accept`
 /// in the iBGP export filter - the two are one mechanism, not two, so there's deliberately no way
