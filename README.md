@@ -442,7 +442,7 @@ template into `slipmesh.yaml` as a document of its own that reaches every node -
 instead, and `--diff` shows the patches as they would be with it. From then on the copy in
 `slipmesh.yaml` is the one in force, and a newer reference does not replace it. A document aimed at
 some nodes only counts as setting the file: the nodes it leaves out go without, as whoever aimed it
-decided.
+decided - which `generate` refuses for `router`, since it does not run without its template.
 
 ### Secrets
 

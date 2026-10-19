@@ -5,7 +5,7 @@
 use crate::render;
 use crate::secrets::ResolvedSecrets;
 use crate::slipmesh_file::{GENERATED, HostDocument, SlipmeshFile};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 /// What opens every patch file this tool writes.
 pub const HEADER: &str =
@@ -128,9 +128,9 @@ fn add_legacy_nftables_file(patches: &mut [HostDocument]) -> Result<()> {
     Ok(())
 }
 
-/// Refuses a router template the node would fail on: one that does not compile, reads a variable
-/// the daemon does not supply, or fails to render this node's config. Bypass routes are resolved
-/// on the node, so it renders with none.
+/// Refuses a router template the node would fail on: none at all, since `router` exits without
+/// one, or one that does not compile, reads a variable the daemon does not supply, or fails to
+/// render this node's config. Bypass routes are resolved on the node, so it renders with none.
 fn validate_router_template(
     files: &[ConfigFile],
     cfg: &router::config::RouterConfig,
@@ -139,7 +139,11 @@ fn validate_router_template(
         .iter()
         .find(|f| f.mount_path == router::bird_conf::TEMPLATE_PATH)
     else {
-        return Ok(());
+        bail!(
+            "no `patch` document gives it {} - aim one at it, or leave none in slipmesh.yaml for \
+             `generate` to write the reference for every node",
+            router::bird_conf::TEMPLATE_PATH
+        );
     };
     let template = router::bird_conf::compile(file.content.clone())?;
     router::bird_conf::StaticInputs::from_config(cfg)?.render(&template, &[])?;
@@ -231,10 +235,11 @@ configFiles:
     content: "table inet x {}"
 "#;
 
+    const TEMPLATE: &str = "router id {{ loopback }};\n";
+
+    /// `host`'s patch file, from `SLIPMESH` with a router template for every host.
     fn rendered(host: &str) -> String {
-        let file = SlipmeshFile::parse(SLIPMESH).unwrap();
-        let (resolved, _) = secrets::resolve(file.topology());
-        render(&file, &resolved, host).unwrap()
+        render_raw(&with_router_files(&[("", TEMPLATE)]), host).unwrap()
     }
 
     #[test]
@@ -262,16 +267,7 @@ configFiles:
         let mut raw = SLIPMESH.to_string();
         for (meta, template) in files {
             raw.push_str(&format!(
-                "---
-slipmesh:
-  kind: patch
-{meta}apiVersion: v1alpha1
-kind: ExtensionServiceConfig
-name: router
-configFiles:
-  - mountPath: {}
-    content: {template:?}
-",
+                "---\nslipmesh:\n  kind: patch\n{meta}apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: router\nconfigFiles:\n  - mountPath: {}\n    content: {template:?}\n",
                 router::bird_conf::TEMPLATE_PATH
             ));
         }
@@ -310,12 +306,7 @@ configFiles:
 
     #[test]
     fn files_added_to_a_generated_document_follow_its_own() {
-        let raw = with_router_files(&[(
-            "",
-            "router id {{ loopback }};
-",
-        )]);
-        let files = router_files(&render_raw(&raw, "a").unwrap());
+        let files = router_files(&rendered("a"));
         let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
         assert_eq!(
             paths,
@@ -324,72 +315,53 @@ configFiles:
                 router::bird_conf::TEMPLATE_PATH
             ]
         );
-        assert_eq!(
-            files[1].1,
-            "router id {{ loopback }};
-"
-        );
+        assert_eq!(files[1].1, TEMPLATE);
     }
 
     #[test]
     fn a_template_for_one_host_replaces_the_default_there_only() {
         let raw = with_router_files(&[
-            (
-                "",
-                "router id {{ loopback }};
-",
-            ),
-            (
-                "  include: [b]
-",
-                "# b
-router id {{ loopback }};
-",
-            ),
+            ("", TEMPLATE),
+            ("  include: [b]\n", "# b\nrouter id {{ loopback }};\n"),
         ]);
-        assert_eq!(
-            router_files(&render_raw(&raw, "a").unwrap())[1].1,
-            "router id {{ loopback }};
-"
-        );
+        assert_eq!(router_files(&render_raw(&raw, "a").unwrap())[1].1, TEMPLATE);
         let b = router_files(&render_raw(&raw, "b").unwrap());
         assert_eq!(b.len(), 2);
-        assert_eq!(
-            b[1].1,
-            "# b
-router id {{ loopback }};
-"
+        assert_eq!(b[1].1, "# b\nrouter id {{ loopback }};\n");
+    }
+
+    /// `router` exits without its template, so a host none reaches would crash-loop on a patch
+    /// `generate` reported as fine.
+    #[test]
+    fn a_host_no_router_template_reaches_is_not_rendered() {
+        let raw = with_router_files(&[("  include: [a]\n", TEMPLATE)]);
+        render_raw(&raw, "a").unwrap();
+        let err = render_raw(&raw, "b").unwrap_err();
+        assert!(
+            format!("{err:#}").contains(router::bird_conf::TEMPLATE_PATH),
+            "{err:#}"
         );
     }
 
     #[test]
     fn a_router_template_reading_an_unknown_variable_is_not_rendered() {
-        let raw = with_router_files(&[(
-            "",
-            "{% if false %}{{ lopback }}{% endif %}
-",
-        )]);
+        let raw = with_router_files(&[("", "{% if false %}{{ lopback }}{% endif %}\n")]);
         let err = render_raw(&raw, "a").unwrap_err();
         assert!(format!("{err:#}").contains("lopback"), "{err:#}");
     }
 
     #[test]
     fn a_router_template_that_fails_to_render_is_not_rendered() {
-        let raw = with_router_files(&[(
-            "",
-            "{{ bfd.min_rx_ms }}
-",
-        )]);
+        let raw = with_router_files(&[("", "{{ bfd.min_rx_ms }}\n")]);
         let err = render_raw(&raw, "a").unwrap_err();
         assert!(format!("{err:#}").contains("router"), "{err:#}");
     }
 
     #[test]
     fn a_config_the_daemon_rejects_is_not_rendered() {
-        let raw = SLIPMESH.replace("table inet x {}", "table inet t { {{ bogus }} }");
-        let file = SlipmeshFile::parse(&raw).unwrap();
-        let (resolved, _) = secrets::resolve(file.topology());
-        let err = render(&file, &resolved, "a").unwrap_err();
+        let raw = with_router_files(&[("", TEMPLATE)])
+            .replace("table inet x {}", "table inet t { {{ bogus }} }");
+        let err = render_raw(&raw, "a").unwrap_err();
         assert!(format!("{err:#}").contains("nftables"), "{err:#}");
     }
 

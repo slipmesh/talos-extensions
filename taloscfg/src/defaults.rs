@@ -27,7 +27,8 @@ pub const DEFAULT_FILES: [DefaultFile; 2] = [
 /// The default files no `patch` document in `file` sets for any host.
 ///
 /// A file set for some hosts only is not missing: who goes without it was decided by whoever
-/// aimed that document, and a default for everyone would undo the decision.
+/// aimed that document, and a default for everyone would undo the decision. Going without a
+/// router template is refused when the patch files are rendered, since `router` cannot run.
 pub fn missing(file: &SlipmeshFile) -> Vec<&'static DefaultFile> {
     DEFAULT_FILES
         .iter()
