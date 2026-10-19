@@ -163,7 +163,8 @@ pub struct RenderInputs<'a> {
     pub announce: &'a [AnnounceRoute],
     /// IPv4 CIDR *ranges*. Each is rendered with a trailing `+` (`net ~ [ 10.99.0.0/24+ ]`) -
     /// the network and everything more specific inside it, not an exact-match list of
-    /// individual `/32`s. An empty list turns kernel learning off entirely.
+    /// individual `/32`s. The routes `awg` installs are learned whatever this holds, by their
+    /// protocol number rather than by range.
     ///
     /// Rendered as `learn all`, not a bare `learn`: a bare `learn` is `KRT_LEARN_ALIEN` and picks
     /// up only routes installed by other daemons, while `learn all` is `KRT_LEARN_ALL` and also
@@ -210,6 +211,7 @@ pub const VARIABLES: &[&str] = &[
     "learn",
     "direct_interfaces",
     "bfd",
+    "awg_route_protocol",
 ];
 
 /// Compiles a `bird.conf` template, refusing one that reads anything outside `VARIABLES`.
@@ -334,6 +336,7 @@ struct BirdConfigContext {
     learn: Vec<String>,
     direct_interfaces: Vec<RenderedDirectIface>,
     bfd: Option<crate::config::BfdSettings>,
+    awg_route_protocol: u8,
 }
 
 impl BirdConfigContext {
@@ -379,6 +382,7 @@ impl BirdConfigContext {
             announce: SanitizedRoute::from_routes(inputs.announce),
             learn: learn_patterns,
             bfd: inputs.bfd.cloned(),
+            awg_route_protocol: common::ROUTE_PROTOCOL_ID,
             direct_interfaces,
         }
     }
@@ -741,15 +745,21 @@ example"
     }
 
     #[test]
-    fn empty_learn_disables_kernel_learn_and_rts_inherit() {
+    fn empty_learn_still_learns_and_announces_the_routes_awg_installs() {
         let peers = vec![BgpPeer {
             name: "peer1".to_string(),
             address: "fd00::2".parse().unwrap(),
         }];
         let conf = render(identity(), 64512, &inputs(&[], &peers, &[], &[], &[])).unwrap();
-        assert!(conf.contains("learn no;"));
-        assert!(!conf.contains("import filter"));
-        assert!(!conf.contains("RTS_INHERIT"));
+        // A bare `learn` takes only routes other daemons installed - awg's are exactly that.
+        assert!(conf.contains("    learn;\n"), "{conf}");
+        assert!(conf.contains("if krt_source = 200 then accept;"), "{conf}");
+        assert!(!conf.contains("if net ~"), "{conf}");
+        assert!(
+            conf.contains("if source = RTS_INHERIT then accept;"),
+            "{conf}"
+        );
+        assert!(!conf.contains("learn no;"), "{conf}");
     }
 
     #[test]
@@ -765,6 +775,7 @@ example"
         assert!(conf.contains("    learn all;\n"));
         assert!(!conf.contains("    learn;\n"));
         assert!(conf.contains("if net ~ [ 10.99.0.0/24+ ] then accept;"));
+        assert!(conf.contains("if krt_source = 200 then accept;"));
         assert!(conf.contains("if source = RTS_INHERIT then accept;"));
         assert!(!conf.contains("learn no;"));
     }

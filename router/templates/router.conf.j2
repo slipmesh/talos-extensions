@@ -15,14 +15,18 @@ protocol direct direct_{{ iface.protocol_id }} {
     ipv4 { import all; };
 }
 {%- endfor %}
+{#- awg tags the routes of the roadwarrior clients it holds with a protocol number of its own. A
+     pool runs on several nodes under one address, so the route is what tells the others which
+     node a client is connected to. #}
 protocol kernel {
     ipv4 {
-{%- if learn %}
         import filter {
+{%- if learn %}
             if net ~ [ {{ learn|join(", ") }} ] then accept;
+{%- endif %}
+            if krt_source = {{ awg_route_protocol }} then accept;
             reject;
         };
-{%- endif %}
         export filter {
             if source = RTS_BGP then {
                 krt_prefsrc = {{ loopback }};
@@ -35,10 +39,10 @@ protocol kernel {
             reject;
         };
     };
-{%- if not learn %}
-    learn no;
-{%- else %}
+{%- if learn %}
     learn all;
+{%- else %}
+    learn;
 {%- endif %}
 }
 protocol kernel {
@@ -107,9 +111,7 @@ protocol bgp ibgp6_{{ peer.protocol_id }} {
         export filter {
             if source = RTS_DEVICE then accept;
             if source = RTS_STATIC then accept;
-{%- if learn %}
             if source = RTS_INHERIT then accept;
-{%- endif %}
             reject;
         };
         next hop self;

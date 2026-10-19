@@ -1,13 +1,11 @@
-//! Renders the full BIRD config from the current desired state on every reconcile pass (not
-//! patched incrementally) and reloads it via `birdc configure` - a live reload, not a restart, so
-//! it doesn't flap sessions unaffected by whatever changed. OSPFv3 over the mesh links (IPv6
-//! link-local neighbors, carrying only IPv6 loopbacks), an iBGP full mesh over those loopbacks
-//! using `multihop` + RFC 8950 (`extended next hop on`) to carry the same IPv4 payload prefixes
-//! BYPASS/ANNOUNCE/road-warrior `learn` always have, just with an IPv6 next-hop. The kernel
-//! protocol's scoped `learn` picks up kernel routes inside the configured `learn` CIDR ranges
-//! (installed by `ext-awg`'s own handshake/route tracking for road-warrior peers - see
-//! `talos-extensions/awg`) and re-announces them over iBGP as `RTS_INHERIT`. Still out of scope:
-//! eBGP peers.
+//! Writes the BIRD config `bird_conf` renders from the current desired state on every reconcile
+//! pass (whole, not patched incrementally) and reloads it via `birdc configure` - a live reload,
+//! not a restart, so it doesn't flap sessions unaffected by whatever changed. The reference
+//! template runs OSPFv3 over the mesh links (IPv6 link-local neighbors, carrying only IPv6
+//! loopbacks) and an iBGP full mesh over those loopbacks using `multihop` + RFC 8950 (`extended
+//! next hop on`) to carry the IPv4 payload prefixes - BYPASS/ANNOUNCE statics, kernel routes
+//! inside `learn`, and the road-warrior routes `ext-awg` installs, learned by their protocol
+//! number - with an IPv6 next-hop. Still out of scope: eBGP peers.
 //!
 //! Ported from `slipmesh/operators`' `router/src/bird.rs`, with
 //! the Kubernetes-only pieces dropped (CNI conflist rendering, the `DIRECT_CNI` protocol block,
