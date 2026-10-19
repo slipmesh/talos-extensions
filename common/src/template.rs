@@ -45,7 +45,8 @@ impl Template {
             .collect();
         anyhow::ensure!(
             unknown.is_empty(),
-            "the template reads {unknown:?}, which this daemon does not supply (it supplies              {known:?})"
+            "the template reads {unknown:?}, which this daemon does not supply (it supplies \
+             {known:?})"
         );
         Ok(template)
     }

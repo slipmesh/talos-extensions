@@ -31,7 +31,8 @@ impl MetricsConfig {
             .map_err(|e| anyhow::anyhow!("{field} {:?} is not an ip:port: {e}", self.listen))?;
         anyhow::ensure!(
             listen.is_ipv4(),
-            "{field} {:?} is not IPv4 - Prometheus discovers a node by its InternalIP,              which is the v4 loopback",
+            "{field} {:?} is not IPv4 - Prometheus discovers a node by its InternalIP, which is \
+             the v4 loopback",
             self.listen
         );
         // Both of the below parse happily and would bind, which is why they are worth refusing
@@ -39,7 +40,8 @@ impl MetricsConfig {
         // included, when being reachable only inside the overlay is its whole protection.
         anyhow::ensure!(
             !listen.ip().is_unspecified(),
-            "{field} {:?} is a wildcard address - bind this node's own mesh loopback, which              exists only inside the overlay",
+            "{field} {:?} is a wildcard address - bind this node's own mesh loopback, which \
+             exists only inside the overlay",
             self.listen
         );
         // Port 0 asks the kernel for an ephemeral one, which nothing can then be pointed at.
