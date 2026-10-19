@@ -1,0 +1,17 @@
+table inet talos_filter {
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
+    }
+}
+table ip talos_nat {
+    set nat_private {
+        type ipv4_addr
+        flags interval
+        elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname "{{ defaultroute_interface_ipv4 }}" ip saddr @nat_private counter masquerade
+    }
+}

@@ -1,4 +1,4 @@
-//! Per-node computation: the topology -> this node's `awg`/`router`/`nftables` config. Ported from
+//! Per-node computation: the topology -> this node's `awg`/`router` config. Ported from
 //! `slipmesh-core::desired_state`'s full-mesh-minus-self BGP/OSPF derivation, adapted to a static
 //! config file instead of live `NodeConfig`/`MeshLink` CRDs.
 //!
@@ -11,7 +11,6 @@ use crate::secrets::{ResolvedSecrets, link_key};
 use anyhow::{Context, Result};
 use awg::config::{AwgConfig, InterfaceEntry, PeerEntry};
 use common::MetricsConfig;
-use nftables::config::NftablesConfig;
 use router::config::{AnnounceEntry, BgpPeerEntry, BypassConfig, NodeIdentity, RouterConfig};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -420,14 +419,6 @@ fn metrics_for(
     }))
 }
 
-/// The single global `nftables.ruleset`, verbatim, for every node - `None` if `slipmesh.yaml` has no
-/// `nftables` section at all (this node simply gets no rendered nftables segment).
-pub fn render_nftables_config(mesh: &MeshConfig) -> Option<NftablesConfig> {
-    mesh.nftables.as_ref().map(|n| NftablesConfig {
-        ruleset: n.ruleset.clone(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,8 +643,6 @@ roadwarriors:
       - name: alice
         public_key: "client-pubkey"
         allowed_ips: ["10.99.0.5/32"]
-nftables:
-  ruleset: "table inet talos_filter {}"
 "#
     }
 

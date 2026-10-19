@@ -1,5 +1,5 @@
 //! `generate`: reads `slipmesh.yaml`, writes whatever secrets the topology lacks into the fields of
-//! `slipmesh.yaml` they belong to, computes every target node's `awg`/`router`/`nftables` config,
+//! `slipmesh.yaml` they belong to, computes every target node's `awg`/`router` config,
 //! validates each through the real daemon's own `validate()` (not a re-implementation - see the
 //! lib-target refactor this crate depends on), and writes `patches/<node>.yaml`: the `patch`
 //! documents aimed at that node, then the generated `ExtensionServiceConfig` documents. A patch
@@ -679,7 +679,7 @@ installer:
     #[test]
     fn a_host_that_fails_validation_leaves_every_file_unwritten() {
         let paths = setup(
-            "---\nslipmesh:\n  kind: nftables\n  include: [d]\nruleset: |\n  table inet t { {{ bogus }} }\n",
+            "---\nslipmesh:\n  kind: patch\n  include: [d]\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: nftables\nconfigFiles:\n  - mountPath: /etc/talos-extensions/nftables.conf.j2\n    content: |\n      table inet t { {{ bogus }} }\n",
         );
         let before = paths.config();
         let err = paths.generate(None, false, false).unwrap_err();

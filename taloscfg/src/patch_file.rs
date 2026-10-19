@@ -1,7 +1,6 @@
 //! One host's patch file: the `patch` documents aimed at it, then an `ExtensionServiceConfig`
-//! document for each of `awg`, `router` and - if the host gets a ruleset - `nftables`, carrying
-//! that daemon's config once the daemon's own `validate()` accepts it, and any files the `patch`
-//! documents add to it.
+//! document for each of `awg` and `router`, carrying that daemon's config once the daemon's own
+//! `validate()` accepts it, and any files the `patch` documents add to it.
 
 use crate::render;
 use crate::secrets::ResolvedSecrets;
@@ -66,6 +65,26 @@ fn take_added_files(patches: &mut Vec<HostDocument>, name: &str) -> Result<Vec<C
     }
 }
 
+/// Refuses a ruleset template the node would fail on: one that does not compile, or reads a
+/// variable the daemon does not supply. Its values exist only on the node, so it is not rendered.
+fn validate_nftables_template(patches: &[HostDocument]) -> Result<()> {
+    let files = patches
+        .iter()
+        .filter(|p| p.identity == "ExtensionServiceConfig/nftables")
+        .filter_map(|p| p.value.get("configFiles"))
+        .filter_map(yaml_serde::Value::as_sequence)
+        .flatten();
+    for file in files {
+        if file.get("mountPath").and_then(yaml_serde::Value::as_str)
+            == Some(nftables::template::TEMPLATE_PATH)
+            && let Some(content) = file.get("content").and_then(yaml_serde::Value::as_str)
+        {
+            nftables::template::compile(content)?;
+        }
+    }
+    Ok(())
+}
+
 /// Refuses a router template the node would fail on: one that does not compile, reads a variable
 /// the daemon does not supply, or fails to render this node's config. Bypass routes are resolved
 /// on the node, so it renders with none.
@@ -95,21 +114,17 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
         .with_context(|| format!("rendering router config for node {host:?}"))?;
     router::config::validate(&router_cfg)
         .with_context(|| format!("rendered router config for node {host:?} is invalid"))?;
-    let nftables_cfg = render::render_nftables_config(&model);
-    if let Some(cfg) = &nftables_cfg {
-        nftables::config::validate(cfg)
-            .with_context(|| format!("rendered nftables config for node {host:?} is invalid"))?;
-    }
 
     let mut patches = file.patches_for(host)?;
     let awg_files = take_added_files(&mut patches, "awg")?;
     let router_files = take_added_files(&mut patches, "router")?;
-    let nftables_files = take_added_files(&mut patches, "nftables")?;
     validate_router_template(&router_files, &router_cfg)
         .with_context(|| format!("the router template for node {host:?} is invalid"))?;
+    validate_nftables_template(&patches)
+        .with_context(|| format!("the nftables ruleset for node {host:?} is invalid"))?;
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
 
-    let mut generated = vec![
+    let generated = vec![
         render_extension_service_document("awg", &yaml_serde::to_string(&awg_cfg)?, awg_files)?,
         render_extension_service_document(
             "router",
@@ -117,13 +132,6 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
             router_files,
         )?,
     ];
-    if let Some(cfg) = &nftables_cfg {
-        generated.push(render_extension_service_document(
-            "nftables",
-            &yaml_serde::to_string(cfg)?,
-            nftables_files,
-        )?);
-    }
 
     Ok(format!(
         "{HEADER}{}",
@@ -169,9 +177,14 @@ installer:
     disk: /dev/vda
 ---
 slipmesh:
-  kind: nftables
+  kind: patch
   exclude: [b]
-ruleset: "table inet x {}"
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: nftables
+configFiles:
+  - mountPath: /etc/talos-extensions/nftables.conf.j2
+    content: "table inet x {}"
 "#;
 
     fn rendered(host: &str) -> String {
