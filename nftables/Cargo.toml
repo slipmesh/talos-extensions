@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Talos extension service: loads an nftables ruleset supplied via ExtensionServiceConfig as a template of values only knowable on the running node (currently: default-route interface names), and reapplies it when its tables go missing"
+description = "Talos extension service: loads an nftables ruleset supplied via ExtensionServiceConfig as a template with placeholders for values only knowable on the running node (currently: default-route interface names), and reapplies it when its tables go missing"
 
 [[bin]]
 name = "nftables"
