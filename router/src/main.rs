@@ -1,4 +1,4 @@
-use router::{bird, config, exporter, resolver};
+use router::{bird, bird_conf, config, exporter, resolver};
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
@@ -64,21 +64,22 @@ struct RouterState {
     as_number: u32,
     ospf_interfaces: Vec<String>,
     direct_interfaces: Vec<String>,
-    bgp_peers: Vec<bird::BgpPeer>,
+    bgp_peers: Vec<bird_conf::BgpPeer>,
     bfd: Option<config::BfdSettings>,
     metrics: Option<common::MetricsConfig>,
-    announce: Vec<bird::AnnounceRoute>,
+    announce: Vec<bird_conf::AnnounceRoute>,
     learn: Vec<String>,
     bypass_cfg: Option<config::BypassConfig>,
     /// Last-successful bypass resolution - re-resolving (RIPEstat/DNS) only happens on the
     /// startup/refresh-interval schedule (`bypass_refresh_loop`); a resolve failure serves this
     /// instead of blanking the bypass out over a transient upstream outage.
-    bypass_cache: Mutex<Option<Vec<bird::BypassRoute>>>,
+    bypass_cache: Mutex<Option<Vec<bird_conf::BypassRoute>>>,
     /// Serializes every call into `bird::reconcile`/`bird::force_reconfigure`: `bypass_refresh_loop`
     /// and `bird_health_watchdog` both run concurrently with each other for the process lifetime,
     /// and without this a health-watchdog nudge could interleave with a bypass-refresh write to
     /// `BIRD_CONF_PATH`.
     render_lock: Mutex<()>,
+    template: common::template::Template,
 }
 
 async fn run() -> Result<()> {
@@ -103,10 +104,10 @@ async fn run() -> Result<()> {
         .await
         .context("failed to converge router-lo")?;
 
-    let bgp_peers: Vec<bird::BgpPeer> = cfg
+    let bgp_peers: Vec<bird_conf::BgpPeer> = cfg
         .bgp_peers
         .iter()
-        .map(|p| bird::BgpPeer {
+        .map(|p| bird_conf::BgpPeer {
             name: p.name.clone(),
             address: p
                 .address
@@ -114,10 +115,10 @@ async fn run() -> Result<()> {
                 .expect("bgp_peers[].address already validated as IPv6 by config::validate"),
         })
         .collect();
-    let announce: Vec<bird::AnnounceRoute> = cfg
+    let announce: Vec<bird_conf::AnnounceRoute> = cfg
         .announce
         .iter()
-        .map(|a| bird::AnnounceRoute {
+        .map(|a| bird_conf::AnnounceRoute {
             net: a.net.clone(),
             label: a.label.clone().unwrap_or_default(),
         })
@@ -137,6 +138,7 @@ async fn run() -> Result<()> {
         metrics: cfg.metrics,
         bypass_cache: Mutex::new(None),
         render_lock: Mutex::new(()),
+        template: bird_conf::compile(bird_conf::REFERENCE_TEMPLATE)?,
     });
 
     // Render and write bird.conf *before* spawning bird: this daemon controls startup order
@@ -151,7 +153,8 @@ async fn run() -> Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let bypass_routes = current_bypass_routes(&ctx).await;
-    let initial_conf = bird::render(
+    let initial_conf = bird_conf::render(
+        &ctx.template,
         identity(&ctx),
         ctx.as_number,
         &render_inputs(&ctx, &bypass_routes),
@@ -197,8 +200,8 @@ async fn run() -> Result<()> {
     anyhow::bail!("bird exited unexpectedly: {status}");
 }
 
-fn identity(ctx: &RouterState) -> bird::RouterIdentity {
-    bird::RouterIdentity {
+fn identity(ctx: &RouterState) -> bird_conf::RouterIdentity {
+    bird_conf::RouterIdentity {
         loopback: ctx.identity_loopback,
         ipv6_loopback: ctx.identity_ipv6_loopback,
     }
@@ -206,9 +209,9 @@ fn identity(ctx: &RouterState) -> bird::RouterIdentity {
 
 fn render_inputs<'a>(
     ctx: &'a RouterState,
-    bypass_routes: &'a [bird::BypassRoute],
-) -> bird::RenderInputs<'a> {
-    bird::RenderInputs {
+    bypass_routes: &'a [bird_conf::BypassRoute],
+) -> bird_conf::RenderInputs<'a> {
+    bird_conf::RenderInputs {
         ospf_interfaces: &ctx.ospf_interfaces,
         bgp_peers: &ctx.bgp_peers,
         bypass: bypass_routes,
@@ -255,10 +258,11 @@ async fn wait_for_control_socket() -> Result<()> {
     )
 }
 
-async fn reconcile(ctx: &RouterState, bypass_routes: &[bird::BypassRoute]) -> Result<()> {
+async fn reconcile(ctx: &RouterState, bypass_routes: &[bird_conf::BypassRoute]) -> Result<()> {
     let _guard = ctx.render_lock.lock().await;
     bird::reconcile(
         Path::new(BIRD_CONF_PATH),
+        &ctx.template,
         identity(ctx),
         ctx.as_number,
         &render_inputs(ctx, bypass_routes),
@@ -282,16 +286,16 @@ const BYPASS_STARTUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 /// transient RIPEstat/DNS outage - same reasoning as the k8s original's `current_bypass_routes`,
 /// minus the per-node CRD status patching and multi-`BypassSource`-per-node conflict handling
 /// neither of which apply to a single static config block.
-async fn current_bypass_routes(ctx: &RouterState) -> Vec<bird::BypassRoute> {
+async fn current_bypass_routes(ctx: &RouterState) -> Vec<bird_conf::BypassRoute> {
     let Some(bypass_cfg) = &ctx.bypass_cfg else {
         return Vec::new();
     };
     for attempt in 1..=BYPASS_STARTUP_RETRIES {
         match resolver::resolve(&bypass_cfg.include, &bypass_cfg.exclude).await {
             Ok(resolved) => {
-                let routes: Vec<bird::BypassRoute> = resolved
+                let routes: Vec<bird_conf::BypassRoute> = resolved
                     .into_iter()
-                    .map(|(net, label)| bird::BypassRoute { net, label })
+                    .map(|(net, label)| bird_conf::BypassRoute { net, label })
                     .collect();
                 *ctx.bypass_cache.lock().await = Some(routes.clone());
                 return routes;

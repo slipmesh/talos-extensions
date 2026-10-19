@@ -15,7 +15,6 @@ required-features = ["runtime"]
 
 [dependencies]
 anyhow.workspace = true
-askama.workspace = true
 common.workspace = true
 futures.workspace = true
 reqwest.workspace = true

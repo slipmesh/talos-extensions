@@ -17,7 +17,7 @@ protocol direct direct_{{ iface.protocol_id }} {
 {%- endfor %}
 protocol kernel {
     ipv4 {
-{%- if !learn.is_empty() %}
+{%- if learn %}
         import filter {
             if net ~ [ {{ learn|join(", ") }} ] then accept;
             reject;
@@ -35,7 +35,7 @@ protocol kernel {
             reject;
         };
     };
-{%- if learn.is_empty() %}
+{%- if not learn %}
     learn no;
 {%- else %}
     learn all;
@@ -49,7 +49,7 @@ protocol kernel {
         };
     };
 }
-{%- if let Some(bfd) = bfd %}
+{%- if bfd %}
 {#- BIRD's defaults (min tx 100 ms, multiplier 5) declare a session dead after ~500 ms, which
      these links cannot honour: every mesh interface is an obfuscated WireGuard tunnel, several of
      them intercontinental, where a brief stall is normal and a flap costs more than slow
@@ -80,7 +80,7 @@ protocol ospf v3 mesh6 {
 {%- endfor %}
     };
 }
-{%- if !bypass.is_empty() %}
+{%- if bypass %}
 protocol static BYPASS {
     ipv4 { import all; };
 {%- for r in bypass %}
@@ -88,7 +88,7 @@ protocol static BYPASS {
 {%- endfor %}
 }
 {%- endif %}
-{%- if !announce.is_empty() %}
+{%- if announce %}
 protocol static ANNOUNCE {
     ipv4 { import all; };
 {%- for r in announce %}
@@ -107,7 +107,7 @@ protocol bgp ibgp6_{{ peer.protocol_id }} {
         export filter {
             if source = RTS_DEVICE then accept;
             if source = RTS_STATIC then accept;
-{%- if !learn.is_empty() %}
+{%- if learn %}
             if source = RTS_INHERIT then accept;
 {%- endif %}
             reject;

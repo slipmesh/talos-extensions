@@ -7,6 +7,7 @@
 /// without building rtnetlink, which does not exist off Linux.
 #[cfg(feature = "runtime")]
 pub mod bird;
+pub mod bird_conf;
 /// Speaks BIRD's control protocol over a unix socket, which is a runtime concern and not portable;
 /// `config` does not touch it.
 #[cfg(feature = "runtime")]
