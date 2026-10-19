@@ -2,12 +2,12 @@
 //! with.
 //!
 //! Every document carries a `slipmesh:` block saying what it is for. `network` is the topology,
-//! exactly one of it. `roadwarriors` is one pool per document. `nftables` is a ruleset, and
-//! `patch` is a Talos document, both aimed at hosts by `include`/`exclude`. The block is addressed
-//! to this tool and never reaches a patch file.
+//! exactly one of it. `roadwarriors` is one pool per document. `patch` is a Talos document, aimed
+//! at hosts by `include`/`exclude`. The block is addressed to this tool and never reaches a patch
+//! file.
 
 use crate::merge::merge_document;
-use crate::mesh_config::{self, MeshConfig, NftablesTopology, RoadwarriorPool};
+use crate::mesh_config::{self, MeshConfig, RoadwarriorPool};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 use std::ops::Range;
@@ -18,15 +18,20 @@ use yaml_serde::Value;
 /// hosts it reaches.
 pub const META_KEY: &str = "slipmesh";
 
-/// The `ExtensionServiceConfig` names this tool generates itself, and so refuses in a `patch`
-/// document. Talos keeps `name` unique per `kind`, so the pair is the whole identity.
-pub const OWNED_NAMES: [&str; 3] = ["awg", "router", "nftables"];
+/// The `ExtensionServiceConfig`s this tool generates, by name, with the file each one mounts. Talos
+/// keeps `name` unique per `kind`, so a `patch` document of one of these names is that same
+/// document: it may add files to it, and nothing else - not the generated file itself.
+pub const GENERATED: [(&str, &str); 2] = [
+    ("awg", "/etc/talos-extensions/awg.yaml"),
+    ("router", "/etc/talos-extensions/router.yaml"),
+];
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Debug)]
 #[serde(rename_all = "lowercase")]
 enum Kind {
     Network,
     Roadwarriors,
+    /// No longer a kind of its own: read only to say where its ruleset went.
     Nftables,
     Patch,
 }
@@ -140,6 +145,8 @@ pub struct HostDocument {
     /// `kind`, plus `/name` when the document has one.
     pub identity: String,
     pub text: String,
+    /// What `text` serializes - for the documents whose fields this tool reads on.
+    pub value: Value,
 }
 
 pub struct SlipmeshFile {
@@ -147,7 +154,6 @@ pub struct SlipmeshFile {
     network_index: usize,
     hosts: Vec<String>,
     pools: Vec<Document>,
-    rulesets: Vec<Document>,
     patches: Vec<Document>,
     topology: MeshConfig,
 }
@@ -161,7 +167,6 @@ impl SlipmeshFile {
     pub fn read(raw: &str, yaml: &YamlDoc) -> Result<Self> {
         let mut networks = Vec::new();
         let mut pools = Vec::new();
-        let mut rulesets = Vec::new();
         let mut patches = Vec::new();
         // Each document runs to where the next one starts. Its own span cannot say where it ends:
         // `yaml-rt` ends the span of a block scalar at its `|`, before the text under it.
@@ -180,7 +185,12 @@ impl SlipmeshFile {
             match document.meta.kind {
                 Kind::Network => networks.push(document),
                 Kind::Roadwarriors => pools.push(document),
-                Kind::Nftables => rulesets.push(document),
+                Kind::Nftables => bail!(
+                    "{}: the ruleset is now the file {} of a `kind: patch` document holding \
+                     `ExtensionServiceConfig` `nftables` - aimed at hosts the same way",
+                    document.at(),
+                    nftables::template::TEMPLATE_PATH
+                ),
                 Kind::Patch => patches.push(document),
             }
         }
@@ -198,21 +208,15 @@ impl SlipmeshFile {
                 untargeted.at()
             );
         }
-        for (section, kind) in [
-            ("roadwarriors", Kind::Roadwarriors),
-            ("nftables", Kind::Nftables),
-        ] {
-            ensure!(
-                network.value.get(section).is_none(),
-                "{}: `{section}` belongs in its own `kind: {}` document",
-                network.at(),
-                kind.name()
-            );
-        }
+        ensure!(
+            network.value.get("roadwarriors").is_none(),
+            "{}: `roadwarriors` belongs in its own `kind: roadwarriors` document",
+            network.at()
+        );
         let topology: MeshConfig = network.deserialize()?;
         let hosts: Vec<String> = topology.nodes.into_iter().map(|n| n.name).collect();
 
-        for targeted in rulesets.iter().chain(&patches) {
+        for targeted in &patches {
             if let Some(include) = &targeted.meta.include {
                 ensure!(
                     !include.is_empty(),
@@ -238,23 +242,6 @@ impl SlipmeshFile {
         for pool in &pools {
             pool.deserialize::<RoadwarriorPool>()?;
         }
-        for ruleset in &rulesets {
-            ruleset.deserialize::<NftablesTopology>()?;
-        }
-        for host in &hosts {
-            let lines: Vec<String> = rulesets
-                .iter()
-                .filter(|r| r.reaches(host))
-                .map(|r| r.line.to_string())
-                .collect();
-            ensure!(
-                lines.len() <= 1,
-                "host {host:?} is reached by the `kind: nftables` documents at lines {} - a \
-                 ruleset is one text, and two cannot be merged",
-                lines.join(", ")
-            );
-        }
-
         for patch in &patches {
             let identity = Identity::of(&patch.value);
             let Some(kind) = &identity.kind else {
@@ -265,23 +252,44 @@ impl SlipmeshFile {
             };
             if let Some(name) = &identity.name
                 && kind == "ExtensionServiceConfig"
-                && OWNED_NAMES.contains(&name.as_str())
+                && let Some((_, generated)) = GENERATED.iter().find(|(n, _)| n == name)
             {
-                bail!(
-                    "{}: `ExtensionServiceConfig` {name:?} is generated from the network, not \
-                     written by hand",
+                let others: Vec<&str> = patch
+                    .value
+                    .as_mapping()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(key, _)| key.as_str())
+                    .filter(|key| !["apiVersion", "kind", "name", "configFiles"].contains(key))
+                    .collect();
+                ensure!(
+                    others.is_empty(),
+                    "{}: `ExtensionServiceConfig` {name:?} is generated from the network - a \
+                     patch may add `configFiles` to it and nothing else, not {others:?}",
+                    patch.at()
+                );
+                let over_generated = patch
+                    .value
+                    .get("configFiles")
+                    .and_then(Value::as_sequence)
+                    .into_iter()
+                    .flatten()
+                    .any(|f| f.get("mountPath").and_then(Value::as_str) == Some(generated));
+                ensure!(
+                    !over_generated,
+                    "{}: {generated} is the file generated for {name:?} - add files next to it, \
+                     not over it",
                     patch.at()
                 );
             }
         }
 
-        let topology = model(&network.value, &pools, None)?;
+        let topology = model(&network.value, &pools)?;
         Ok(Self {
             network_index: network.index,
             network: network.value,
             hosts,
             pools,
-            rulesets,
             patches,
             topology,
         })
@@ -306,8 +314,7 @@ impl SlipmeshFile {
         self.hosts.iter().map(String::as_str).collect()
     }
 
-    /// The whole topology: `network` with every pool, and no ruleset - the ruleset differs by host
-    /// and plays no part in anything shared between them, such as secrets.
+    /// The whole topology: `network` with every pool.
     pub fn topology(&self) -> &MeshConfig {
         &self.topology
     }
@@ -316,11 +323,10 @@ impl SlipmeshFile {
         self.topology
     }
 
-    /// The topology as one host sees it: with the ruleset aimed at that host, if any.
+    /// The topology as one host sees it.
     pub fn effective_for(&self, host: &str) -> Result<MeshConfig> {
         self.ensure_host(host)?;
-        let ruleset = self.rulesets.iter().find(|r| r.reaches(host));
-        model(&self.network, &self.pools, ruleset.map(|r| r.value.clone()))
+        model(&self.network, &self.pools)
     }
 
     /// The Talos documents that go into `host`'s patch file, in the order their identities first
@@ -363,9 +369,25 @@ impl SlipmeshFile {
                 Ok(HostDocument {
                     identity: identity.to_string(),
                     text,
+                    value: document,
                 })
             })
             .collect()
+    }
+
+    /// Whether a `patch` document, for whichever hosts, sets the file `mount_path` of
+    /// `ExtensionServiceConfig` `service`.
+    pub fn sets_file(&self, service: &str, mount_path: &str) -> bool {
+        self.patches
+            .iter()
+            .filter(|p| {
+                let identity = Identity::of(&p.value);
+                identity.kind.as_deref() == Some("ExtensionServiceConfig")
+                    && identity.name.as_deref() == Some(service)
+            })
+            .filter_map(|p| p.value.get("configFiles").and_then(Value::as_sequence))
+            .flatten()
+            .any(|f| f.get("mountPath").and_then(Value::as_str) == Some(mount_path))
     }
 
     fn ensure_host(&self, host: &str) -> Result<()> {
@@ -377,17 +399,14 @@ impl SlipmeshFile {
     }
 }
 
-/// `network` with every pool and `ruleset`, as one validated model.
-fn model(network: &Value, pools: &[Document], ruleset: Option<Value>) -> Result<MeshConfig> {
+/// `network` with every pool, as one validated model.
+fn model(network: &Value, pools: &[Document]) -> Result<MeshConfig> {
     let mut value = network.clone();
     let mapping = value
         .as_mapping_mut()
         .context("the network document is not a mapping")?;
     let pools = pools.iter().map(|p| p.value.clone()).collect();
     mapping.insert("roadwarriors".into(), Value::Sequence(pools));
-    if let Some(ruleset) = ruleset {
-        mapping.insert("nftables".into(), ruleset);
-    }
     let model: MeshConfig = yaml_serde::from_value(value).context("assembling the topology")?;
     mesh_config::validate(&model)?;
     Ok(model)
@@ -477,7 +496,9 @@ extraArgs:
     }
 
     fn ruleset(meta: &str, table: &str) -> String {
-        format!("slipmesh:\n  kind: nftables\n{meta}ruleset: |\n  table inet {table} {{}}\n")
+        format!(
+            "slipmesh:\n  kind: patch\n{meta}apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: nftables\nconfigFiles:\n  - mountPath: /etc/talos-extensions/nftables.conf.j2\n    content: |\n      table inet {table} {{}}\n"
+        )
     }
 
     fn error(raw: &str) -> String {
@@ -707,17 +728,54 @@ extraArgs:
         assert!(err.contains("kind"), "{err}");
     }
 
+    fn generated_with(name: &str, body: &str) -> String {
+        format!(
+            "slipmesh:
+  kind: patch
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: {name}
+{body}"
+        )
+    }
+
     #[test]
-    fn a_patch_claiming_a_generated_document_is_refused() {
+    fn a_patch_adding_files_to_a_generated_document_is_accepted() {
         for name in ["awg", "router", "nftables"] {
-            let err = error(&file(&[
-                NETWORK,
-                &format!(
-                    "slipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: {name}\n"
-                ),
-            ]));
-            assert!(err.contains(name), "{err}");
+            let patch = generated_with(
+                name,
+                "configFiles:
+  - mountPath: /etc/talos-extensions/extra
+    content: x
+",
+            );
+            SlipmeshFile::parse(&file(&[NETWORK, &patch])).unwrap();
         }
+    }
+
+    #[test]
+    fn a_patch_setting_more_than_files_on_a_generated_document_is_refused() {
+        let patch = generated_with(
+            "router",
+            "environment:
+  - RUST_LOG=debug
+",
+        );
+        let err = error(&file(&[NETWORK, &patch]));
+        assert!(err.contains("configFiles"), "{err}");
+    }
+
+    #[test]
+    fn a_patch_replacing_the_generated_file_is_refused() {
+        let patch = generated_with(
+            "router",
+            "configFiles:
+  - mountPath: /etc/talos-extensions/router.yaml
+    content: x
+",
+        );
+        let err = error(&file(&[NETWORK, &patch]));
+        assert!(err.contains("/etc/talos-extensions/router.yaml"), "{err}");
     }
 
     // The model each host is rendered from.
@@ -769,7 +827,7 @@ extraArgs:
     fn pools_or_a_ruleset_inside_the_network_document_are_refused_by_their_kind() {
         for (section, kind) in [
             ("roadwarriors: []\n", "kind: roadwarriors"),
-            ("nftables: {ruleset: x}\n", "kind: nftables"),
+            ("nftables: {ruleset: x}\n", "nftables"),
         ] {
             let err = error(&format!("{NETWORK}{section}"));
             assert!(err.contains(kind), "{err}");
@@ -777,26 +835,20 @@ extraArgs:
     }
 
     #[test]
-    fn an_excluded_host_has_no_ruleset_rather_than_an_empty_one() {
-        let parsed =
-            SlipmeshFile::parse(&file(&[NETWORK, &ruleset("  exclude: [node-c]\n", "t")])).unwrap();
-        assert!(parsed.effective_for("node-c").unwrap().nftables.is_none());
-        let ruleset = parsed.effective_for("node-a").unwrap().nftables.unwrap();
-        assert_eq!(ruleset.ruleset, "table inet t {}\n");
-    }
-
-    #[test]
-    fn a_host_two_rulesets_reach_is_refused_by_name() {
+    fn a_kind_nftables_document_is_refused_with_where_its_ruleset_goes() {
         let err = error(&file(&[
             NETWORK,
-            &ruleset("", "everyone"),
-            &ruleset("  include: [node-b]\n", "extra"),
+            "slipmesh:\n  kind: nftables\nruleset: |\n  table inet t {}\n",
         ]));
-        assert!(err.contains("node-b"), "{err}");
+        assert!(err.contains("kind: patch"), "{err}");
+        assert!(
+            err.contains("/etc/talos-extensions/nftables.conf.j2"),
+            "{err}"
+        );
     }
 
     #[test]
-    fn the_topology_carries_every_pool_and_no_ruleset() {
+    fn the_topology_carries_every_pool() {
         let parsed = SlipmeshFile::parse(&file(&[
             NETWORK,
             &pool("plain", 51820),
@@ -805,6 +857,5 @@ extraArgs:
         .unwrap();
         let topology = parsed.topology();
         assert_eq!(topology.roadwarriors.len(), 1);
-        assert!(topology.nftables.is_none());
     }
 }

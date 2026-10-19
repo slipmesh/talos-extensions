@@ -13,6 +13,7 @@ depends:
 # main.rs's `nft monitor`-driven watchdog loop reapplies whenever that happens, the same strategy
 # Talos's own NfTablesChainController uses for its own table. Talos still restarts the whole
 # container fresh on any ExtensionServiceConfig change (`handleRestart()`, independent of
-# `restart:`), so editing `ruleset:` and re-applying the machine config reruns this from scratch.
+# `restart:`), so editing the ruleset template and re-applying the machine config reruns this
+# from scratch.
 restart: always
 logToConsole: true

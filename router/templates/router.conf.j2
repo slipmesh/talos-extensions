@@ -15,14 +15,18 @@ protocol direct direct_{{ iface.protocol_id }} {
     ipv4 { import all; };
 }
 {%- endfor %}
+{#- awg tags the routes of the roadwarrior clients it holds with a protocol number of its own. A
+     pool runs on several nodes under one address, so the route is what tells the others which
+     node a client is connected to. #}
 protocol kernel {
     ipv4 {
-{%- if !learn.is_empty() %}
         import filter {
+{%- if learn %}
             if net ~ [ {{ learn|join(", ") }} ] then accept;
+{%- endif %}
+            if krt_source = {{ awg_route_protocol }} then accept;
             reject;
         };
-{%- endif %}
         export filter {
             if source = RTS_BGP then {
                 krt_prefsrc = {{ loopback }};
@@ -35,10 +39,10 @@ protocol kernel {
             reject;
         };
     };
-{%- if learn.is_empty() %}
-    learn no;
-{%- else %}
+{%- if learn %}
     learn all;
+{%- else %}
+    learn;
 {%- endif %}
 }
 protocol kernel {
@@ -49,7 +53,7 @@ protocol kernel {
         };
     };
 }
-{%- if let Some(bfd) = bfd %}
+{%- if bfd %}
 {#- BIRD's defaults (min tx 100 ms, multiplier 5) declare a session dead after ~500 ms, which
      these links cannot honour: every mesh interface is an obfuscated WireGuard tunnel, several of
      them intercontinental, where a brief stall is normal and a flap costs more than slow
@@ -80,7 +84,7 @@ protocol ospf v3 mesh6 {
 {%- endfor %}
     };
 }
-{%- if !bypass.is_empty() %}
+{%- if bypass %}
 protocol static BYPASS {
     ipv4 { import all; };
 {%- for r in bypass %}
@@ -88,7 +92,7 @@ protocol static BYPASS {
 {%- endfor %}
 }
 {%- endif %}
-{%- if !announce.is_empty() %}
+{%- if announce %}
 protocol static ANNOUNCE {
     ipv4 { import all; };
 {%- for r in announce %}
@@ -107,9 +111,7 @@ protocol bgp ibgp6_{{ peer.protocol_id }} {
         export filter {
             if source = RTS_DEVICE then accept;
             if source = RTS_STATIC then accept;
-{%- if !learn.is_empty() %}
             if source = RTS_INHERIT then accept;
-{%- endif %}
             reject;
         };
         next hop self;

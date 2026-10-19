@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Talos extension service: oneshot loader for an nftables ruleset supplied via ExtensionServiceConfig, with {{ placeholder }} substitution for values only knowable on the running node (currently: default-route interface names)"
+description = "Talos extension service: loads an nftables ruleset supplied via ExtensionServiceConfig as a template with placeholders for values only knowable on the running node (currently: default-route interface names), and reapplies it when its tables go missing"
 
 [[bin]]
 name = "nftables"
@@ -20,7 +20,6 @@ serde.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "io-util", "fs"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
-yaml_serde.workspace = true
 
 [features]
 default = ["runtime"]

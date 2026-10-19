@@ -1,10 +1,8 @@
-use nftables::config;
 use nftables::ruleset;
-use nftables::template;
+use nftables::template::{self, DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6, TEMPLATE_PATH};
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
-use config::NftablesConfig;
 use std::collections::HashMap;
 use std::future::Future;
 use std::process::ExitCode;
@@ -12,10 +10,6 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-
-/// Fixed path, matching `extension-services/nftables.yaml`'s `configFiles[].mountPath` - never an
-/// env var or CLI flag (same invariant `awg`/`router`'s own `CONFIG_PATH` document).
-const CONFIG_PATH: &str = "/etc/talos-extensions/nftables.yaml";
 
 /// How many times to retry a default-route lookup before giving up, at startup only - a default
 /// route can genuinely not exist yet for a few seconds after this container starts (network
@@ -49,32 +43,31 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<()> {
-    let raw = tokio::fs::read_to_string(CONFIG_PATH)
+    let source = tokio::fs::read_to_string(TEMPLATE_PATH)
         .await
-        .with_context(|| format!("failed to read config file {CONFIG_PATH}"))?;
-    let cfg: NftablesConfig =
-        yaml_serde::from_str(&raw).context("failed to parse config file as YAML")?;
-    config::validate(&cfg).context("config validation failed")?;
+        .with_context(|| format!("failed to read template {TEMPLATE_PATH}"))?;
+    let template = template::compile(source)
+        .with_context(|| format!("template {TEMPLATE_PATH} is invalid"))?;
 
-    let referenced = template::referenced_placeholders(&cfg.ruleset);
-    tracing::info!(placeholders = ?referenced, "starting nftables ruleset apply");
+    let referenced = template.variables();
+    tracing::info!(variables = ?referenced, "starting nftables ruleset apply");
 
     let rt = RtClient::connect().context("failed to open rtnetlink socket")?;
 
-    // Only resolve (and retry on) whichever placeholders this particular config actually
-    // references - a node with no IPv6 default route shouldn't fail to apply a ruleset that never
-    // mentions `defaultroute_interface_ipv6`, and vice versa.
+    // Only resolve (and retry on) whichever values this particular ruleset reads - a node with no
+    // IPv6 default route shouldn't fail to apply a ruleset that never mentions
+    // `defaultroute_interface_ipv6`, and vice versa.
     let mut values: HashMap<&str, String> = HashMap::new();
-    if referenced.contains("defaultroute_interface_ipv4") {
+    if referenced.contains(DEFAULT_ROUTE_IPV4) {
         let iface = retry_default_iface("IPv4", || rt.default_iface_v4()).await?;
-        values.insert("defaultroute_interface_ipv4", iface);
+        values.insert(DEFAULT_ROUTE_IPV4, iface);
     }
-    if referenced.contains("defaultroute_interface_ipv6") {
+    if referenced.contains(DEFAULT_ROUTE_IPV6) {
         let iface = retry_default_iface("IPv6", || rt.default_iface_v6()).await?;
-        values.insert("defaultroute_interface_ipv6", iface);
+        values.insert(DEFAULT_ROUTE_IPV6, iface);
     }
 
-    let rendered = template::substitute(&cfg.ruleset, &values);
+    let rendered = template.render(&values)?;
     ruleset::apply(&rendered).await?;
 
     watchdog(rendered).await

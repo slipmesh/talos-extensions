@@ -5,6 +5,7 @@ pub mod keys;
 #[cfg(feature = "netlink")]
 pub mod netlink;
 pub mod obfuscation;
+pub mod template;
 
 pub use obfuscation::Obfuscation;
 
@@ -30,7 +31,8 @@ impl MetricsConfig {
             .map_err(|e| anyhow::anyhow!("{field} {:?} is not an ip:port: {e}", self.listen))?;
         anyhow::ensure!(
             listen.is_ipv4(),
-            "{field} {:?} is not IPv4 - Prometheus discovers a node by its InternalIP,              which is the v4 loopback",
+            "{field} {:?} is not IPv4 - Prometheus discovers a node by its InternalIP, which is \
+             the v4 loopback",
             self.listen
         );
         // Both of the below parse happily and would bind, which is why they are worth refusing
@@ -38,7 +40,8 @@ impl MetricsConfig {
         // included, when being reachable only inside the overlay is its whole protection.
         anyhow::ensure!(
             !listen.ip().is_unspecified(),
-            "{field} {:?} is a wildcard address - bind this node's own mesh loopback, which              exists only inside the overlay",
+            "{field} {:?} is a wildcard address - bind this node's own mesh loopback, which \
+             exists only inside the overlay",
             self.listen
         );
         // Port 0 asks the kernel for an ephemeral one, which nothing can then be pointed at.
@@ -52,7 +55,7 @@ impl MetricsConfig {
     }
 }
 
-/// The `RouteProtocol` value every route this project's `awg` daemon installs is tagged with -
+/// The protocol number every route this project's `awg` daemon installs is tagged with -
 /// same mechanism BIRD/other routing daemons already use on this stack to mark their own routes
 /// (`RouteProtocol::Bird`, `::Ospf`, `::Bgp`, ...). `200` sits outside every value the
 /// `netlink-packet-route` enum currently names (highest named value in the 0.31 series is `Eigrp`
@@ -63,7 +66,10 @@ impl MetricsConfig {
 /// carrying this exact protocol are treated as "ours" (`RtClient::routes_by_protocol`) - anything
 /// else on the same interface (a routing daemon, a static route) is left alone, and a route this
 /// daemon installed in a *previous* run (before the config change that triggered this restart)
-/// is still recognizable as ours even though no in-memory state survived the restart.
+/// is still recognizable as ours even though no in-memory state survived the restart. It is also
+/// how `router`'s BIRD picks them up: by `krt_source`, the same number read back.
+pub const ROUTE_PROTOCOL_ID: u8 = 200;
+
 #[cfg(feature = "netlink")]
 pub const ROUTE_PROTOCOL: rtnetlink::packet_route::route::RouteProtocol =
-    rtnetlink::packet_route::route::RouteProtocol::Other(200);
+    rtnetlink::packet_route::route::RouteProtocol::Other(ROUTE_PROTOCOL_ID);

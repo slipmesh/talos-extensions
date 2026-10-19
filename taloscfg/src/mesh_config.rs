@@ -1,6 +1,6 @@
 //! Schema for `slipmesh.yaml` - the single source of truth this whole generator renders per-node
-//! `awg`/`router`/`nftables` `ExtensionServiceConfig` content from. Deliberately one file for all
-//! four concerns (mesh links, roadwarriors, BGP/OSPF, nftables) rather than one file per daemon -
+//! `awg`/`router` `ExtensionServiceConfig` content from. Deliberately one file for all three
+//! concerns (mesh links, roadwarriors, BGP/OSPF) rather than one file per daemon -
 //! they already share the same node/topology facts (`nodes`, `cluster.loopback_networks`), and
 //! keeping them apart would just mean re-stating those facts in multiple places.
 //!
@@ -44,8 +44,6 @@ pub struct MeshConfig {
     pub roadwarriors: Vec<RoadwarriorPool>,
     #[serde(default)]
     pub bypass: Vec<BypassEntry>,
-    #[serde(default)]
-    pub nftables: Option<NftablesTopology>,
 }
 
 /// Strict, unlike the documents this generator writes: those are read by daemons that may be
@@ -338,20 +336,12 @@ pub struct LabeledPrefix {
     pub label: Option<String>,
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
-pub struct NftablesTopology {
-    /// Same ruleset, verbatim, for every node in `nodes` - see this struct's doc comment in the
-    /// plan for why there's no per-node override in this first version.
-    pub ruleset: String,
-}
-
 /// Pure validation, no I/O: referential integrity across `slipmesh.yaml`'s own cross-references
 /// (`mesh.links[].pair`, `roadwarriors[].node_hostnames`, `bypass[].node` must all name real
 /// `nodes[].name` entries) plus structural invariants this generator's own rendering logic
 /// depends on (unique ports per node, non-empty `nodes`). Does **not** validate the
-/// awg/router/nftables config this would render into - `render.rs` computes that separately, and
-/// `main.rs` runs `awg::config::validate`/`router::config::validate`/`nftables::config::validate`
-/// on the *result*, which is the real, authoritative check that the daemons would actually accept
+/// awg/router config this would render into - `render.rs` computes that separately, and
+/// `patch_file.rs` runs `awg::config::validate`/`router::config::validate` on the *result*, which is the real, authoritative check that the daemons would actually accept
 /// it.
 pub fn validate(cfg: &MeshConfig) -> anyhow::Result<()> {
     anyhow::ensure!(!cfg.nodes.is_empty(), "nodes must not be empty");

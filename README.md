@@ -207,8 +207,9 @@ is grounds for a restart.
 
 ## `router`: BIRD-based OSPF/iBGP routing, also driven by a static file
 
-`router` reads one file (`/etc/talos-extensions/router.yaml`) at startup, renders BIRD's config
-from it, and spawns `bird` as a supervised child process - staged into the same
+`router` reads two files at startup - `/etc/talos-extensions/router.yaml`, the facts, and
+`/etc/talos-extensions/router.conf.j2`, BIRD's config as a template of them - renders the one with
+the other, and spawns `bird` as a supervised child process - staged into the same
 `rootfs/usr/local/lib/containers/router/` directory as the `router` binary itself, rather than
 running as a separate sidecar container: Talos extension services have no sidecar concept, a
 service is always one `container.entrypoint`. It talks to BIRD over BIRD's own control socket
@@ -223,22 +224,49 @@ declares it all:
   matching an interface's address - fed straight into BIRD's own `interface` clause, so nothing
   here needs to know what `awg` actually named its interfaces;
 - `direct_interfaces` - interfaces whose own addresses should be announced (`protocol direct`);
-- `learn` - IPv4 CIDR *ranges*, not exact per-peer `/32`s: any kernel route falling inside one is
-  picked up and re-announced over iBGP, whoever installed it. This is how a node's pod subnet gets
-  announced without naming the CNI's interface;
+- `learn` - IPv4 CIDRs: any kernel route equal to or inside one is picked up and re-announced over
+  iBGP, whoever installed it. This is how a node's pod subnet gets announced without naming the
+  CNI's interface;
 - `announce` - static routes to redistribute;
 - `bypass` (optional) - RIPEstat/DNS-resolved blackhole routes, refreshed on an interval. This
   part stays "live", unlike everything else in this workspace, since resolving ASN/geoip/DNS
   sources is the whole point of the feature.
 
-See `router/src/config.rs`'s doc comments for the full schema and `router/src/bird.rs` for how each
-field becomes BIRD config.
+See `router/src/config.rs`'s doc comments for the full schema, and the template below for how
+each field becomes BIRD config.
 
 Whoever authors `router.yaml` is responsible for `bypass.exclude` covering this node's own (and
 every peer's) public endpoint - a blackholed endpoint takes the mesh link down with it. There is no
 cluster-wide node list a static per-node file could consult, so this is the same
 config-authoring-is-a-human-responsibility pattern documented above for `awg`'s private keys.
 `taloscfg` handles it for you when the topology comes from `slipmesh.yaml`.
+
+### The `bird.conf` template
+
+`router.conf.j2` is a [minijinja](https://docs.rs/minijinja) template, rendered again on every
+bypass refresh. It sees these variables, every value from `router.yaml` already sanitized for
+where BIRD syntax puts it:
+
+| variable | value |
+| --- | --- |
+| `loopback`, `ipv6_loopback` | this node's loopbacks |
+| `as_number` | `bgp_as` |
+| `router_loopback_iface` | the dummy interface carrying the loopbacks, `router-lo` |
+| `ospf_interfaces` | `{pattern, bfd}` each: the entry as an `interface` clause takes it, and whether BFD is asked for on it |
+| `bgp_peers` | `{protocol_id, address}` each |
+| `direct_interfaces` | `{protocol_id, pattern}` each |
+| `bypass`, `announce` | `{net, label}` each |
+| `learn` | the `learn` CIDRs, each with BIRD's `+` |
+| `bfd` | `{min_rx_ms, min_tx_ms, multiplier}`, or none |
+| `awg_route_protocol` | the protocol number `awg` tags its routes with |
+
+A template that reads any other variable is refused when it is compiled - in any branch, not only
+the ones a given node takes - and `router` exits without one rather than fall back on anything.
+The reference template, [`router/templates/router.conf.j2`](router/templates/router.conf.j2), runs
+OSPFv3 over the mesh links and iBGP over the loopbacks, and learns the routes `awg` installs for the
+roadwarrior clients it holds by their protocol number (`krt_source`), whatever `learn` says: a pool
+runs on several nodes under one address, and that route is how the others know which node a client
+is on.
 
 ---
 
@@ -257,7 +285,7 @@ failed scrape is not a reason to restart the container and tear down every adjac
 
 ## `nftables`: ruleset loader with a table-loss watchdog
 
-Applies `/etc/talos-extensions/nftables.yaml`'s `ruleset:` once at startup, the same way
+Applies the ruleset template `/etc/talos-extensions/nftables.conf.j2` once at startup, the same way
 `awg`/`router` converge their own state once at startup - but unlike a true oneshot, it doesn't
 exit afterward.
 
@@ -273,29 +301,31 @@ strategy Talos's own `network.NfTablesChainController` uses to keep *its* table 
 controller's source (`internal/app/machined/pkg/controllers/network/nftables_chain.go`) for the
 same event-driven reconcile pattern, and `nftables.rs`'s own doc comment for the full story.
 
-The config is not a set of structured fields this binary renders into rules - `ruleset:` is the
-actual nftables syntax, verbatim, fed to a vendored static `nft -f` almost unmodified. This binary
-only does two things to it:
+The config is not a set of structured fields this binary renders into rules - the template is the
+actual nftables syntax, fed to a vendored static `nft -f` almost unmodified. This binary only does
+two things to it:
 
-1. **`{{ name }}` placeholder substitution** (`template.rs`) for values that can't be known when
-   the ruleset text is written - currently `defaultroute_interface_ipv4`/
+1. **Rendering** (`template.rs`, a minijinja template like `router`'s) with the values that can't
+   be known when the ruleset is written - currently `defaultroute_interface_ipv4`/
    `defaultroute_interface_ipv6`, resolved via `common::netlink::rt::RtClient::
-   default_iface_v4`/`default_iface_v6`. Only placeholders the ruleset actually references get
-   resolved (and retried, bounded, if no default route exists yet) - a v4-only node applying a
-   ruleset that never mentions `defaultroute_interface_ipv6` doesn't need one to exist.
+   default_iface_v4`/`default_iface_v6`. A template reading any other variable is refused before
+   anything is applied. Only the variables the template actually reads get resolved (and retried,
+   bounded, if no default route exists yet) - a v4-only node applying a ruleset that never
+   mentions `defaultroute_interface_ipv6` doesn't need one to exist.
 2. **Own-table identification by scanning, not hardcoding** (`nftables.rs`): before applying, it
-   finds every `table <family> <name>` the (substituted) ruleset declares and issues `nft delete
+   finds every `table <family> <name>` the rendered ruleset declares and issues `nft delete
    table <family> <name>` for each (errors ignored - the table not existing yet is normal on the
    first run). This is deliberately *not* `flush ruleset` - kube-proxy, Talos's own ingress
    firewall, or anything else on the same node may have nftables tables of its own that must
-   survive. The table names live in whoever authors `ruleset:`, not in this binary; the cost of
+   survive. The table names live in whoever authors the template, not in this binary; the cost of
    that is that renaming a table between two config versions orphans the old one rather than
    cleaning it up.
 
 No rule content is baked into this binary at all - MSS clamping, NAT, or anything else is just
-whatever `ruleset:` says. See `talos-nftables-extension`'s README for the packaging side (why `nft`
-is a statically-linked binary built from source rather than the dynamically-linked package
-`siderolabs/pkgs` already ships) and an example `ruleset:` value.
+whatever the template says; [`nftables/templates/nftables.conf.j2`](nftables/templates/nftables.conf.j2)
+is the reference one, with those two. See `talos-nftables-extension`'s README for the packaging
+side (why `nft` is a statically-linked binary built from source rather than the dynamically-linked
+package `siderolabs/pkgs` already ships).
 
 ---
 
@@ -304,8 +334,8 @@ is a statically-linked binary built from source rather than the dynamically-link
 `slipmesh-taloscfg` is the only crate here that doesn't run on a node. It reads `slipmesh.yaml`,
 which describes the whole mesh and everything else a node's patch file carries, and writes
 `patches/<node>.yaml` for every node in it, each holding that node's Talos documents followed by the
-`awg`/`router`/`nftables` `ExtensionServiceConfig` documents that `talosctl apply-config -p` then
-ships to that node. A patch file is output only: nothing in it is read back, so edit
+`awg`/`router` `ExtensionServiceConfig` documents it generates, which `talosctl apply-config -p`
+then ships to that node. A patch file is output only: nothing in it is read back, so edit
 `slipmesh.yaml` and regenerate rather than editing the patch.
 
 ### `slipmesh.yaml`
@@ -338,10 +368,15 @@ plain: true
 clients: []
 ---
 slipmesh:
-  kind: nftables
+  kind: patch
   exclude: [router-1]
-ruleset: |
-  table inet talos_filter { ... }
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: nftables
+configFiles:
+  - mountPath: /etc/talos-extensions/nftables.conf.j2
+    content: |
+      table inet talos_filter { ... }
 ---
 slipmesh:
   kind: patch
@@ -356,14 +391,11 @@ installer:
 | --- | --- | --- | --- |
 | `network` | exactly one | — | the topology: `cluster`, `bfd`, `obfuscation`, `nodes`, `mesh`, `bypass` |
 | `roadwarriors` | one per pool | — | one pool: its address, port, nodes and clients |
-| `nftables` | any | `include`/`exclude` | a `ruleset` |
 | `patch` | any | `include`/`exclude` | a Talos document, carried into the patch of every node it reaches |
 
 `include` lists the nodes a document reaches; leave it out to reach every node. `exclude` takes
 nodes back out. Both name nodes of the `network` document, and a key the `slipmesh:` block does
-not know is an error, so a misspelled `include` cannot quietly aim a document at every node. A node
-reached by no `nftables` document gets no nftables document at all; one reached by two is an error,
-since a ruleset is one text and two cannot be merged.
+not know is an error, so a misspelled `include` cannot quietly aim a document at every node.
 
 `patch` documents of one Talos identity - `apiVersion`, `kind`, `name` - are merged for each node:
 those without `include` first, then those naming the node, each in file order, so the specific one
@@ -392,6 +424,25 @@ configFiles:
       username: admin
       password: hunter2
 ```
+
+A `patch` document may also name a generated `ExtensionServiceConfig`, `awg` or `router`, to add
+files to it: the files follow the generated one in that same document, since Talos takes one
+document per name. It may set `configFiles` and nothing else, and none of them over the generated
+file. This is how `router` gets its template, `/etc/talos-extensions/router.conf.j2`, and
+`nftables` - a document written entirely by hand - its ruleset,
+`/etc/talos-extensions/nftables.conf.j2`. Both are checked as their daemon will check them, and
+the `router` template is rendered with each node's config, so one that would fail on a node fails
+`generate` instead. The `nftables` document also gets the ruleset as
+`/etc/talos-extensions/nftables.yaml`, the file the daemon read before it took a template: a node
+that falls back to its previous boot slot runs that daemon against this config, and would
+otherwise apply no ruleset at all. That copy goes once no node can fall back that far.
+
+When no `patch` document sets one of those two files, for any node, `generate` writes the reference
+template into `slipmesh.yaml` as a document of its own that reaches every node - `--check` fails
+instead, and `--diff` shows the patches as they would be with it. From then on the copy in
+`slipmesh.yaml` is the one in force, and a newer reference does not replace it. A document aimed at
+some nodes only counts as setting the file: the nodes it leaves out go without, as whoever aimed it
+decided - which `generate` refuses for `router`, since it does not run without its template.
 
 ### Secrets
 
@@ -458,8 +509,9 @@ lived inside the patch files, which `generate` now overwrites without reading. M
 hand before the first run:
 
 - `mesh.yaml` without `roadwarriors` and `nftables` becomes the `kind: network` document;
-- each `roadwarriors` entry becomes a `kind: roadwarriors` document of its own, and `nftables`
-  a `kind: nftables` one;
+- each `roadwarriors` entry becomes a `kind: roadwarriors` document of its own, and
+  `nftables.ruleset` the `/etc/talos-extensions/nftables.conf.j2` file of a `kind: patch` document
+  holding `ExtensionServiceConfig` `nftables`;
 - each document written by hand into a patch file becomes a `kind: patch` document with
   `include: [<node>]`;
 - the `private_key` of a node's `mesh-*` interfaces goes into that node's `mesh_private_key`, and
@@ -493,6 +545,11 @@ Renamed so far, each needing the same edit in `slipmesh.yaml` and nothing else:
 
 No aliases are kept. This is a 0.x generator versioned with the file it reads, and a name that
 means one thing in the tool and another in the file is worse than a build that stops.
+
+A `kind: nftables` document is refused, with where its ruleset went: into the file
+`/etc/talos-extensions/nftables.conf.j2` of a `kind: patch` document holding
+`ExtensionServiceConfig` `nftables`, with the same `include`/`exclude`. A `{{ name }}` in the
+ruleset is already template syntax; a `{%` or `{#` in it now opens a tag or a comment.
 
 Install it with `cargo install --path taloscfg`.
 
