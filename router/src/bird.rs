@@ -15,10 +15,9 @@
 //! directly - see `talos-extensions/README.md`'s design notes and `config.rs`'s doc comments for
 //! the static-config shape this now renders from.
 
-use crate::bird_conf::{self, ROUTER_LOOPBACK_IFACE, RenderInputs, RouterIdentity};
+use crate::bird_conf::ROUTER_LOOPBACK_IFACE;
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
-use common::template::Template;
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::Path;
@@ -100,19 +99,12 @@ pub async fn protocols_healthy(exact_ospf_ifaces: &[String]) -> Result<bool> {
         .all(|iface| configured.contains(iface.as_str())))
 }
 
-pub async fn reconcile(
-    path: &Path,
-    template: &Template,
-    identity: RouterIdentity,
-    as_number: u32,
-    inputs: &RenderInputs<'_>,
-) -> Result<()> {
-    let desired = bird_conf::render(template, identity, as_number, inputs)?;
+pub async fn reconcile(path: &Path, desired: &str) -> Result<()> {
     let current = tokio::fs::read_to_string(path).await.unwrap_or_default();
     if current == desired {
         return Ok(());
     }
-    tokio::fs::write(path, &desired)
+    tokio::fs::write(path, desired)
         .await
         .with_context(|| format!("failed to write {}", path.display()))?;
     run_birdc_configure().await

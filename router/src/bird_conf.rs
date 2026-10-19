@@ -2,10 +2,10 @@
 //! template reads. Pure, with no netlink or BIRD process behind it, so that `taloscfg` renders a
 //! node's template the same way the node will and refuses one that does not render.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use common::template::Template;
 use serde::Serialize;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Dedicated dummy interface carrying this node's router identity /32 and IPv6 loopback /128 -
 /// kept separate from the real `lo` and from `ext-awg`-managed interfaces so nothing but this
@@ -20,6 +20,7 @@ pub const ROUTER_LOOPBACK_IFACE: &str = "router-lo";
 /// network+node_id derivation step; whoever authors `router.yaml` gives each node its own
 /// loopbacks directly, the same "config-authoring concern" `awg`'s README documents for private
 /// keys.
+#[derive(Clone, Copy)]
 pub struct RouterIdentity {
     pub loopback: Ipv4Addr,
     pub ipv6_loopback: Ipv6Addr,
@@ -225,6 +226,80 @@ pub fn render(
     template.render(BirdConfigContext::new(identity, as_number, inputs))
 }
 
+/// Everything `render` takes that `router.yaml` fixes for the life of the process - all of it but
+/// the bypass routes, which only the node can resolve.
+pub struct StaticInputs {
+    pub identity: RouterIdentity,
+    pub as_number: u32,
+    pub ospf_interfaces: Vec<String>,
+    pub direct_interfaces: Vec<String>,
+    pub bgp_peers: Vec<BgpPeer>,
+    pub announce: Vec<AnnounceRoute>,
+    pub learn: Vec<String>,
+    pub bfd: Option<crate::config::BfdSettings>,
+}
+
+impl StaticInputs {
+    /// `cfg` as `config::validate` left it.
+    pub fn from_config(cfg: &crate::config::RouterConfig) -> Result<Self> {
+        let mut v4 = None;
+        let mut v6 = None;
+        for addr in &cfg.node.loopback_addresses {
+            match crate::config::parse_loopback_address(addr)?.0 {
+                IpAddr::V4(a) => v4 = Some(a),
+                IpAddr::V6(a) => v6 = Some(a),
+            }
+        }
+        let identity = RouterIdentity {
+            loopback: v4.context("node.loopback_addresses has no IPv4 entry")?,
+            ipv6_loopback: v6.context("node.loopback_addresses has no IPv6 entry")?,
+        };
+        let bgp_peers = cfg
+            .bgp_peers
+            .iter()
+            .map(|p| {
+                Ok(BgpPeer {
+                    name: p.name.clone(),
+                    address: p.address.parse().with_context(|| {
+                        format!("bgp_peers[].address {:?} is not IPv6", p.address)
+                    })?,
+                })
+            })
+            .collect::<Result<_>>()?;
+        let announce = cfg
+            .announce
+            .iter()
+            .map(|a| AnnounceRoute {
+                net: a.net.clone(),
+                label: a.label.clone().unwrap_or_default(),
+            })
+            .collect();
+        Ok(Self {
+            identity,
+            as_number: cfg.bgp_as,
+            ospf_interfaces: cfg.ospf_interfaces.clone(),
+            direct_interfaces: cfg.direct_interfaces.clone(),
+            bgp_peers,
+            announce,
+            learn: cfg.learn.clone(),
+            bfd: cfg.bfd.clone(),
+        })
+    }
+
+    pub fn render(&self, template: &Template, bypass: &[BypassRoute]) -> Result<String> {
+        let inputs = RenderInputs {
+            ospf_interfaces: &self.ospf_interfaces,
+            bgp_peers: &self.bgp_peers,
+            bypass,
+            announce: &self.announce,
+            learn: &self.learn,
+            direct_interfaces: &self.direct_interfaces,
+            bfd: self.bfd.as_ref(),
+        };
+        render(template, self.identity, self.as_number, &inputs)
+    }
+}
+
 #[derive(Serialize)]
 struct RenderedBgpPeer {
     protocol_id: String,
@@ -315,6 +390,38 @@ mod tests {
 
     fn render(identity: RouterIdentity, as_number: u32, inputs: &RenderInputs) -> Result<String> {
         super::render(&compile(REFERENCE_TEMPLATE)?, identity, as_number, inputs)
+    }
+
+    #[test]
+    fn static_inputs_render_what_router_yaml_declares() {
+        let cfg: crate::config::RouterConfig = yaml_serde::from_str(
+            r#"
+node:
+  loopback_addresses: ["10.62.0.1/32", "fd00::1/128"]
+bgp_as: 64512
+bgp_peers:
+  - {name: node-b, address: "fd00::2"}
+announce:
+  - {net: 10.60.0.0/16}
+learn: [10.61.0.0/16]
+"#,
+        )
+        .unwrap();
+        let bypass = [BypassRoute {
+            net: "203.0.113.0/24".to_string(),
+            label: "example".to_string(),
+        }];
+        let out = StaticInputs::from_config(&cfg)
+            .unwrap()
+            .render(&compile(REFERENCE_TEMPLATE).unwrap(), &bypass)
+            .unwrap();
+        assert!(out.contains("router id 10.62.0.1;"));
+        assert!(out.contains("local fd00::1 as 64512;"));
+        assert!(out.contains("protocol bgp ibgp6_node_b {"));
+        assert!(out.contains("neighbor fd00::2 as 64512;"));
+        assert!(out.contains("route 10.60.0.0/16 via \"router-lo\";"));
+        assert!(out.contains("if net ~ [ 10.61.0.0/16+ ] then accept;"));
+        assert!(out.contains("route 203.0.113.0/24 blackhole; # example"));
     }
 
     /// `VARIABLES` is what a template is checked against, the context is what it gets - a field

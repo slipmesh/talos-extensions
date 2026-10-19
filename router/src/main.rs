@@ -3,7 +3,6 @@ use router::{bird, bird_conf, config, exporter, resolver};
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
 use config::RouterConfig;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -59,16 +58,8 @@ async fn main() -> ExitCode {
 /// lock. No `Store`/reflector/CRD-cache of any kind - unlike the k8s original's `reconcile::Context`,
 /// there's nothing here that's watched, only what `router.yaml` declared once at startup.
 struct RouterState {
-    identity_loopback: Ipv4Addr,
-    identity_ipv6_loopback: Ipv6Addr,
-    as_number: u32,
-    ospf_interfaces: Vec<String>,
-    direct_interfaces: Vec<String>,
-    bgp_peers: Vec<bird_conf::BgpPeer>,
-    bfd: Option<config::BfdSettings>,
+    inputs: bird_conf::StaticInputs,
     metrics: Option<common::MetricsConfig>,
-    announce: Vec<bird_conf::AnnounceRoute>,
-    learn: Vec<String>,
     bypass_cfg: Option<config::BypassConfig>,
     /// Last-successful bypass resolution - re-resolving (RIPEstat/DNS) only happens on the
     /// startup/refresh-interval schedule (`bypass_refresh_loop`); a resolve failure serves this
@@ -104,43 +95,15 @@ async fn run() -> Result<()> {
         "starting router"
     );
 
-    let (loopback, ipv6_loopback) = node_loopbacks(&cfg)?;
+    let inputs = bird_conf::StaticInputs::from_config(&cfg)?;
 
     let rt = RtClient::connect().context("failed to open rtnetlink socket")?;
-    bird::ensure_loopback(&rt, loopback, ipv6_loopback)
+    bird::ensure_loopback(&rt, inputs.identity.loopback, inputs.identity.ipv6_loopback)
         .await
         .context("failed to converge router-lo")?;
 
-    let bgp_peers: Vec<bird_conf::BgpPeer> = cfg
-        .bgp_peers
-        .iter()
-        .map(|p| bird_conf::BgpPeer {
-            name: p.name.clone(),
-            address: p
-                .address
-                .parse()
-                .expect("bgp_peers[].address already validated as IPv6 by config::validate"),
-        })
-        .collect();
-    let announce: Vec<bird_conf::AnnounceRoute> = cfg
-        .announce
-        .iter()
-        .map(|a| bird_conf::AnnounceRoute {
-            net: a.net.clone(),
-            label: a.label.clone().unwrap_or_default(),
-        })
-        .collect();
-
     let ctx = Arc::new(RouterState {
-        identity_loopback: loopback,
-        identity_ipv6_loopback: ipv6_loopback,
-        as_number: cfg.bgp_as,
-        ospf_interfaces: cfg.ospf_interfaces,
-        direct_interfaces: cfg.direct_interfaces,
-        bfd: cfg.bfd,
-        bgp_peers,
-        announce,
-        learn: cfg.learn,
+        inputs,
         bypass_cfg: cfg.bypass,
         metrics: cfg.metrics,
         bypass_cache: Mutex::new(None),
@@ -160,12 +123,7 @@ async fn run() -> Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let bypass_routes = current_bypass_routes(&ctx).await;
-    let initial_conf = bird_conf::render(
-        &ctx.template,
-        identity(&ctx),
-        ctx.as_number,
-        &render_inputs(&ctx, &bypass_routes),
-    )?;
+    let initial_conf = ctx.inputs.render(&ctx.template, &bypass_routes)?;
     tokio::fs::write(BIRD_CONF_PATH, &initial_conf)
         .await
         .with_context(|| format!("failed to write {BIRD_CONF_PATH}"))?;
@@ -207,46 +165,6 @@ async fn run() -> Result<()> {
     anyhow::bail!("bird exited unexpectedly: {status}");
 }
 
-fn identity(ctx: &RouterState) -> bird_conf::RouterIdentity {
-    bird_conf::RouterIdentity {
-        loopback: ctx.identity_loopback,
-        ipv6_loopback: ctx.identity_ipv6_loopback,
-    }
-}
-
-fn render_inputs<'a>(
-    ctx: &'a RouterState,
-    bypass_routes: &'a [bird_conf::BypassRoute],
-) -> bird_conf::RenderInputs<'a> {
-    bird_conf::RenderInputs {
-        ospf_interfaces: &ctx.ospf_interfaces,
-        bgp_peers: &ctx.bgp_peers,
-        bypass: bypass_routes,
-        announce: &ctx.announce,
-        learn: &ctx.learn,
-        direct_interfaces: &ctx.direct_interfaces,
-        bfd: ctx.bfd.as_ref(),
-    }
-}
-
-/// Splits `cfg.node.loopback_addresses` into its (already `config::validate`d) single IPv4 and
-/// single IPv6 entry.
-fn node_loopbacks(cfg: &RouterConfig) -> Result<(Ipv4Addr, Ipv6Addr)> {
-    let mut v4 = None;
-    let mut v6 = None;
-    for addr in &cfg.node.loopback_addresses {
-        let (addr, _prefix) = config::parse_loopback_address(addr)?;
-        match addr {
-            IpAddr::V4(a) => v4 = Some(a),
-            IpAddr::V6(a) => v6 = Some(a),
-        }
-    }
-    Ok((
-        v4.context("node.loopback_addresses has no IPv4 entry (should have been caught by config::validate)")?,
-        v6.context("node.loopback_addresses has no IPv6 entry (should have been caught by config::validate)")?,
-    ))
-}
-
 /// Polls for `bird::BIRD_CONTROL_SOCKET` to appear after spawning `bird` - bounded (10s at
 /// 100ms), rather than assuming it's instant: failing loudly here (causing this whole process to
 /// exit, same as any other startup failure) is preferable to the background loops below silently
@@ -267,14 +185,8 @@ async fn wait_for_control_socket() -> Result<()> {
 
 async fn reconcile(ctx: &RouterState, bypass_routes: &[bird_conf::BypassRoute]) -> Result<()> {
     let _guard = ctx.render_lock.lock().await;
-    bird::reconcile(
-        Path::new(BIRD_CONF_PATH),
-        &ctx.template,
-        identity(ctx),
-        ctx.as_number,
-        &render_inputs(ctx, bypass_routes),
-    )
-    .await
+    let desired = ctx.inputs.render(&ctx.template, bypass_routes)?;
+    bird::reconcile(Path::new(BIRD_CONF_PATH), &desired).await
 }
 
 /// Bounded retry budget for a resolve failure with *nothing cached yet* - only relevant the very
@@ -366,7 +278,7 @@ const BIRD_HEALTH_ESCALATE_AFTER: u32 = 8;
 /// `bird::protocols_healthy`'s and `bird::force_reconfigure`'s doc comments for what this
 /// recovers from and why a config-diff-gated reconcile alone can never catch it.
 async fn bird_health_watchdog(ctx: Arc<RouterState>) -> ! {
-    let exact_ifaces = bird::exact_iface_names(&ctx.ospf_interfaces);
+    let exact_ifaces = bird::exact_iface_names(&ctx.inputs.ospf_interfaces);
     let mut tick = tokio::time::interval(BIRD_HEALTH_CHECK_INTERVAL);
     let mut consecutive_unhealthy: u32 = 0;
     loop {
@@ -380,7 +292,7 @@ async fn bird_health_watchdog(ctx: Arc<RouterState>) -> ! {
                 consecutive_unhealthy += 1;
                 if consecutive_unhealthy >= BIRD_HEALTH_ESCALATE_AFTER {
                     tracing::error!(
-                        ospf_interfaces = ?ctx.ospf_interfaces,
+                        ospf_interfaces = ?ctx.inputs.ospf_interfaces,
                         consecutive_unhealthy,
                         "BIRD still hasn't converged to the last-rendered OSPF interfaces/BGP \
                          peers after repeated re-nudges - likely a permanent misconfiguration \
@@ -389,7 +301,7 @@ async fn bird_health_watchdog(ctx: Arc<RouterState>) -> ! {
                     );
                 } else {
                     tracing::warn!(
-                        ospf_interfaces = ?ctx.ospf_interfaces,
+                        ospf_interfaces = ?ctx.inputs.ospf_interfaces,
                         "BIRD hasn't converged to the last-rendered OSPF interfaces/BGP peers, re-nudging"
                     );
                 }
