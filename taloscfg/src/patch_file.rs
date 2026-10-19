@@ -1,10 +1,11 @@
 //! One host's patch file: the `patch` documents aimed at it, then an `ExtensionServiceConfig`
 //! document for each of `awg`, `router` and - if the host gets a ruleset - `nftables`, carrying
-//! that daemon's config once the daemon's own `validate()` accepts it.
+//! that daemon's config once the daemon's own `validate()` accepts it, and any files the `patch`
+//! documents add to it.
 
 use crate::render;
 use crate::secrets::ResolvedSecrets;
-use crate::slipmesh_file::SlipmeshFile;
+use crate::slipmesh_file::{GENERATED, HostDocument, SlipmeshFile};
 use anyhow::{Context, Result};
 
 /// What opens every patch file this tool writes.
@@ -17,33 +18,70 @@ struct ExtensionServiceConfig<'a> {
     api_version: &'a str,
     kind: &'a str,
     name: &'a str,
-    config_files: [ConfigFile<'a>; 1],
+    config_files: Vec<ConfigFile>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct ConfigFile<'a> {
-    mount_path: &'a str,
-    content: &'a str,
+struct ConfigFile {
+    mount_path: String,
+    content: String,
 }
 
-/// Renders one owned `ExtensionServiceConfig` document: `name`/`mountPath` fixed by convention,
-/// `inner_yaml` - the daemon's own already-serialized config - as the file's content.
+/// The generated `ExtensionServiceConfig` document `name`: its own file, holding `inner_yaml` -
+/// the daemon's own already-serialized config - and then the files `slipmesh.yaml` adds to it.
 fn render_extension_service_document(
     name: &str,
-    mount_path: &str,
     inner_yaml: &str,
+    added: Vec<ConfigFile>,
 ) -> Result<String> {
+    let (_, mount_path) = GENERATED
+        .iter()
+        .find(|(n, _)| *n == name)
+        .expect("only generated documents are rendered here");
+    let generated = ConfigFile {
+        mount_path: mount_path.to_string(),
+        content: inner_yaml.to_string(),
+    };
     let document = ExtensionServiceConfig {
         api_version: "v1alpha1",
         kind: "ExtensionServiceConfig",
         name,
-        config_files: [ConfigFile {
-            mount_path,
-            content: inner_yaml,
-        }],
+        config_files: std::iter::once(generated).chain(added).collect(),
     };
     yaml_serde::to_string(&document).context("serializing an ExtensionServiceConfig document")
+}
+
+/// The files the `patch` documents in `patches` add to the generated document `name` - taken out
+/// of `patches`, since Talos takes one document per name and the generated one carries them.
+fn take_added_files(patches: &mut Vec<HostDocument>, name: &str) -> Result<Vec<ConfigFile>> {
+    let identity = format!("ExtensionServiceConfig/{name}");
+    let Some(index) = patches.iter().position(|p| p.identity == identity) else {
+        return Ok(Vec::new());
+    };
+    match patches.remove(index).value.get("configFiles") {
+        Some(files) => yaml_serde::from_value(files.clone())
+            .with_context(|| format!("the `configFiles` slipmesh.yaml adds to {name:?}")),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Refuses a router template the node would fail on: one that does not compile, reads a variable
+/// the daemon does not supply, or fails to render this node's config. Bypass routes are resolved
+/// on the node, so it renders with none.
+fn validate_router_template(
+    files: &[ConfigFile],
+    cfg: &router::config::RouterConfig,
+) -> Result<()> {
+    let Some(file) = files
+        .iter()
+        .find(|f| f.mount_path == router::bird_conf::TEMPLATE_PATH)
+    else {
+        return Ok(());
+    };
+    let template = router::bird_conf::compile(file.content.clone())?;
+    router::bird_conf::StaticInputs::from_config(cfg)?.render(&template, &[])?;
+    Ok(())
 }
 
 /// The patch file of `host`, as the text written to disk.
@@ -63,29 +101,27 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
             .with_context(|| format!("rendered nftables config for node {host:?} is invalid"))?;
     }
 
-    let patches: Vec<String> = file
-        .patches_for(host)?
-        .into_iter()
-        .map(|patch| patch.text)
-        .collect();
+    let mut patches = file.patches_for(host)?;
+    let awg_files = take_added_files(&mut patches, "awg")?;
+    let router_files = take_added_files(&mut patches, "router")?;
+    let nftables_files = take_added_files(&mut patches, "nftables")?;
+    validate_router_template(&router_files, &router_cfg)
+        .with_context(|| format!("the router template for node {host:?} is invalid"))?;
+    let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
 
     let mut generated = vec![
-        render_extension_service_document(
-            "awg",
-            "/etc/talos-extensions/awg.yaml",
-            &yaml_serde::to_string(&awg_cfg)?,
-        )?,
+        render_extension_service_document("awg", &yaml_serde::to_string(&awg_cfg)?, awg_files)?,
         render_extension_service_document(
             "router",
-            "/etc/talos-extensions/router.yaml",
             &yaml_serde::to_string(&router_cfg)?,
+            router_files,
         )?,
     ];
     if let Some(cfg) = &nftables_cfg {
         generated.push(render_extension_service_document(
             "nftables",
-            "/etc/talos-extensions/nftables.yaml",
             &yaml_serde::to_string(cfg)?,
+            nftables_files,
         )?);
     }
 
@@ -163,6 +199,132 @@ ruleset: "table inet x {}"
         assert!(!b.contains("disk:"), "{b}");
         assert!(generated_document(&b, "awg").is_some());
         assert!(generated_document(&b, "nftables").is_none());
+    }
+
+    fn with_router_files(files: &[(&str, &str)]) -> String {
+        let mut raw = SLIPMESH.to_string();
+        for (meta, template) in files {
+            raw.push_str(&format!(
+                "---
+slipmesh:
+  kind: patch
+{meta}apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: router
+configFiles:
+  - mountPath: {}
+    content: {template:?}
+",
+                router::bird_conf::TEMPLATE_PATH
+            ));
+        }
+        raw
+    }
+
+    fn render_raw(raw: &str, host: &str) -> Result<String> {
+        let file = SlipmeshFile::parse(raw).unwrap();
+        let (resolved, _) = secrets::resolve(file.topology());
+        render(&file, &resolved, host)
+    }
+
+    fn router_files(patch: &str) -> Vec<(String, String)> {
+        let documents: Vec<yaml_serde::Value> = {
+            use serde::Deserialize;
+            yaml_serde::Deserializer::from_str(patch)
+                .map(|document| yaml_serde::Value::deserialize(document).unwrap())
+                .filter(|value| {
+                    value["kind"] == "ExtensionServiceConfig" && value["name"] == "router"
+                })
+                .collect()
+        };
+        assert_eq!(documents.len(), 1, "one router document: {patch}");
+        documents[0]["configFiles"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["mountPath"].as_str().unwrap().to_string(),
+                    f["content"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn files_added_to_a_generated_document_follow_its_own() {
+        let raw = with_router_files(&[(
+            "",
+            "router id {{ loopback }};
+",
+        )]);
+        let files = router_files(&render_raw(&raw, "a").unwrap());
+        let paths: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "/etc/talos-extensions/router.yaml",
+                router::bird_conf::TEMPLATE_PATH
+            ]
+        );
+        assert_eq!(
+            files[1].1,
+            "router id {{ loopback }};
+"
+        );
+    }
+
+    #[test]
+    fn a_template_for_one_host_replaces_the_default_there_only() {
+        let raw = with_router_files(&[
+            (
+                "",
+                "router id {{ loopback }};
+",
+            ),
+            (
+                "  include: [b]
+",
+                "# b
+router id {{ loopback }};
+",
+            ),
+        ]);
+        assert_eq!(
+            router_files(&render_raw(&raw, "a").unwrap())[1].1,
+            "router id {{ loopback }};
+"
+        );
+        let b = router_files(&render_raw(&raw, "b").unwrap());
+        assert_eq!(b.len(), 2);
+        assert_eq!(
+            b[1].1,
+            "# b
+router id {{ loopback }};
+"
+        );
+    }
+
+    #[test]
+    fn a_router_template_reading_an_unknown_variable_is_not_rendered() {
+        let raw = with_router_files(&[(
+            "",
+            "{% if false %}{{ lopback }}{% endif %}
+",
+        )]);
+        let err = render_raw(&raw, "a").unwrap_err();
+        assert!(format!("{err:#}").contains("lopback"), "{err:#}");
+    }
+
+    #[test]
+    fn a_router_template_that_fails_to_render_is_not_rendered() {
+        let raw = with_router_files(&[(
+            "",
+            "{{ bfd.min_rx_ms }}
+",
+        )]);
+        let err = render_raw(&raw, "a").unwrap_err();
+        assert!(format!("{err:#}").contains("router"), "{err:#}");
     }
 
     #[test]

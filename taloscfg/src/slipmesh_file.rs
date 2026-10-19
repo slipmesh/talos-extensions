@@ -18,9 +18,14 @@ use yaml_serde::Value;
 /// hosts it reaches.
 pub const META_KEY: &str = "slipmesh";
 
-/// The `ExtensionServiceConfig` names this tool generates itself, and so refuses in a `patch`
-/// document. Talos keeps `name` unique per `kind`, so the pair is the whole identity.
-pub const OWNED_NAMES: [&str; 3] = ["awg", "router", "nftables"];
+/// The `ExtensionServiceConfig`s this tool generates, by name, with the file each one mounts. Talos
+/// keeps `name` unique per `kind`, so a `patch` document of one of these names is that same
+/// document: it may add files to it, and nothing else - not the generated file itself.
+pub const GENERATED: [(&str, &str); 3] = [
+    ("awg", "/etc/talos-extensions/awg.yaml"),
+    ("router", "/etc/talos-extensions/router.yaml"),
+    ("nftables", "/etc/talos-extensions/nftables.yaml"),
+];
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -140,6 +145,8 @@ pub struct HostDocument {
     /// `kind`, plus `/name` when the document has one.
     pub identity: String,
     pub text: String,
+    /// What `text` serializes - for the documents whose fields this tool reads on.
+    pub value: Value,
 }
 
 pub struct SlipmeshFile {
@@ -265,11 +272,33 @@ impl SlipmeshFile {
             };
             if let Some(name) = &identity.name
                 && kind == "ExtensionServiceConfig"
-                && OWNED_NAMES.contains(&name.as_str())
+                && let Some((_, generated)) = GENERATED.iter().find(|(n, _)| n == name)
             {
-                bail!(
-                    "{}: `ExtensionServiceConfig` {name:?} is generated from the network, not \
-                     written by hand",
+                let others: Vec<&str> = patch
+                    .value
+                    .as_mapping()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|(key, _)| key.as_str())
+                    .filter(|key| !["apiVersion", "kind", "name", "configFiles"].contains(key))
+                    .collect();
+                ensure!(
+                    others.is_empty(),
+                    "{}: `ExtensionServiceConfig` {name:?} is generated from the network - a \
+                     patch may add `configFiles` to it and nothing else, not {others:?}",
+                    patch.at()
+                );
+                let over_generated = patch
+                    .value
+                    .get("configFiles")
+                    .and_then(Value::as_sequence)
+                    .into_iter()
+                    .flatten()
+                    .any(|f| f.get("mountPath").and_then(Value::as_str) == Some(generated));
+                ensure!(
+                    !over_generated,
+                    "{}: {generated} is the file generated for {name:?} - add files next to it, \
+                     not over it",
                     patch.at()
                 );
             }
@@ -363,6 +392,7 @@ impl SlipmeshFile {
                 Ok(HostDocument {
                     identity: identity.to_string(),
                     text,
+                    value: document,
                 })
             })
             .collect()
@@ -707,17 +737,54 @@ extraArgs:
         assert!(err.contains("kind"), "{err}");
     }
 
+    fn generated_with(name: &str, body: &str) -> String {
+        format!(
+            "slipmesh:
+  kind: patch
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: {name}
+{body}"
+        )
+    }
+
     #[test]
-    fn a_patch_claiming_a_generated_document_is_refused() {
+    fn a_patch_adding_files_to_a_generated_document_is_accepted() {
         for name in ["awg", "router", "nftables"] {
-            let err = error(&file(&[
-                NETWORK,
-                &format!(
-                    "slipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: {name}\n"
-                ),
-            ]));
-            assert!(err.contains(name), "{err}");
+            let patch = generated_with(
+                name,
+                "configFiles:
+  - mountPath: /etc/talos-extensions/extra
+    content: x
+",
+            );
+            SlipmeshFile::parse(&file(&[NETWORK, &patch])).unwrap();
         }
+    }
+
+    #[test]
+    fn a_patch_setting_more_than_files_on_a_generated_document_is_refused() {
+        let patch = generated_with(
+            "router",
+            "environment:
+  - RUST_LOG=debug
+",
+        );
+        let err = error(&file(&[NETWORK, &patch]));
+        assert!(err.contains("configFiles"), "{err}");
+    }
+
+    #[test]
+    fn a_patch_replacing_the_generated_file_is_refused() {
+        let patch = generated_with(
+            "router",
+            "configFiles:
+  - mountPath: /etc/talos-extensions/router.yaml
+    content: x
+",
+        );
+        let err = error(&file(&[NETWORK, &patch]));
+        assert!(err.contains("/etc/talos-extensions/router.yaml"), "{err}");
     }
 
     // The model each host is rendered from.
