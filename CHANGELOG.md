@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-19
+
+### Added ✨
+
+- Add templates compiled from text at runtime
+- Read the bird.conf template from the node's config
+- Let slipmesh.yaml add files to the generated documents
+- Apply a ruleset template given as its own file
+- Write the reference templates into slipmesh.yaml when it has none
+- Hand the ruleset to the previous nftables daemon too
+
+### Build system 🛠️
+
+- Update dependencies
+
+### Changed 🔧
+
+- Render bird.conf with minijinja
+- Build the render inputs from router.yaml in the library
+
+### Documentation 📚
+
+- Describe the router and nftables templates in slipmesh.yaml
+- Say the ruleset template has placeholders for node values
+
+### Fixed 🐛
+
+- Announce the roadwarrior routes awg installs over ibgp
+- Drop the runs of spaces from three error messages
+- Refuse a node no router template reaches
+
+### Tests ✅
+
+- Pin the rendered bird.conf byte for byte
+- Drop the tests other tests already cover
+
 ## [0.3.3] - 2026-10-01
 
 ### Build system 🛠️
