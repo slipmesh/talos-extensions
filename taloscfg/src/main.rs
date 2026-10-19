@@ -1,5 +1,6 @@
 //! `generate`: reads `slipmesh.yaml`, writes whatever secrets the topology lacks into the fields of
-//! `slipmesh.yaml` they belong to, computes every target node's `awg`/`router` config,
+//! `slipmesh.yaml` they belong to, and the reference templates of the ones it does not set (see
+//! `defaults`) as documents of their own, computes every target node's `awg`/`router` config,
 //! validates each through the real daemon's own `validate()` (not a re-implementation - see the
 //! lib-target refactor this crate depends on), and writes `patches/<node>.yaml`: the `patch`
 //! documents aimed at that node, then the generated `ExtensionServiceConfig` documents. A patch
@@ -14,7 +15,7 @@ use clap::{Parser, Subcommand};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use taloscfg::slipmesh_file::SlipmeshFile;
-use taloscfg::{edit, mesh_config, patch_file, roadwarrior, secrets};
+use taloscfg::{defaults, edit, mesh_config, patch_file, roadwarrior, secrets};
 use yaml_rt::YamlDoc;
 
 #[derive(Parser)]
@@ -308,10 +309,13 @@ fn pool_document(
 /// Writes `yaml` with its edits to `config_path` - once the result still reads as a valid
 /// `slipmesh.yaml`, so a bad edit is refused instead of written.
 fn write_edits(config_path: &Path, yaml: &YamlDoc) -> Result<()> {
-    let updated = yaml.to_string();
-    SlipmeshFile::parse(&updated)
+    write_text(config_path, &yaml.to_string())
+}
+
+fn write_text(config_path: &Path, updated: &str) -> Result<()> {
+    SlipmeshFile::parse(updated)
         .context("the edited slipmesh.yaml does not read back - not written")?;
-    write_replacing(config_path, &updated)
+    write_replacing(config_path, updated)
 }
 
 /// One host's patch file: what is on disk now, and what it would become.
@@ -330,21 +334,47 @@ fn generate(
     patches_dir: &Path,
 ) -> Result<()> {
     let (_, mut yaml, file) = read_slipmesh(config_path)?;
+    if let Some(n) = node {
+        anyhow::ensure!(file.hosts().contains(&n), "unknown node {n:?}");
+    }
+
+    let (resolved, minted) = settle_secrets(config_path, &mut yaml, &file, check || diff)?;
+    let added = defaults::missing(&file);
+    let services: Vec<&str> = added.iter().map(|d| d.service).collect();
+    anyhow::ensure!(
+        !check || added.is_empty(),
+        "{} lacks the default templates of {services:?} - run `slipmesh-taloscfg generate` to \
+         write them",
+        config_path.display()
+    );
+    let updated = defaults::append(&yaml.to_string(), &added);
+    let file = if added.is_empty() {
+        file
+    } else {
+        SlipmeshFile::parse(&updated).context("slipmesh.yaml with the default templates")?
+    };
     let targets = match node {
-        Some(n) => {
-            anyhow::ensure!(file.hosts().contains(&n), "unknown node {n:?}");
-            vec![n]
-        }
+        Some(n) => vec![n],
         None => file.hosts(),
     };
 
-    let (resolved, minted) = settle_secrets(config_path, &mut yaml, &file, check || diff)?;
     // Every host is rendered and validated before anything is written, so a host that fails
     // leaves slipmesh.yaml and the patch files as they were rather than half of them new.
     let hosts = render_hosts(&file, &resolved, &targets, patches_dir)?;
-    if !minted.is_empty() {
-        write_edits(config_path, &yaml)?;
+    if !added.is_empty() && diff {
+        println!(
+            "{}: the default templates of {services:?} would be added",
+            config_path.display()
+        );
+    } else if !minted.is_empty() || !added.is_empty() {
+        write_text(config_path, &updated)?;
         report_minted(&minted, config_path);
+        if !added.is_empty() {
+            println!(
+                "added the default templates of {services:?} to {}",
+                config_path.display()
+            );
+        }
     }
 
     for host in &hosts {
@@ -640,6 +670,50 @@ installer:
     }
 
     #[test]
+    fn generate_writes_the_default_templates_into_slipmesh_yaml() {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
+        let file = SlipmeshFile::parse(&paths.config()).unwrap();
+        assert!(defaults::missing(&file).is_empty());
+        for host in ["a", "b", "c", "d"] {
+            let patch = paths.patch(host).unwrap();
+            for default in &defaults::DEFAULT_FILES {
+                assert!(patch.contains(default.mount_path), "{host}: {patch}");
+            }
+        }
+    }
+
+    /// The topology with its secrets written down and the default templates not.
+    fn setup_without_defaults() -> Paths {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
+        let config = paths.config();
+        let first_default = config
+            .find("---\nslipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: router\n")
+            .expect(&config);
+        std::fs::write(&paths.config, &config[..first_default]).unwrap();
+        std::fs::remove_dir_all(&paths.patches).unwrap();
+        paths
+    }
+
+    #[test]
+    fn a_check_without_the_default_templates_fails_and_writes_nothing() {
+        let paths = setup_without_defaults();
+        let before = paths.snapshot();
+        let err = paths.generate(None, true, false).unwrap_err();
+        assert!(format!("{err:#}").contains("generate"), "{err:#}");
+        assert_eq!(paths.snapshot(), before);
+    }
+
+    #[test]
+    fn a_diff_without_the_default_templates_shows_them_and_writes_nothing() {
+        let paths = setup_without_defaults();
+        let before = paths.snapshot();
+        paths.generate(None, false, true).unwrap();
+        assert_eq!(paths.snapshot(), before);
+    }
+
+    #[test]
     fn two_dry_runs_render_the_same() {
         let paths = setup("");
         paths.generate(None, false, false).unwrap();
@@ -812,7 +886,8 @@ clients:
         let topology = paths.topology();
         assert!(topology.roadwarriors[0].private_key.is_some());
         assert_eq!(topology.roadwarriors[0].clients[0].name, "dave");
-        paths.generate(None, true, false).unwrap();
+        // A dry run refuses to mint anything.
+        paths.generate(None, false, true).unwrap();
     }
 
     #[test]

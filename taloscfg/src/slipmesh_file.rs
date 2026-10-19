@@ -375,6 +375,21 @@ impl SlipmeshFile {
             .collect()
     }
 
+    /// Whether a `patch` document, for whichever hosts, sets the file `mount_path` of
+    /// `ExtensionServiceConfig` `service`.
+    pub fn sets_file(&self, service: &str, mount_path: &str) -> bool {
+        self.patches
+            .iter()
+            .filter(|p| {
+                let identity = Identity::of(&p.value);
+                identity.kind.as_deref() == Some("ExtensionServiceConfig")
+                    && identity.name.as_deref() == Some(service)
+            })
+            .filter_map(|p| p.value.get("configFiles").and_then(Value::as_sequence))
+            .flatten()
+            .any(|f| f.get("mountPath").and_then(Value::as_str) == Some(mount_path))
+    }
+
     fn ensure_host(&self, host: &str) -> Result<()> {
         ensure!(
             self.hosts.iter().any(|h| h == host),
