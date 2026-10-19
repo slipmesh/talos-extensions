@@ -65,22 +65,65 @@ fn take_added_files(patches: &mut Vec<HostDocument>, name: &str) -> Result<Vec<C
     }
 }
 
+const NFTABLES_IDENTITY: &str = "ExtensionServiceConfig/nftables";
+
+/// Where the `nftables` daemon read its ruleset before it took a template.
+const LEGACY_NFTABLES_PATH: &str = "/etc/talos-extensions/nftables.yaml";
+
+/// The ruleset template an `nftables` document sets, if it sets one.
+fn nftables_template(document: &yaml_serde::Value) -> Option<String> {
+    document
+        .get("configFiles")?
+        .as_sequence()?
+        .iter()
+        .find(|f| {
+            f.get("mountPath").and_then(yaml_serde::Value::as_str)
+                == Some(nftables::template::TEMPLATE_PATH)
+        })?
+        .get("content")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 /// Refuses a ruleset template the node would fail on: one that does not compile, or reads a
 /// variable the daemon does not supply. Its values exist only on the node, so it is not rendered.
 fn validate_nftables_template(patches: &[HostDocument]) -> Result<()> {
-    let files = patches
-        .iter()
-        .filter(|p| p.identity == "ExtensionServiceConfig/nftables")
-        .filter_map(|p| p.value.get("configFiles"))
-        .filter_map(yaml_serde::Value::as_sequence)
-        .flatten();
-    for file in files {
-        if file.get("mountPath").and_then(yaml_serde::Value::as_str)
-            == Some(nftables::template::TEMPLATE_PATH)
-            && let Some(content) = file.get("content").and_then(yaml_serde::Value::as_str)
-        {
-            nftables::template::compile(content)?;
+    for document in patches.iter().filter(|p| p.identity == NFTABLES_IDENTITY) {
+        if let Some(template) = nftables_template(&document.value) {
+            nftables::template::compile(template)?;
         }
+    }
+    Ok(())
+}
+
+/// Adds the ruleset as `nftables.yaml` as well, the file the daemon read before it took a
+/// template. A node that falls back to its previous boot slot runs that daemon against this config,
+/// and without the file it would apply no ruleset at all. Remove once no node can fall back to a
+/// release older than the template.
+fn add_legacy_nftables_file(patches: &mut [HostDocument]) -> Result<()> {
+    #[derive(serde::Serialize)]
+    struct LegacyConfig {
+        ruleset: String,
+    }
+    for document in patches
+        .iter_mut()
+        .filter(|p| p.identity == NFTABLES_IDENTITY)
+    {
+        let Some(ruleset) = nftables_template(&document.value) else {
+            continue;
+        };
+        let legacy = yaml_serde::to_value(ConfigFile {
+            mount_path: LEGACY_NFTABLES_PATH.to_string(),
+            content: yaml_serde::to_string(&LegacyConfig { ruleset })?,
+        })?;
+        document
+            .value
+            .get_mut("configFiles")
+            .and_then(yaml_serde::Value::as_sequence_mut)
+            .context("an nftables document with a template has configFiles")?
+            .push(legacy);
+        document.text =
+            yaml_serde::to_string(&document.value).context("serializing the nftables document")?;
     }
     Ok(())
 }
@@ -122,6 +165,7 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
         .with_context(|| format!("the router template for node {host:?} is invalid"))?;
     validate_nftables_template(&patches)
         .with_context(|| format!("the nftables ruleset for node {host:?} is invalid"))?;
+    add_legacy_nftables_file(&mut patches)?;
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
 
     let generated = vec![
@@ -347,5 +391,31 @@ router id {{ loopback }};
         let (resolved, _) = secrets::resolve(file.topology());
         let err = render(&file, &resolved, "a").unwrap_err();
         assert!(format!("{err:#}").contains("nftables"), "{err:#}");
+    }
+
+    #[test]
+    fn a_ruleset_also_goes_out_as_the_file_the_previous_daemon_reads() {
+        let a = rendered("a");
+        let document = generated_document(&a, "nftables").unwrap();
+        let files: Vec<(&str, &str)> = document["configFiles"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["mountPath"].as_str().unwrap(),
+                    f["content"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            files.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
+            [
+                "/etc/talos-extensions/nftables.conf.j2",
+                "/etc/talos-extensions/nftables.yaml"
+            ]
+        );
+        let legacy: yaml_serde::Value = yaml_serde::from_str(files[1].1).unwrap();
+        assert_eq!(legacy["ruleset"].as_str(), Some(files[0].1));
     }
 }

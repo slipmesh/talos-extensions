@@ -432,7 +432,10 @@ file. This is how `router` gets its template, `/etc/talos-extensions/router.conf
 `nftables` - a document written entirely by hand - its ruleset,
 `/etc/talos-extensions/nftables.conf.j2`. Both are checked as their daemon will check them, and
 the `router` template is rendered with each node's config, so one that would fail on a node fails
-`generate` instead.
+`generate` instead. The `nftables` document also gets the ruleset as
+`/etc/talos-extensions/nftables.yaml`, the file the daemon read before it took a template: a node
+that falls back to its previous boot slot runs that daemon against this config, and would
+otherwise apply no ruleset at all. That copy goes once no node can fall back that far.
 
 When no `patch` document sets one of those two files, for any node, `generate` writes the reference
 template into `slipmesh.yaml` as a document of its own that reaches every node - `--check` fails
