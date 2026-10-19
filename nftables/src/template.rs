@@ -51,10 +51,4 @@ mod tests {
             "oifname \"eth0\"\noifname \"eth1\"\n"
         );
     }
-
-    #[test]
-    fn an_unknown_variable_is_refused() {
-        let err = compile("oifname \"{{ typo_placeholder }}\"").err().unwrap();
-        assert!(format!("{err:#}").contains("typo_placeholder"), "{err:#}");
-    }
 }

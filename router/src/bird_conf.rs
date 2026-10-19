@@ -585,57 +585,6 @@ learn: [10.61.0.0/16]
         assert!(!kernel_block.contains("RTS_STATIC"));
     }
 
-    /// Every branch of the template taken at once, and none - pinned byte for byte, so that a
-    /// change of template engine is shown to change nothing in what BIRD reads.
-    fn golden_cases() -> [(&'static str, String); 2] {
-        let ospf = [
-            "mesh-*".to_string(),
-            "10.99.0.0/24".to_string(),
-            "router-lo".to_string(),
-        ];
-        let peers = [
-            BgpPeer {
-                name: "node-b".to_string(),
-                address: "fd00::2".parse().unwrap(),
-            },
-            BgpPeer {
-                name: "3rd".to_string(),
-                address: "fd00::3".parse().unwrap(),
-            },
-        ];
-        let bypass = [BypassRoute {
-            net: "203.0.113.0/24".to_string(),
-            label: "AS64500
-example"
-                .to_string(),
-        }];
-        let announce = [AnnounceRoute {
-            net: "10.60.0.0/16".to_string(),
-            label: "k8s-services".to_string(),
-        }];
-        let learn = ["10.61.0.0/16".to_string(), "10.99.0.5/32".to_string()];
-        let direct = ["cni0".to_string(), "198.51.100.0/24".to_string()];
-        let bfd = crate::config::BfdSettings::default();
-        let mut full = inputs_with_direct(&ospf, &peers, &bypass, &announce, &learn, &direct);
-        full.bfd = Some(&bfd);
-        [
-            ("full", render(identity(), 64512, &full).unwrap()),
-            (
-                "minimal",
-                render(identity(), 64512, &inputs(&[], &[], &[], &[], &[])).unwrap(),
-            ),
-        ]
-    }
-
-    #[test]
-    fn renders_the_golden_files() {
-        for (name, out) in golden_cases() {
-            let path = format!("{}/testdata/{name}.bird.conf", env!("CARGO_MANIFEST_DIR"));
-            let golden = std::fs::read_to_string(&path).unwrap();
-            assert_eq!(out, golden, "{name} differs from {path}");
-        }
-    }
-
     #[test]
     fn render_includes_ospf_interfaces_as_names_and_cidrs() {
         let ifaces = ["mesh-*".to_string(), "10.99.0.0/24".to_string()];

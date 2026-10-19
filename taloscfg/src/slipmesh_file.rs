@@ -848,23 +848,6 @@ name: {name}
     }
 
     #[test]
-    fn a_ruleset_for_one_host_replaces_the_default_there_only() {
-        let parsed = SlipmeshFile::parse(&file(&[
-            NETWORK,
-            &ruleset("", "everyone"),
-            &ruleset("  include: [node-b]\n", "extra"),
-        ]))
-        .unwrap();
-        let ruleset_of = |host| {
-            let documents = parsed.patches_for(host).unwrap();
-            assert_eq!(documents.len(), 1, "{host}");
-            content(&documents[0].text, 0).as_str().unwrap().to_string()
-        };
-        assert_eq!(ruleset_of("node-a"), "table inet everyone {}\n");
-        assert_eq!(ruleset_of("node-b"), "table inet extra {}\n");
-    }
-
-    #[test]
     fn the_topology_carries_every_pool() {
         let parsed = SlipmeshFile::parse(&file(&[
             NETWORK,

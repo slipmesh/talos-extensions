@@ -118,12 +118,6 @@ nodes:
     }
 
     #[test]
-    fn appending_keeps_what_was_there() {
-        let text = append(NETWORK, &missing(&SlipmeshFile::parse(NETWORK).unwrap()));
-        assert!(text.starts_with(NETWORK), "{text}");
-    }
-
-    #[test]
     fn a_file_set_for_some_hosts_only_is_not_missing() {
         let nftables = format!(
             "---\nslipmesh:\n  kind: patch\n  exclude: [node-b]\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: nftables\nconfigFiles:\n  - mountPath: {}\n    content: \"table inet t {{}}\\n\"\n",

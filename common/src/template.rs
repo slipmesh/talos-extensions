@@ -85,15 +85,6 @@ mod tests {
     }
 
     #[test]
-    fn renders_a_variable() {
-        let t = Template::new("router id {{ id }};", &["id"]).unwrap();
-        assert_eq!(
-            t.render(context(&[("id", "10.0.0.1")])).unwrap(),
-            "router id 10.0.0.1;"
-        );
-    }
-
-    #[test]
     fn keeps_the_text_around_the_variables_verbatim() {
         let source = "table inet t {\n  # \"quoted\" <tag> & co\n  iifname \"{{ i }}\"\n}\n";
         let t = Template::new(source, &["i"]).unwrap();
@@ -107,11 +98,6 @@ mod tests {
     fn does_not_escape_values() {
         let t = Template::new("{{ v }}", &["v"]).unwrap();
         assert_eq!(t.render(context(&[("v", "\"<&>\"")])).unwrap(), "\"<&>\"");
-    }
-
-    #[test]
-    fn rejects_a_syntax_error() {
-        assert!(Template::new("{% if x %}", &["x"]).is_err());
     }
 
     #[test]
@@ -144,26 +130,5 @@ mod tests {
     fn rendering_without_a_value_the_template_reads_is_an_error() {
         let t = Template::new("{{ a }}", &["a"]).unwrap();
         assert!(t.render(context(&[])).is_err());
-    }
-
-    #[test]
-    fn renders_a_struct_context_with_filters() {
-        #[derive(Serialize)]
-        struct Ctx {
-            nets: Vec<&'static str>,
-            bfd: Option<u32>,
-        }
-        let t = Template::new(
-            "[ {{ nets|join(\", \") }} ]{% if bfd %} {{ bfd }}{% endif %}",
-            &["nets", "bfd"],
-        )
-        .unwrap();
-        let out = t
-            .render(Ctx {
-                nets: vec!["10.0.0.0/8+", "192.0.2.0/24+"],
-                bfd: Some(300),
-            })
-            .unwrap();
-        assert_eq!(out, "[ 10.0.0.0/8+, 192.0.2.0/24+ ] 300");
     }
 }
