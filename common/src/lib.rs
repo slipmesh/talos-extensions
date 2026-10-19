@@ -5,6 +5,7 @@ pub mod keys;
 #[cfg(feature = "netlink")]
 pub mod netlink;
 pub mod obfuscation;
+pub mod template;
 
 pub use obfuscation::Obfuscation;
 
