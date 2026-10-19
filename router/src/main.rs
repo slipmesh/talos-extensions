@@ -89,6 +89,13 @@ async fn run() -> Result<()> {
     let cfg: RouterConfig =
         yaml_serde::from_str(&raw).context("failed to parse config file as YAML")?;
     config::validate(&cfg).context("config validation failed")?;
+    // Read before anything on the node is touched: without a template there is no bird.conf to
+    // write, and nothing to fall back on - the template is the node's config, not this binary's.
+    let template_source = tokio::fs::read_to_string(bird_conf::TEMPLATE_PATH)
+        .await
+        .with_context(|| format!("failed to read template {}", bird_conf::TEMPLATE_PATH))?;
+    let template = bird_conf::compile(template_source)
+        .with_context(|| format!("template {} is invalid", bird_conf::TEMPLATE_PATH))?;
 
     tracing::info!(
         bgp_peers = cfg.bgp_peers.len(),
@@ -138,7 +145,7 @@ async fn run() -> Result<()> {
         metrics: cfg.metrics,
         bypass_cache: Mutex::new(None),
         render_lock: Mutex::new(()),
-        template: bird_conf::compile(bird_conf::REFERENCE_TEMPLATE)?,
+        template,
     });
 
     // Render and write bird.conf *before* spawning bird: this daemon controls startup order
