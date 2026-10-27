@@ -576,10 +576,12 @@ every crate here inherits that one version, and it is what an installed `slipmes
 reports for itself. Bumping only the tag leaves a binary that misnames its own version, which is
 how it read `0.1.0` at tag `v0.1.6`.
 
-Building a release artifact (cross-compiling a daemon and baking it into a Talos system extension)
-happens in the packaging repositories, not here - this repo only needs to produce a plain binary:
+CI builds every binary for the musl target on a runner of each arch and packs the four of them
+into `ghcr.io/slipmesh/talos-extensions`, published as `sha-<commit>` from `main` and `release-*` branches. A release tag
+retags that image and attaches the same binaries, copied out of it, to the GitHub Release with a
+`SHA256SUMS`. To reproduce one binary locally, build on a Linux host of that arch with
+`musl-tools` installed:
 
 ```sh
-cargo zigbuild --release --target x86_64-unknown-linux-musl -p awg
-cargo zigbuild --release --target aarch64-unknown-linux-musl -p awg
+cargo build --release --target x86_64-unknown-linux-musl -p awg
 ```
