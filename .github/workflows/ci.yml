@@ -14,32 +14,45 @@ permissions:
 jobs:
   rust:
     if: github.ref_type != 'tag'
-    uses: slipmesh/.github/.github/workflows/rust.yml@v1
+    uses: slipmesh/.github/.github/workflows/rust.yml@v1.1
     with:
       binaries: awg router nftables slipmesh-taloscfg
 
   image:
     needs: rust
     if: github.ref_type != 'tag'
-    uses: slipmesh/.github/.github/workflows/image.yml@v1
+    uses: slipmesh/.github/.github/workflows/image.yml@v1.1
     permissions:
       contents: read
       packages: write
 
+  tag:
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: slipmesh/.github/.github/workflows/tag-release.yml@v1.1
+    permissions:
+      contents: write
+
+  # Runs for a release commit tagged above, or for a tag pushed by hand.
   promote:
-    if: github.ref_type == 'tag'
-    uses: slipmesh/.github/.github/workflows/promote.yml@v1
+    needs: tag
+    if: ${{ !cancelled() && (github.ref_type == 'tag' || needs.tag.outputs.tag != '') }}
+    uses: slipmesh/.github/.github/workflows/promote.yml@v1.1
     permissions:
       contents: read
       packages: write
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
 
   release:
-    needs: promote
-    uses: slipmesh/.github/.github/workflows/release.yml@v1
+    needs: [tag, promote]
+    if: ${{ !cancelled() && needs.promote.result == 'success' }}
+    uses: slipmesh/.github/.github/workflows/release.yml@v1.1
     permissions:
       contents: write
       packages: read
     with:
+      tag: ${{ needs.tag.outputs.tag }}
       image-ref: ${{ needs.promote.outputs.image-ref }}
       prepare: |
         mkdir dist
