@@ -14,28 +14,28 @@ permissions:
 jobs:
   rust:
     if: github.ref_type != 'tag'
-    uses: slipmesh/.github/.github/workflows/rust.yml@ci/reusable-workflows
+    uses: slipmesh/.github/.github/workflows/rust.yml@v1
     with:
       binaries: awg router nftables slipmesh-taloscfg
 
   image:
     needs: rust
     if: github.ref_type != 'tag'
-    uses: slipmesh/.github/.github/workflows/image.yml@ci/reusable-workflows
+    uses: slipmesh/.github/.github/workflows/image.yml@v1
     permissions:
       contents: read
       packages: write
 
   promote:
     if: github.ref_type == 'tag'
-    uses: slipmesh/.github/.github/workflows/promote.yml@ci/reusable-workflows
+    uses: slipmesh/.github/.github/workflows/promote.yml@v1
     permissions:
       contents: read
       packages: write
 
   release:
     needs: promote
-    uses: slipmesh/.github/.github/workflows/release.yml@ci/reusable-workflows
+    uses: slipmesh/.github/.github/workflows/release.yml@v1
     permissions:
       contents: write
       packages: read
