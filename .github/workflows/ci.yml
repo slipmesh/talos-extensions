@@ -37,7 +37,7 @@ jobs:
         mkdir dist
         for arch in amd64 arm64; do
           # A scratch image has no command; the placeholder only lets the container be created.
-          id=$(docker create --platform "linux/$arch" "$IMAGE:sha-$GITHUB_SHA" /none)
+          id=$(docker create --platform "linux/$arch" "$IMAGE_REF" /none)
           for bin in awg router nftables slipmesh-taloscfg; do
             docker cp "$id:/usr/local/bin/$bin" "dist/$bin-linux-$arch"
           done
