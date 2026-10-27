@@ -574,7 +574,8 @@ needs a real Linux host with the `amneziawg` kernel module loaded and `CAP_NET_A
 `[workspace.package] version` and the tag are the same number, and the release commit moves both:
 every crate here inherits that one version, and it is what an installed `slipmesh-taloscfg`
 reports for itself. Bumping only the tag leaves a binary that misnames its own version, which is
-how it read `0.1.0` at tag `v0.1.6`.
+how it read `0.1.0` at tag `v0.1.6`. The Release PR workflow (Actions, then Release PR) opens that
+commit as a PR with `CHANGELOG.md` regenerated, and merging it tags the release.
 
 CI builds every binary for the musl target on a runner of each arch and packs the four of them
 into `ghcr.io/slipmesh/talos-extensions`, published as `sha-<commit>` from `main` and `release-*`
