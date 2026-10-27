@@ -111,12 +111,9 @@ async fn run() -> Result<()> {
         template,
     });
 
-    // Render and write bird.conf *before* spawning bird: this daemon controls startup order
-    // itself now (unlike the k8s original, where `router` and `bird` were independently
-    // scheduled sidecar containers racing to start first - see `slipmesh/bird`'s own
-    // "wait-for-config-file-to-appear" patch, written for exactly that race). `bird::reconcile`
-    // can't be used here - its diff-then-`birdc configure` path assumes bird is already running
-    // and listening, which it isn't yet.
+    // Render and write bird.conf *before* spawning bird, which refuses to start without it.
+    // `bird::reconcile` can't be used here - its diff-then-`birdc configure` path assumes bird is
+    // already running and listening, which it isn't yet.
     if let Some(parent) = Path::new(BIRD_CONF_PATH).parent() {
         tokio::fs::create_dir_all(parent)
             .await
