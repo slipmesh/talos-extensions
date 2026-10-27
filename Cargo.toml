@@ -22,13 +22,13 @@ anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
 # Templates read at runtime rather than compiled in: `builtins` for filters such as `join`,
 # `serde` to render from the daemons' own context structs.
-minijinja = { version = "3.0.1", default-features = false, features = ["builtins", "serde"] }
+minijinja = { version = "3.0.4", default-features = false, features = ["builtins", "serde"] }
 base64 = "0.23.1"
 futures = "0.3.34"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tokio = { version = "1.53.3" }
+tokio = { version = "1.54.1" }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
