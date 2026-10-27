@@ -26,13 +26,21 @@ jobs:
       contents: read
       packages: write
 
-  release:
+  promote:
     if: github.ref_type == 'tag'
+    uses: slipmesh/.github/.github/workflows/promote.yml@ci/reusable-workflows
+    permissions:
+      contents: read
+      packages: write
+
+  release:
+    needs: promote
     uses: slipmesh/.github/.github/workflows/release.yml@ci/reusable-workflows
     permissions:
       contents: write
-      packages: write
+      packages: read
     with:
+      image-ref: ${{ needs.promote.outputs.image-ref }}
       prepare: |
         mkdir dist
         for arch in amd64 arm64; do
