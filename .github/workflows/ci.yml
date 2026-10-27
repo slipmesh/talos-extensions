@@ -1,71 +1,60 @@
-# The three extension repositories cross-compile their daemons out of this workspace, so a
-# break here reaches an image without ever showing up in the repository that publishes it.
-# This is the only place that catches it before that happens.
+# A release builds nothing: its binaries are copied out of the image the tagged commit already
+# has, so what the release attaches is what the checks ran against.
 name: CI
 
 on:
   push:
     branches: ["**"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+  rust:
+    if: github.ref_type != 'tag'
+    uses: slipmesh/.github/.github/workflows/rust.yml@v1
+    with:
+      binaries: awg router nftables slipmesh-taloscfg
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+  image:
+    needs: rust
+    if: github.ref_type != 'tag'
+    uses: slipmesh/.github/.github/workflows/image.yml@v1
+    permissions:
+      contents: read
+      packages: write
 
-      - uses: Swatinem/rust-cache@v2
+  promote:
+    if: github.ref_type == 'tag'
+    uses: slipmesh/.github/.github/workflows/promote.yml@v1
+    permissions:
+      contents: read
+      packages: write
 
-      - name: fmt
-        run: cargo fmt --all -- --check
-
-      - name: clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: test
-        run: cargo test --workspace
-
-  # The packaging repositories build these two targets, not a host binary - a musl-only
-  # breakage would otherwise surface as a failed release rather than a failed check.
-  cross:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
-
-      - uses: Swatinem/rust-cache@v2
-      - uses: mlugg/setup-zig@v2
-
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
-
-      - name: Cross-compile every daemon for both targets
-        run: |
-          for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
-            cargo zigbuild --release --target "$target" -p awg -p router -p nftables
+  release:
+    needs: promote
+    uses: slipmesh/.github/.github/workflows/release.yml@v1
+    permissions:
+      contents: write
+      packages: read
+    with:
+      image-ref: ${{ needs.promote.outputs.image-ref }}
+      prepare: |
+        mkdir dist
+        for arch in amd64 arm64; do
+          # A scratch image has no command; the placeholder only lets the container be created.
+          id=$(docker create --platform "linux/$arch" "$IMAGE_REF" /none)
+          for bin in awg router nftables slipmesh-taloscfg; do
+            docker cp "$id:/usr/local/bin/$bin" "dist/$bin-linux-$arch"
           done
-
-  # Separate job so an advisory hit is unambiguous in the checks list, rather than buried in
-  # the same log as an unrelated clippy or test failure.
-  security:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: cargo audit
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit
+          docker rm "$id" >/dev/null
+        done
+        (cd dist && sha256sum -- * > SHA256SUMS)
+      assets: >-
+        dist/slipmesh-taloscfg-linux-amd64 dist/slipmesh-taloscfg-linux-arm64
+        dist/awg-linux-amd64 dist/awg-linux-arm64
+        dist/router-linux-amd64 dist/router-linux-arm64
+        dist/nftables-linux-amd64 dist/nftables-linux-arm64
+        dist/SHA256SUMS
