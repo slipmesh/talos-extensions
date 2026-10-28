@@ -14,14 +14,14 @@ permissions:
 jobs:
   rust:
     if: github.ref_type != 'tag'
-    uses: slipmesh/.github/.github/workflows/rust.yml@v1.1
+    uses: slipmesh/.github/.github/workflows/rust.yml@v1.2
     with:
       binaries: awg router nftables slipmesh-taloscfg
 
   image:
     needs: rust
     if: github.ref_type != 'tag'
-    uses: slipmesh/.github/.github/workflows/image.yml@v1.1
+    uses: slipmesh/.github/.github/workflows/image.yml@v1.2
     permissions:
       contents: read
       packages: write
@@ -29,7 +29,7 @@ jobs:
   tag:
     needs: image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    uses: slipmesh/.github/.github/workflows/tag-release.yml@v1.1
+    uses: slipmesh/.github/.github/workflows/tag-release.yml@v1.2
     permissions:
       contents: write
 
@@ -37,7 +37,7 @@ jobs:
   promote:
     needs: tag
     if: ${{ !cancelled() && (github.ref_type == 'tag' || needs.tag.outputs.tag != '') }}
-    uses: slipmesh/.github/.github/workflows/promote.yml@v1.1
+    uses: slipmesh/.github/.github/workflows/promote.yml@v1.2
     permissions:
       contents: read
       packages: write
@@ -47,7 +47,7 @@ jobs:
   release:
     needs: [tag, promote]
     if: ${{ !cancelled() && needs.promote.result == 'success' }}
-    uses: slipmesh/.github/.github/workflows/release.yml@v1.1
+    uses: slipmesh/.github/.github/workflows/release.yml@v1.2
     permissions:
       contents: write
       packages: read
