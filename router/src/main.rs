@@ -14,9 +14,8 @@ use tokio::sync::Mutex;
 /// env var or CLI flag (same invariant `awg`'s `CONFIG_PATH` documents).
 const CONFIG_PATH: &str = "/etc/talos-extensions/router.yaml";
 
-/// Relative to this service's own entrypoint directory - `bird`/`birdc` are staged into the same
-/// `rootfs/usr/local/lib/containers/router/` directory as this binary (the `cp /bird /birdc` in
-/// `slipmesh/talos-router-extension`'s `patches/extensions/router/pkg.yaml`), the same convention
+/// Relative to this service's own entrypoint directory: the extension stages `bird` in
+/// `/usr/local/lib/containers/router/` beside this binary, the same convention
 /// `extension-services/awg.yaml`'s `container.entrypoint: ./awg` uses for itself.
 const BIRD_BIN: &str = "./bird";
 

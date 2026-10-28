@@ -15,12 +15,10 @@
 //! survive this.
 //!
 //! Whoever authors `ruleset:` should avoid `comment` annotations on `set`/`map` declarations:
-//! nftables >= 1.1.3 changed the on-wire userdata format those produce, which kube-proxy's own
-//! bundled (older) `nft` can't parse during a full resync and segfaults on
-//! (kubernetes/kubernetes#136786, unfixed as of Kubernetes 1.36) - this is exactly why
-//! `../talos-nftables-extension/versions.env` deliberately pins `NFTABLES_VERSION` below 1.1.3
-//! rather than latest, but staying off `comment` on sets/maps is a second, independent safeguard
-//! this binary can't enforce on its own (it doesn't parse ruleset content, see above).
+//! nftables >= 1.1.3 changed the on-wire userdata format those produce, and kube-proxy's bundled
+//! `nft` before Kubernetes 1.36.3 segfaults on it during a full resync
+//! (kubernetes/kubernetes#136786). This binary cannot enforce that; it does not parse ruleset
+//! content (see above).
 //!
 //! **Why this daemon watches for its own tables disappearing** (see `main.rs`'s watchdog loop):
 //! something on a freshly-booted Talos+Kubernetes node (most likely the first
@@ -36,10 +34,9 @@ use std::collections::HashSet;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-/// Relative to this service's own entrypoint directory - the vendored static `nft` binary is
-/// staged into the same `rootfs/usr/local/lib/containers/nftables/` directory as this binary (the
-/// `install:` step in `slipmesh/talos-nftables-extension`'s `patches/extensions/nftables/pkg.yaml`),
-/// the same convention `router/src/main.rs`'s `BIRD_BIN` uses for `bird`.
+/// Relative to this service's own entrypoint directory: the extension stages its static `nft` in
+/// `/usr/local/lib/containers/nftables/` beside this binary, as `router/src/main.rs`'s `BIRD_BIN`
+/// does for `bird`.
 pub const NFT_BIN: &str = "./nft";
 
 /// `table <family> <name> {` at the start of a (non-comment) line - deliberately simple: this

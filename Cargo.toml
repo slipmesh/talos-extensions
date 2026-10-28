@@ -63,7 +63,7 @@ socket2 = { version = "0.6.5", features = ["all"] }
 
 genetlink = "0.3.0"
 # Pinned to a specific rev, not crates.io's 0.1.2: the amneziawg kernel module we build against
-# (see talos-awg-extension's versions.env) speaks genl family version 3, which changed
+# (AWG_REF in talos-kernel's versions.env) speaks genl family version 3, which changed
 # WGDEVICE_A_H1..H4 from a NUL-terminated
 # decimal string to a packed u64 (per the kernel module's own src/netlink.c nla_policy
 # table - .type = NLA_U64). crates.io's 0.1.2 still only emits/parses the
