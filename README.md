@@ -12,12 +12,10 @@ their config.
 | `taloscfg` | `slipmesh-taloscfg` | on your workstation | renders every node's patch from one `slipmesh.yaml` |
 | `common` | — | — | netlink, obfuscation types, shared route tagging |
 
-This repository produces plain binaries and nothing else. Packaging each daemon into a Talos
-system extension happens in a repository of its own —
-[talos-awg-extension](https://github.com/slipmesh/talos-awg-extension),
-[talos-router-extension](https://github.com/slipmesh/talos-router-extension),
-[talos-nftables-extension](https://github.com/slipmesh/talos-nftables-extension) — which
-cross-compile from here and publish one extension image each.
+This repository produces plain binaries and nothing else. They ship in the
+`ghcr.io/slipmesh/talos-extensions` image with their `extension-services/` specs, and
+[talos-installer](https://github.com/slipmesh/talos-installer) takes that image by digest,
+packages each daemon into a Talos system extension and bakes the extensions into an installer.
 
 ## Why none of this talks to Kubernetes
 
@@ -59,8 +57,9 @@ One interface can freely mix both kinds of peer.
 Read from a fixed path (`/etc/talos-extensions/awg.yaml` inside the container, matching
 `extension-services/awg.yaml`'s `mountPath`) - never an environment variable or CLI flag. The whole
 file is rendered into the node's machine config as an `ExtensionServiceConfig` document's
-`configFiles[].content`. See `talos-awg-extension`'s `docs/extension-services.md` for the full
-machine config example and every field.
+`configFiles[].content`. See talos-installer's
+[docs/awg.md](https://github.com/slipmesh/talos-installer/blob/main/docs/awg.md) for a full
+machine config example.
 
 ```yaml
 interfaces:
@@ -323,9 +322,10 @@ two things to it:
 
 No rule content is baked into this binary at all - MSS clamping, NAT, or anything else is just
 whatever the template says; [`nftables/templates/nftables.conf.j2`](nftables/templates/nftables.conf.j2)
-is the reference one, with those two. See `talos-nftables-extension`'s README for the packaging
-side (why `nft` is a statically-linked binary built from source rather than the dynamically-linked
-package `siderolabs/pkgs` already ships).
+is the reference one, with those two. See talos-installer's
+[docs/nftables.md](https://github.com/slipmesh/talos-installer/blob/main/docs/nftables.md) for the
+packaging side: why `nft` is a statically linked binary built from source rather than the
+dynamically linked package siderolabs/pkgs already ships.
 
 ---
 
@@ -565,9 +565,27 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 No mocking framework - pure logic (`config::validate`, `interface::diff_peers`,
 `rt::to_remove`, `cidr::parse_cidr`, all of `taloscfg`'s rendering) is unit-tested directly;
-netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`). Exercising `awg` end-to-end
-needs a real Linux host with the `amneziawg` kernel module loaded and `CAP_NET_ADMIN` - see
-`talos-awg-extension`'s `docs/extension-services.md` for a local smoke-test recipe.
+netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`).
+
+Exercising a daemon end to end needs a Linux host with `CAP_NET_ADMIN`, and for `awg` the
+`amneziawg` kernel module loaded. Each daemon reads its config from the fixed path its
+`extension-services/` spec mounts, so a smoke test puts a hand-written config there:
+
+```sh
+cargo build -p awg
+sudo mkdir -p /etc/talos-extensions
+sudo cp awg.yaml /etc/talos-extensions/awg.yaml
+sudo ./target/debug/awg
+# in another shell:
+ip -d link show type amneziawg
+ip route show                    # for a tracked peer with a fresh handshake, its route
+```
+
+`router` also needs `router.conf.j2` (start from `router/templates/router.conf.j2`) and a `bird`
+in its working directory, such as the static one copied out of a built router extension:
+`docker create` the image, then `docker cp <id>:/usr/local/lib/containers/router/bird .`.
+Restarting a daemon after editing its config exercises the same converge-and-clean-up path a
+config change on a node does.
 
 ### Releasing
 

@@ -139,9 +139,8 @@ pub async fn force_reconfigure() -> Result<()> {
 /// on the kernel to generate and then keep one.
 ///
 /// Deliberately does **not** attempt to write `net.ipv6.conf.router-lo.keep_addr_on_down` itself:
-/// `talos-awg-extension/docs/extension-services.md` documents this failing on a real node for
-/// `ext-awg`'s own interfaces (an extension-service container isn't permitted to write
-/// `/proc/sys` there) - the fix is the same one already required for `ext-awg`, setting
+/// an extension-service container may not write `/proc/sys` on a real node, as `ext-awg` found
+/// for its own interfaces. The fix is the same one already required for `ext-awg`, setting
 /// `machine.sysctls: net.ipv6.conf.default.keep_addr_on_down: "1"` once in machine config, which
 /// the kernel copies into every interface's own devconf at creation time (including `router-lo`,
 /// created after that sysctl is applied) with no code needed here at all.

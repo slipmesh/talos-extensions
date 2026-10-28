@@ -333,8 +333,7 @@ pub async fn ensure_interface(
     // either). Instead, set `net.ipv6.conf.default.keep_addr_on_down: "1"` once in the node's
     // `machine.sysctls` - the kernel copies `ipv6_devconf_dflt` into every interface's devconf at
     // creation time (confirmed against net/ipv6/addrconf.c), so it applies to `mesh-*`/etc.
-    // interfaces this daemon creates later, with no code here needed at all. See
-    // talos-awg-extension/docs/extension-services.md.
+    // interfaces this daemon creates later, with no code here needed at all.
 
     rt.set_up(index).await?;
     set_identity(awg, iface).await?;
