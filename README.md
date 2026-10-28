@@ -577,11 +577,12 @@ reports for itself. Bumping only the tag leaves a binary that misnames its own v
 how it read `0.1.0` at tag `v0.1.6`. The Release PR workflow (Actions, then Release PR) opens that
 commit as a PR with `CHANGELOG.md` regenerated, and merging it tags the release.
 
-CI builds every binary for the musl target on a runner of each arch and packs the four of them
-into `ghcr.io/slipmesh/talos-extensions`, published as `sha-<commit>` from `main` and `release-*`
-branches. A release tag retags that image and attaches the same binaries, copied out of it, to the
-GitHub Release with a `SHA256SUMS`. To reproduce one binary locally, build on a Linux host of that
-arch with `musl-tools` installed:
+CI builds every binary for the musl target on a runner of each arch and packs the four of them,
+in `/usr/local/bin/`, into `ghcr.io/slipmesh/talos-extensions`, together with the
+`extension-services/` specs of the three daemons in `/usr/local/etc/containers/`. The image is
+published as `sha-<commit>` from `main` and `release-*` branches. A release tag retags that image
+and attaches the same binaries, copied out of it, to the GitHub Release with a `SHA256SUMS`. To
+reproduce one binary locally, build on a Linux host of that arch with `musl-tools` installed:
 
 ```sh
 cargo build --release --target x86_64-unknown-linux-musl -p awg
