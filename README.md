@@ -600,7 +600,7 @@ the push of a merged release PR builds. It builds every binary for the musl targ
 each arch and packs the four of them, in `/usr/local/bin/`, into
 `ghcr.io/slipmesh/talos-extensions`, together with the `extension-services/` specs of the three
 daemons in `/usr/local/etc/containers/`. The image is pushed as `sha-<commit>`, the commit is tagged
-once the build succeeded, the image is retagged as the release, and the GitHub Release gets the same
+once the build succeeds, the image is retagged as the release, and the GitHub Release gets the same
 binaries with a `SHA256SUMS`. Only a released image is one talos-installer can pin, so a daemon
 change reaches it through a release.
 
