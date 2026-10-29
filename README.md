@@ -596,8 +596,9 @@ how it read `0.1.0` at tag `v0.1.6`. The Release PR workflow (Actions, then Rele
 commit as a PR with `CHANGELOG.md` regenerated, and merging it tags the release.
 
 Pull requests and pushes run fmt, clippy, the tests and `cargo audit`, which also runs weekly; only
-the push of a merged release PR builds. It builds every binary for the musl target on a runner of
-each arch and packs the four of them, in `/usr/local/bin/`, into
+the push of a merged release PR builds, once every check of that push passes. An advisory with no
+fix yet is ignored in `.cargo/audit.toml`, with the reason next to it. It builds every binary for
+the musl target on a runner of each arch and packs the four of them, in `/usr/local/bin/`, into
 `ghcr.io/slipmesh/talos-extensions`, together with the `extension-services/` specs of the three
 daemons in `/usr/local/etc/containers/`. The image is pushed as `sha-<commit>`, the commit is tagged
 once the build succeeds, the image is retagged as the release, and the GitHub Release gets the same
