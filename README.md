@@ -551,8 +551,9 @@ Renamed so far, each needing the same edit in `slipmesh.yaml` and nothing else:
 | --- | --- | --- |
 | `cluster.metrics_port` | `cluster.awg_metrics_port` | v0.2.0 |
 
-No aliases are kept. This is a 0.x generator versioned with the file it reads, and a name that
-means one thing in the tool and another in the file is worse than a build that stops.
+No aliases are kept. A rename lands only with a new Talos line (see
+[docs/RELEASING.md](docs/RELEASING.md)), and a name that means one thing in the tool and another in
+the file is worse than a build that stops.
 
 A `kind: nftables` document is refused, with where its ruleset went: into the file
 `/etc/talos-extensions/nftables.conf.j2` of a `kind: patch` document holding
@@ -601,7 +602,8 @@ config change on a node does.
 every crate here inherits that one version, and it is what an installed `slipmesh-taloscfg`
 reports for itself. Bumping only the tag leaves a binary that misnames its own version, which is
 how it read `0.1.0` at tag `v0.1.6`. The Release PR workflow (Actions, then Release PR) opens that
-commit as a PR with `CHANGELOG.md` regenerated, and merging it tags the release.
+commit as a PR with `CHANGELOG.md` regenerated, and merging it tags the release. Release lines,
+versions and the steps are in [docs/RELEASING.md](docs/RELEASING.md).
 
 Pull requests and pushes run fmt, clippy, the tests and `cargo audit`, which also runs weekly; only
 the push of a merged release PR builds, once every check of that push passes. An advisory with no
