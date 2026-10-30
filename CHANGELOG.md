@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.14.5+sm.1] - 2026-10-30
+
+### Added ✨
+
+- Ship the extension-service specs in the daemons image (#42)
+- Render one rw endpoint, any host or address (#45)
+
+### Build system 🛠️
+
+- Require tokio 1.54.1, minijinja 3.0.4 and similar 3.2.1 (#39)
+
+### CI/CD ⚙️
+
+- Build natively through the shared workflows and publish the binaries as an image (#38)
+- Open release PRs from a workflow and release on their merge (#40)
+- Take the release notes from git-cliff through slipmesh/.github@v1.2 (#41)
+- Build only the merged release PR, through the v2 shared workflows (#44)
+- Mark the newest stable release latest, through slipmesh/.github@v2.1 (#48)
+
+### Documentation 📚
+
+- State why bird.conf comes first and which bird the fixtures match
+- Point at talos-installer for the extension packaging (#43)
+- Release per Talos line from release-1.X branches (#46)
+
 ## [0.4.0] - 2026-10-19
 
 ### Added ✨
