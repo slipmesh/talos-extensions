@@ -24,14 +24,16 @@ into `release-1.X`). A line is supported while upstream ships patches for it.
 1. Run Actions, then Release PR, on the release branch with the version, such as `v1.14.5+sm.1`.
    Without one it computes a semver bump, which names no Talos patch.
 2. The pull request it opens moves `[workspace.package] version` to the same number without the
-   `v` and regenerates `CHANGELOG.md`. A bot opened it, so its checks wait for Approve workflows
-   to run; the merge does not need them. Merge it.
+   `v` and regenerates `CHANGELOG.md`. The push of the merge runs the checks again, so it does
+   not wait on this pull request's. Merge it.
 3. Only this push builds, once fmt, clippy, the tests and `cargo audit` of that push pass: the
    binaries for both arches and the daemons image, pushed as `talos-extensions:sha-<commit>`. Once
-   the build succeeds, the commit is tagged, that image is retagged as
-   `talos-extensions:<version>` by digest, and the GitHub Release gets the binaries with a
-   `SHA256SUMS`, marked latest when it is the newest stable release, and pre-release for an alpha
-   or beta. A failed build leaves no tag, so the same version can be released again after the fix.
+   the build succeeds, that image is retagged as `talos-extensions:<version>` by digest, the commit
+   is tagged, and the GitHub Release gets the binaries with a `SHA256SUMS`, marked latest when it
+   is the newest stable release, and pre-release for an alpha or beta. A failed build leaves no
+   tag, so the same version can be released again after the fix.
+   If a later step fails, Re-run failed jobs finishes the release while the run's artifacts last,
+   14 days; a push whose release commit is already tagged builds nothing.
 
 Every other pull request and push runs the checks and builds nothing.
 
