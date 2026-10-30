@@ -499,6 +499,14 @@ pool's own key, which the config is built with, is written into the pool's docum
 puts the same key on the wire; `rw-inspect` writes nothing and asks for `generate` first when that
 key is not written down yet.
 
+The client config's `Endpoint` is the first of the pool's `node_hostnames`. `--endpoint` on
+either command picks another of them, or names anything else - a DNS name in front of the pool,
+say - taken as written, with the pool's `listen_port` when it carries no port:
+
+```sh
+slipmesh-taloscfg rw-inspect --if plain --name laptop --endpoint rw.example.com --qr
+```
+
 The same generated `<node>.yaml` also drives [routeros](https://github.com/slipmesh/routeros),
 which converges a MikroTik device into the mesh from it - a mesh member need not be a Talos node.
 

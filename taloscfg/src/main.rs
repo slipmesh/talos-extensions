@@ -63,8 +63,9 @@ enum Command {
         /// Client already has its own keypair - only its public half is ever given to us.
         #[arg(long = "public-key")]
         public_key: Option<String>,
-        /// Which of the pool's node_hostnames to put first as the live Endpoint (default: the
-        /// first one in the pool's own order) - the rest still appear as commented #Endpoint =.
+        /// The client's Endpoint: one of the pool's node_hostnames (default: the first one), or
+        /// any other host or address taken as written, the pool's listen_port added when it
+        /// carries no port of its own.
         #[arg(long)]
         endpoint: Option<String>,
         /// Print a ready-to-import client config to stdout.
@@ -105,8 +106,9 @@ enum Command {
         /// config in full instead of a placeholder.
         #[arg(long = "private-key")]
         private_key: Option<String>,
-        /// Which of the pool's node_hostnames to put first as the live Endpoint (default: the
-        /// first one in the pool's own order) - the rest still appear as commented #Endpoint =.
+        /// The client's Endpoint: one of the pool's node_hostnames (default: the first one), or
+        /// any other host or address taken as written, the pool's listen_port added when it
+        /// carries no port of its own.
         #[arg(long)]
         endpoint: Option<String>,
         #[arg(long)]
