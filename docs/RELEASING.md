@@ -30,8 +30,8 @@ into `release-1.X`). A line is supported while upstream ships patches for it.
    binaries for both arches and the daemons image, pushed as `talos-extensions:sha-<commit>`. Once
    the build succeeds, the commit is tagged, that image is retagged as
    `talos-extensions:<version>` by digest, and the GitHub Release gets the binaries with a
-   `SHA256SUMS`, not marked latest, and marked pre-release for an alpha or beta. A failed build
-   leaves no tag, so the same version can be released again after the fix.
+   `SHA256SUMS`, marked latest when it is the newest stable release, and pre-release for an alpha
+   or beta. A failed build leaves no tag, so the same version can be released again after the fix.
 
 Every other pull request and push runs the checks and builds nothing.
 
