@@ -13,7 +13,8 @@ Stable releases come only from `release-1.X` branches, one per Talos minor; `mai
 minor. A change that breaks a daemon's behaviour or the `slipmesh.yaml` that `slipmesh-taloscfg`
 reads lands only on `main`, with the next minor. Any other change lands on `main` first and is
 cherry-picked to the release branches it applies to (`git cherry-pick -x`, then a pull request
-into `release-1.X`). A line is supported while upstream ships patches for it.
+into `release-1.X`). Renovate's patch updates are the exception: it opens them against each branch
+on its own. A line is supported while upstream ships patches for it.
 
 | Talos line | branch | status |
 | --- | --- | --- |
