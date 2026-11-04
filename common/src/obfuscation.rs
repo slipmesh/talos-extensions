@@ -89,6 +89,35 @@ pub struct Obfuscation {
     pub disable_cookies: Option<bool>,
 }
 
+/// The AmneziaWG module refuses a header protection key unless every junk size s1..s4 can hold
+/// its nonce, and says why only in a debug log line that is off by default: userspace gets a bare
+/// `EINVAL` from `SetDevice`. `netlink::awg` sends an unset size as 0.
+pub const HEADER_PROTECTION_NONCE_SIZE: u16 = 12;
+
+impl Obfuscation {
+    /// Rejects combinations the kernel module refuses at `SetDevice`.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.header_protection_key.is_some() {
+            let too_small: Vec<_> = [
+                ("s1", self.s1),
+                ("s2", self.s2),
+                ("s3", self.s3),
+                ("s4", self.s4),
+            ]
+            .into_iter()
+            .filter(|(_, size)| size.unwrap_or(0) < HEADER_PROTECTION_NONCE_SIZE)
+            .map(|(name, _)| name)
+            .collect();
+            anyhow::ensure!(
+                too_small.is_empty(),
+                "obfuscation.header_protection_key needs {} of at least {HEADER_PROTECTION_NONCE_SIZE}",
+                too_small.join(", ")
+            );
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,6 +131,51 @@ mod tests {
         let yaml = yaml_serde::to_string(&cfg).unwrap();
         assert!(yaml.contains("jc: 4"), "yaml was:\n{yaml}");
         assert!(!yaml.contains("null"), "yaml was:\n{yaml}");
+    }
+
+    fn header_protected(junk_sizes: [Option<u16>; 4]) -> Obfuscation {
+        let [s1, s2, s3, s4] = junk_sizes;
+        Obfuscation {
+            header_protection_key: Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string()),
+            s1,
+            s2,
+            s3,
+            s4,
+            ..Obfuscation::default()
+        }
+    }
+
+    #[test]
+    fn rejects_header_protection_key_with_a_junk_size_below_the_nonce() {
+        let err = header_protected([Some(12), Some(12), Some(12), Some(11)])
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("s4"), "{err}");
+        assert!(!err.contains("s1"), "{err}");
+    }
+
+    #[test]
+    fn rejects_header_protection_key_with_junk_sizes_left_unset() {
+        let err = header_protected([None; 4])
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("s1, s2, s3, s4"), "{err}");
+    }
+
+    #[test]
+    fn accepts_header_protection_key_with_every_junk_size_holding_the_nonce() {
+        assert!(header_protected([Some(12); 4]).validate().is_ok());
+    }
+
+    #[test]
+    fn accepts_small_junk_sizes_without_header_protection() {
+        let o = Obfuscation {
+            s1: Some(0),
+            ..Obfuscation::default()
+        };
+        assert!(o.validate().is_ok());
     }
 
     #[test]
