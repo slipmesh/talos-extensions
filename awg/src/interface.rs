@@ -33,7 +33,7 @@ use std::time::Duration;
 /// the process never exits for `restart: always` to get a chance to retry it.
 const ENDPOINT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// `wgpeer_attribute` has no crate support (as of the pinned rev) for this one - confirmed absent
+/// `wgpeer_attribute` has no crate support (as of v0.1.0) for this one - confirmed absent
 /// from `netlink-packet-amneziawg`'s `peer.rs`, unlike everything else in this file, which
 /// does have a typed variant. Built manually via `Other(DefaultNla::new(...))`. `NLA_FLAG`: an
 /// empty payload means "present" (true); the attribute is simply omitted for "false".
