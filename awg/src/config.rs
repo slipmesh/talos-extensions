@@ -82,8 +82,8 @@ pub struct PeerEntry {
 pub const DEFAULT_HANDSHAKE_STALE_SECS: u64 = 180;
 
 /// Pure validation, no I/O: interface names are non-empty, fit `IFNAMSIZ`, and are unique;
-/// every `addresses`/`allowed_ips` entry is a parseable CIDR (either family); the obfuscation
-/// passes `Obfuscation::validate`; `metrics.listen`, when present, is a parseable IPv4 `ip:port`.
+/// every `addresses`/`allowed_ips` entry is a parseable CIDR (either family); `metrics.listen`,
+/// when present, is a parseable IPv4 `ip:port`.
 pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
     if let Some(metrics) = &cfg.metrics {
         metrics.validate("metrics.listen")?;
@@ -107,10 +107,6 @@ pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
                 anyhow::anyhow!("interface {:?}: invalid address {cidr:?}: {e}", iface.name)
             })?;
         }
-        iface
-            .obfuscation
-            .validate()
-            .map_err(|e| anyhow::anyhow!("interface {:?}: {e}", iface.name))?;
         let mut seen_peer_keys = HashSet::new();
         for peer in &iface.peers {
             anyhow::ensure!(
@@ -179,8 +175,6 @@ interfaces:
     addresses: ["10.99.0.1/24", "fd00:99::1/64"]
     private_key: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC="
     obfuscation:
-      s1: 50
-      s2: 100
       s3: 60
       s4: 90
       i1: "5-10"
@@ -308,39 +302,21 @@ interfaces:
 
     #[test]
     fn accepts_advanced_security_peer_with_header_protection_key() {
-        let mut cfg = header_protected("a", [Some(12); 4]);
-        cfg.interfaces[0].peers.push(PeerEntry {
+        let mut a = iface("a");
+        a.obfuscation.header_protection_key =
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
+        a.peers.push(PeerEntry {
             public_key: "k".to_string(),
             name: None,
             endpoint: None,
             allowed_ips: None,
             advanced_security: true,
         });
-        assert!(validate(&cfg).is_ok());
-    }
-
-    fn header_protected(name: &str, junk_sizes: [Option<u16>; 4]) -> AwgConfig {
-        let mut a = iface(name);
-        a.obfuscation.header_protection_key =
-            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
-        [
-            a.obfuscation.s1,
-            a.obfuscation.s2,
-            a.obfuscation.s3,
-            a.obfuscation.s4,
-        ] = junk_sizes;
-        AwgConfig {
+        let cfg = AwgConfig {
             interfaces: vec![a],
             ..Default::default()
-        }
-    }
-
-    #[test]
-    fn rejects_obfuscation_the_kernel_module_refuses_naming_the_interface() {
-        let err = validate(&header_protected("a", [None; 4]))
-            .unwrap_err()
-            .to_string();
-        assert!(err.starts_with("interface \"a\": obfuscation."), "{err}");
+        };
+        assert!(validate(&cfg).is_ok());
     }
 
     fn with_metrics(listen: &str) -> AwgConfig {
