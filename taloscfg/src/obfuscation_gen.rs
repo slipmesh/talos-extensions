@@ -35,7 +35,7 @@ pub fn generate() -> Obfuscation {
         jc: Some(rng.random_range(3..=10)),
         jmin: Some(jmin),
         jmax: Some(jmax),
-        // A header protection key set in `slipmesh.yaml` needs s1/s2 to hold its nonce.
+        // A header protection key needs every s1..s4 to hold its nonce; s1/s2 are the two drawn here.
         s1: Some(rng.random_range(HEADER_PROTECTION_NONCE_SIZE..=1280)),
         s2: Some(rng.random_range(HEADER_PROTECTION_NONCE_SIZE..=1280)),
         h1: Some(h1),
