@@ -157,6 +157,16 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
         .with_context(|| format!("rendering awg config for node {host:?}"))?;
     awg::config::validate(&awg_cfg)
         .with_context(|| format!("rendered awg config for node {host:?} is invalid"))?;
+    // Checked here rather than by awg: the daemon can only refuse a config it is already running
+    // on, and a refusal there would leave every interface of the node down.
+    for iface in &awg_cfg.interfaces {
+        iface.obfuscation.validate().with_context(|| {
+            format!(
+                "node {host:?}, interface {:?}: the kernel module refuses this obfuscation",
+                iface.name
+            )
+        })?;
+    }
     let router_cfg = render::render_router_config(&model, host)
         .with_context(|| format!("rendering router config for node {host:?}"))?;
     router::config::validate(&router_cfg)
@@ -363,6 +373,16 @@ configFiles:
             .replace("table inet x {}", "table inet t { {{ bogus }} }");
         let err = render_raw(&raw, "a").unwrap_err();
         assert!(format!("{err:#}").contains("nftables"), "{err:#}");
+    }
+
+    #[test]
+    fn obfuscation_the_kernel_module_refuses_is_not_rendered() {
+        let raw = with_router_files(&[("", TEMPLATE)]).replace(
+            "{pair: [a, b], port: 51820}",
+            "{pair: [a, b], port: 51820, obfuscation: {header_protection_key: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}}",
+        );
+        let err = render_raw(&raw, "a").unwrap_err();
+        assert!(format!("{err:#}").contains("s3, s4"), "{err:#}");
     }
 
     #[test]
