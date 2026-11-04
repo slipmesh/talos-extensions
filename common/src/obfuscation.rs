@@ -4,16 +4,21 @@
 //! amneziawg-tools' `src/config.c` (the authoritative list of what's actually user-configurable;
 //! the kernel module's own README only documents jc/jmin/jmax/s1/s2/h1-h4).
 //!
-//! Grouped below by what each knob actually does, matching the struct's own field order:
-//! - jc/jmin/jmax: how many junk packets to send before the handshake, and their size range.
+//! Grouped below by what each knob actually does, matching the struct's own field order, with the
+//! constraints `Obfuscation::validate` enforces because the kernel module refuses or mishandles
+//! anything else:
+//! - jc/jmin/jmax: how many junk packets to send before the handshake, and their size range;
+//!   jmin must not exceed jmax.
 //! - s1-s4: junk size for each handshake-adjacent packet type - s1/s2 for init/response, s3/s4
 //!   (AmneziaWG 3.0) extending the same idea to cookie-reply and transport (data) packets.
-//! - h1-h4: magic header replacement values, one per packet type (init/response/cookie/transport).
+//! - h1-h4: magic header replacement values, one per packet type (init/response/cookie/transport);
+//!   the four must differ, an unset one counting as its WireGuard message type 1..4.
 //! - i1-i5: decoy/cover packets with a configurable header spec, sent alongside real traffic.
 //! - header_protection_key: encrypts the WireGuard packet header's own type/reserved fields with a
 //!   separate key - a distinct obfuscation layer from the junk-packet tricks above. Requires
 //!   `AdvancedSecurity` enabled on the peer(s) that should use it (see `PeerEntry` in
-//!   `awg/src/config.rs`) - setting only this field does nothing on its own.
+//!   `awg/src/config.rs`; setting only this field does nothing on its own), and every s1..s4 at
+//!   least 12, room for its nonce.
 //! - content_padding_addition, rekey_after_time, rekey_timeout, reject_after_time,
 //!   keepalive_timeout, max_handshake_attempts: protocol timing/padding constants vanilla
 //!   WireGuard hardcodes - configurable here specifically so they stop being a fixed,
@@ -94,8 +99,24 @@ pub struct Obfuscation {
 /// `EINVAL` from `SetDevice`. `netlink::awg` sends an unset size as 0.
 pub const HEADER_PROTECTION_NONCE_SIZE: u16 = 12;
 
+/// What `SetDevice` sends for an unset h1..h4: the real WireGuard message types (`enum
+/// message_type` in AmneziaWG's `messages.h`), which a fresh device already defaults to
+/// (`device.c`'s `wg_init`). Not 0, which would be a distinct, still obfuscated magic value.
+pub const DEFAULT_MAGIC_HEADERS: [u32; 4] = [1, 2, 3, 4];
+
 impl Obfuscation {
-    /// Rejects combinations the kernel module refuses at `SetDevice`.
+    /// The magic headers as the kernel module ends up with them, unset ones at their defaults.
+    pub fn magic_headers(&self) -> [u32; 4] {
+        let [d1, d2, d3, d4] = DEFAULT_MAGIC_HEADERS;
+        [
+            self.h1.unwrap_or(d1),
+            self.h2.unwrap_or(d2),
+            self.h3.unwrap_or(d3),
+            self.h4.unwrap_or(d4),
+        ]
+    }
+
+    /// Rejects combinations the kernel module refuses at `SetDevice` or mishandles afterwards.
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.header_protection_key.is_some() {
             let too_small: Vec<_> = [
@@ -114,6 +135,32 @@ impl Obfuscation {
                 too_small.join(", ")
             );
         }
+
+        // The module refuses overlapping magic headers with a bare EINVAL.
+        let headers = self.magic_headers();
+        for i in 0..4 {
+            for j in i + 1..4 {
+                anyhow::ensure!(
+                    headers[i] != headers[j],
+                    "obfuscation.h{} and obfuscation.h{} are both {}; the four magic headers must differ, an unset h1..h4 counting as 1..4",
+                    i + 1,
+                    j + 1,
+                    headers[i]
+                );
+            }
+        }
+
+        // When jc and jmax are non-zero, the module draws each junk packet's size from
+        // jmin..=jmax, into a buffer of jmax bytes, without checking the order.
+        let (jc, jmin, jmax) = (
+            self.jc.unwrap_or(0),
+            self.jmin.unwrap_or(0),
+            self.jmax.unwrap_or(0),
+        );
+        anyhow::ensure!(
+            jc == 0 || jmax == 0 || jmin <= jmax,
+            "obfuscation.jmin ({jmin}) must not exceed obfuscation.jmax ({jmax})"
+        );
         Ok(())
     }
 }
@@ -173,6 +220,66 @@ mod tests {
     fn accepts_small_junk_sizes_without_header_protection() {
         let o = Obfuscation {
             s1: Some(0),
+            ..Obfuscation::default()
+        };
+        assert!(o.validate().is_ok());
+    }
+
+    #[test]
+    fn accepts_a_fully_unset_obfuscation() {
+        assert!(Obfuscation::default().validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_two_equal_magic_headers() {
+        let o = Obfuscation {
+            h2: Some(7),
+            h4: Some(7),
+            ..Obfuscation::default()
+        };
+        let err = o.validate().unwrap_err().to_string();
+        assert!(err.contains("h2") && err.contains("h4"), "{err}");
+    }
+
+    // An unset magic header is sent as its WireGuard message type, 1..4.
+    #[test]
+    fn rejects_a_magic_header_equal_to_an_unset_ones_default() {
+        let o = Obfuscation {
+            h1: Some(2),
+            ..Obfuscation::default()
+        };
+        let err = o.validate().unwrap_err().to_string();
+        assert!(err.contains("h1") && err.contains("h2"), "{err}");
+    }
+
+    #[test]
+    fn rejects_jmin_above_jmax() {
+        let o = Obfuscation {
+            jc: Some(4),
+            jmin: Some(90),
+            jmax: Some(80),
+            ..Obfuscation::default()
+        };
+        let err = o.validate().unwrap_err().to_string();
+        assert!(err.contains("jmin") && err.contains("jmax"), "{err}");
+    }
+
+    // The module sends junk packets only when jc and jmax are both non-zero.
+    #[test]
+    fn accepts_jmin_alone_when_no_junk_is_sent() {
+        let o = Obfuscation {
+            jmin: Some(40),
+            ..Obfuscation::default()
+        };
+        assert!(o.validate().is_ok());
+    }
+
+    #[test]
+    fn accepts_jmin_equal_to_jmax() {
+        let o = Obfuscation {
+            jc: Some(4),
+            jmin: Some(80),
+            jmax: Some(80),
             ..Obfuscation::default()
         };
         assert!(o.validate().is_ok());

@@ -18,23 +18,12 @@ use netlink_packet_amnezia_wireguard::{
 use netlink_packet_core::{NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST, NetlinkMessage, NetlinkPayload};
 use netlink_packet_generic::GenlMessage;
 
-/// Real WireGuard message-type constants (`enum message_type` in AmneziaWG's own
-/// `messages.h`: `MESSAGE_HANDSHAKE_INITIATION=1, MESSAGE_HANDSHAKE_RESPONSE=2,
-/// MESSAGE_HANDSHAKE_COOKIE=3, MESSAGE_DATA=4`) - what a fresh device's `h1..h4` already default
-/// to (`device.c`'s `wg_init`: `memset`s the whole device to zero, then explicitly sets exactly
-/// these four). Used below as the explicit "no header obfuscation" value for an unset `h1..h4` -
-/// not `0`, which is a distinct (still-obfuscated, just wrong) magic value, not "disabled".
-const REAL_H1: u32 = 1;
-const REAL_H2: u32 = 2;
-const REAL_H3: u32 = 3;
-const REAL_H4: u32 = 4;
-
 /// Appends every device-level obfuscation attribute AmneziaWG's `SetDevice` accepts.
 ///
 /// `jc`/`jmin`/`jmax`/`s1`..`s4`/`h1`..`h4` are always sent, substituting each field's own real
-/// kernel-module default (per `device.c`'s `wg_init`, which `memset`s the
-/// whole device to zero and then only overrides `h1..h4` - see `REAL_H1`..`REAL_H4` above) for an
-/// unset field, rather than omitting the attribute entirely. This is deliberate, not just
+/// kernel-module default (per `device.c`'s `wg_init`, which `memset`s the whole device to zero
+/// and then only overrides `h1..h4` - see `obfuscation::DEFAULT_MAGIC_HEADERS`) for an unset
+/// field, rather than omitting the attribute entirely. This is deliberate, not just
 /// thorough: AmneziaWG's `SetDevice` treats an *omitted* attribute as "leave whatever's already
 /// there alone" (`netlink.c`: `info->attrs[WGDEVICE_A_H1] ? nla_get_u64(...) : wg->init_header`),
 /// not "reset to default" - so on a link this daemon previously configured *with* obfuscation,
@@ -79,22 +68,11 @@ pub fn push_obfuscation_attrs(
     attrs.push(AmneziaWireguardAttribute::S2(o.s2.unwrap_or(0)));
     attrs.push(AmneziaWireguardAttribute::S3(o.s3.unwrap_or(0)));
     attrs.push(AmneziaWireguardAttribute::S4(o.s4.unwrap_or(0)));
-    {
-        let v = o.h1.unwrap_or(REAL_H1);
-        attrs.push(AmneziaWireguardAttribute::H1Range(u32_range_pack(v, v)));
-    }
-    {
-        let v = o.h2.unwrap_or(REAL_H2);
-        attrs.push(AmneziaWireguardAttribute::H2Range(u32_range_pack(v, v)));
-    }
-    {
-        let v = o.h3.unwrap_or(REAL_H3);
-        attrs.push(AmneziaWireguardAttribute::H3Range(u32_range_pack(v, v)));
-    }
-    {
-        let v = o.h4.unwrap_or(REAL_H4);
-        attrs.push(AmneziaWireguardAttribute::H4Range(u32_range_pack(v, v)));
-    }
+    let [h1, h2, h3, h4] = o.magic_headers();
+    attrs.push(AmneziaWireguardAttribute::H1Range(u32_range_pack(h1, h1)));
+    attrs.push(AmneziaWireguardAttribute::H2Range(u32_range_pack(h2, h2)));
+    attrs.push(AmneziaWireguardAttribute::H3Range(u32_range_pack(h3, h3)));
+    attrs.push(AmneziaWireguardAttribute::H4Range(u32_range_pack(h4, h4)));
     if let Some(v) = &o.i1 {
         attrs.push(AmneziaWireguardAttribute::I1(v.clone()));
     }
@@ -288,7 +266,7 @@ mod tests {
 
     /// `h1..h4` default to WireGuard's own real per-packet-type magic values (`1..4`), not `0` -
     /// `0` would just be a different, still-wrong magic value, not "no header obfuscation". See
-    /// `REAL_H1`..`REAL_H4`'s doc comment for where `1..4` comes from.
+    /// `obfuscation::DEFAULT_MAGIC_HEADERS`'s doc comment for where `1..4` comes from.
     #[test]
     fn default_obfuscation_headers_are_the_real_wireguard_message_types_not_zero() {
         let attrs = push(&Obfuscation::default());
