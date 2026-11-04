@@ -7,7 +7,7 @@
 //! safe default exists for them, and `header_protection_key` specifically must match between both
 //! ends of a link, which a per-node independent random draw cannot guarantee on its own.
 
-use common::Obfuscation;
+use common::{Obfuscation, obfuscation::HEADER_PROTECTION_NONCE_SIZE};
 use rand::{Rng, RngExt};
 
 /// WireGuard's own reserved message-type values (`MessageInitiation`=1, `MessageResponse`=2,
@@ -35,8 +35,9 @@ pub fn generate() -> Obfuscation {
         jc: Some(rng.random_range(3..=10)),
         jmin: Some(jmin),
         jmax: Some(jmax),
-        s1: Some(rng.random_range(0..=1280)),
-        s2: Some(rng.random_range(0..=1280)),
+        // A header protection key set in `slipmesh.yaml` needs s1/s2 to hold its nonce.
+        s1: Some(rng.random_range(HEADER_PROTECTION_NONCE_SIZE..=1280)),
+        s2: Some(rng.random_range(HEADER_PROTECTION_NONCE_SIZE..=1280)),
         h1: Some(h1),
         h2: Some(h2),
         h3: Some(h3),
@@ -66,6 +67,16 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), 4, "h1-h4 must all be distinct");
+    }
+
+    #[test]
+    fn generates_s1_s2_large_enough_for_header_protection() {
+        for _ in 0..2000 {
+            let o = generate();
+            for size in [o.s1, o.s2] {
+                assert!(size.unwrap() >= HEADER_PROTECTION_NONCE_SIZE);
+            }
+        }
     }
 
     #[test]
