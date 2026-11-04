@@ -16,7 +16,7 @@ use common::cidr::parse_cidr;
 use common::keys::decode_key;
 use common::netlink::awg::{AwgClient, push_obfuscation_attrs};
 use common::netlink::rt::RtClient;
-use netlink_packet_amnezia_wireguard::{
+use netlink_packet_amneziawg::{
     AmneziaWireguardAddressFamily, AmneziaWireguardAllowedIp, AmneziaWireguardAllowedIpAttr,
     AmneziaWireguardAttribute, AmneziaWireguardPeer, AmneziaWireguardPeerAttribute,
     AmneziaWireguardPeerFlags,
@@ -34,7 +34,7 @@ use std::time::Duration;
 const ENDPOINT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// `wgpeer_attribute` has no crate support (as of the pinned rev) for this one - confirmed absent
-/// from `netlink-packet-amnezia-wireguard`'s `peer.rs`, unlike everything else in this file, which
+/// from `netlink-packet-amneziawg`'s `peer.rs`, unlike everything else in this file, which
 /// does have a typed variant. Built manually via `Other(DefaultNla::new(...))`. `NLA_FLAG`: an
 /// empty payload means "present" (true); the attribute is simply omitted for "false".
 const WGPEER_A_ADVANCED_SECURITY: u16 = 11;

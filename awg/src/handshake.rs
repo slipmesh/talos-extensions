@@ -23,7 +23,7 @@ use anyhow::Result;
 use common::ROUTE_PROTOCOL;
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
-use netlink_packet_amnezia_wireguard::{AmneziaWireguardAttribute, AmneziaWireguardPeerAttribute};
+use netlink_packet_amneziawg::{AmneziaWireguardAttribute, AmneziaWireguardPeerAttribute};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -237,7 +237,7 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use netlink_packet_amnezia_wireguard::{AmneziaWireguardPeer, AmneziaWireguardTimeSpec};
+    use netlink_packet_amneziawg::{AmneziaWireguardPeer, AmneziaWireguardTimeSpec};
 
     const KEY: [u8; 32] = [7u8; 32];
 
