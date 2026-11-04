@@ -61,7 +61,7 @@ prometheus-client = "0.25.1"
 # feature - a manifest line, not a new crate.
 socket2 = { version = "0.6.5", features = ["all"] }
 
-genetlink = "0.3.0"
+genetlink = "0.3.1"
 # Ours, from a release tag, not crates.io's netlink-packet-amnezia-wireguard 0.1.2: the amneziawg
 # kernel module we build against (AWG_REF in talos-kernel's versions.env) speaks genl family
 # version 3, which carries WGDEVICE_A_H1..H4 as packed u64 ranges, and 0.1.2 only knows the old
