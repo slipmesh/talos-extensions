@@ -81,15 +81,9 @@ pub struct PeerEntry {
 
 pub const DEFAULT_HANDSHAKE_STALE_SECS: u64 = 180;
 
-/// The AmneziaWG module refuses a header protection key unless every junk size s1..s4 can hold
-/// its nonce, and says why only in a debug log line that is off by default: userspace gets a bare
-/// `EINVAL` from `SetDevice`. An unset size is sent as 0.
-const HEADER_PROTECTION_NONCE_SIZE: u16 = 12;
-
 /// Pure validation, no I/O: interface names are non-empty, fit `IFNAMSIZ`, and are unique;
-/// every `addresses`/`allowed_ips` entry is a parseable CIDR (either family); a
-/// `header_protection_key` comes with every junk size s1..s4 at least
-/// `HEADER_PROTECTION_NONCE_SIZE`; `metrics.listen`, when present, is a parseable IPv4 `ip:port`.
+/// every `addresses`/`allowed_ips` entry is a parseable CIDR (either family); the obfuscation
+/// passes `Obfuscation::validate`; `metrics.listen`, when present, is a parseable IPv4 `ip:port`.
 pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
     if let Some(metrics) = &cfg.metrics {
         metrics.validate("metrics.listen")?;
@@ -113,20 +107,10 @@ pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
                 anyhow::anyhow!("interface {:?}: invalid address {cidr:?}: {e}", iface.name)
             })?;
         }
-        if iface.obfuscation.header_protection_key.is_some() {
-            let o = &iface.obfuscation;
-            let too_small: Vec<_> = [("s1", o.s1), ("s2", o.s2), ("s3", o.s3), ("s4", o.s4)]
-                .into_iter()
-                .filter(|(_, size)| size.unwrap_or(0) < HEADER_PROTECTION_NONCE_SIZE)
-                .map(|(name, _)| name)
-                .collect();
-            anyhow::ensure!(
-                too_small.is_empty(),
-                "interface {:?}: obfuscation.header_protection_key needs {} of at least {HEADER_PROTECTION_NONCE_SIZE}",
-                iface.name,
-                too_small.join(", ")
-            );
-        }
+        iface
+            .obfuscation
+            .validate()
+            .map_err(|e| anyhow::anyhow!("interface {:?}: {e}", iface.name))?;
         let mut seen_peer_keys = HashSet::new();
         for peer in &iface.peers {
             anyhow::ensure!(
@@ -352,28 +336,11 @@ interfaces:
     }
 
     #[test]
-    fn rejects_header_protection_key_with_a_junk_size_below_the_nonce() {
-        let err = validate(&header_protected(
-            "a",
-            [Some(12), Some(12), Some(12), Some(11)],
-        ))
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("s4"), "{err}");
-        assert!(!err.contains("s1"), "{err}");
-    }
-
-    #[test]
-    fn rejects_header_protection_key_with_junk_sizes_left_unset() {
+    fn rejects_obfuscation_the_kernel_module_refuses_naming_the_interface() {
         let err = validate(&header_protected("a", [None; 4]))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("s1, s2, s3, s4"), "{err}");
-    }
-
-    #[test]
-    fn accepts_header_protection_key_with_every_junk_size_holding_the_nonce() {
-        assert!(validate(&header_protected("a", [Some(12); 4])).is_ok());
+        assert!(err.starts_with("interface \"a\": obfuscation."), "{err}");
     }
 
     fn with_metrics(listen: &str) -> AwgConfig {
