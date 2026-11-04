@@ -81,9 +81,15 @@ pub struct PeerEntry {
 
 pub const DEFAULT_HANDSHAKE_STALE_SECS: u64 = 180;
 
+/// The AmneziaWG module refuses a header protection key unless every junk size s1..s4 can hold
+/// its nonce, and says why only in a debug log line that is off by default: userspace gets a bare
+/// `EINVAL` from `SetDevice`. An unset size is sent as 0.
+const HEADER_PROTECTION_NONCE_SIZE: u16 = 12;
+
 /// Pure validation, no I/O: interface names are non-empty, fit `IFNAMSIZ`, and are unique;
-/// every `addresses`/`allowed_ips` entry is a parseable CIDR (either family); `metrics.listen`,
-/// when present, is a parseable IPv4 `ip:port`.
+/// every `addresses`/`allowed_ips` entry is a parseable CIDR (either family); a
+/// `header_protection_key` comes with every junk size s1..s4 at least
+/// `HEADER_PROTECTION_NONCE_SIZE`; `metrics.listen`, when present, is a parseable IPv4 `ip:port`.
 pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
     if let Some(metrics) = &cfg.metrics {
         metrics.validate("metrics.listen")?;
@@ -106,6 +112,20 @@ pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
             parse_cidr(cidr).map_err(|e| {
                 anyhow::anyhow!("interface {:?}: invalid address {cidr:?}: {e}", iface.name)
             })?;
+        }
+        if iface.obfuscation.header_protection_key.is_some() {
+            let o = &iface.obfuscation;
+            let too_small: Vec<_> = [("s1", o.s1), ("s2", o.s2), ("s3", o.s3), ("s4", o.s4)]
+                .into_iter()
+                .filter(|(_, size)| size.unwrap_or(0) < HEADER_PROTECTION_NONCE_SIZE)
+                .map(|(name, _)| name)
+                .collect();
+            anyhow::ensure!(
+                too_small.is_empty(),
+                "interface {:?}: obfuscation.header_protection_key needs {} of at least {HEADER_PROTECTION_NONCE_SIZE}",
+                iface.name,
+                too_small.join(", ")
+            );
         }
         let mut seen_peer_keys = HashSet::new();
         for peer in &iface.peers {
@@ -175,6 +195,8 @@ interfaces:
     addresses: ["10.99.0.1/24", "fd00:99::1/64"]
     private_key: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC="
     obfuscation:
+      s1: 50
+      s2: 100
       s3: 60
       s4: 90
       i1: "5-10"
@@ -302,21 +324,56 @@ interfaces:
 
     #[test]
     fn accepts_advanced_security_peer_with_header_protection_key() {
-        let mut a = iface("a");
-        a.obfuscation.header_protection_key =
-            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
-        a.peers.push(PeerEntry {
+        let mut cfg = header_protected("a", [Some(12); 4]);
+        cfg.interfaces[0].peers.push(PeerEntry {
             public_key: "k".to_string(),
             name: None,
             endpoint: None,
             allowed_ips: None,
             advanced_security: true,
         });
-        let cfg = AwgConfig {
+        assert!(validate(&cfg).is_ok());
+    }
+
+    fn header_protected(name: &str, junk_sizes: [Option<u16>; 4]) -> AwgConfig {
+        let mut a = iface(name);
+        a.obfuscation.header_protection_key =
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
+        [
+            a.obfuscation.s1,
+            a.obfuscation.s2,
+            a.obfuscation.s3,
+            a.obfuscation.s4,
+        ] = junk_sizes;
+        AwgConfig {
             interfaces: vec![a],
             ..Default::default()
-        };
-        assert!(validate(&cfg).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_header_protection_key_with_a_junk_size_below_the_nonce() {
+        let err = validate(&header_protected(
+            "a",
+            [Some(12), Some(12), Some(12), Some(11)],
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("s4"), "{err}");
+        assert!(!err.contains("s1"), "{err}");
+    }
+
+    #[test]
+    fn rejects_header_protection_key_with_junk_sizes_left_unset() {
+        let err = validate(&header_protected("a", [None; 4]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("s1, s2, s3, s4"), "{err}");
+    }
+
+    #[test]
+    fn accepts_header_protection_key_with_every_junk_size_holding_the_nonce() {
+        assert!(validate(&header_protected("a", [Some(12); 4])).is_ok());
     }
 
     fn with_metrics(listen: &str) -> AwgConfig {

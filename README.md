@@ -116,7 +116,9 @@ to). This is a config-authoring concern, not something `awg` decides. The same a
 own README only documents the original set. See `common::Obfuscation`'s doc comment for the full
 field list and what each one does. `header_protection_key` + a peer's `advanced_security: true` are
 a matched pair - the key alone does nothing without the flag, and both ends of a peering need the
-same key.
+same key. The kernel module also accepts the key only when every junk size `s1`..`s4` is at least
+12, room for the header protection nonce, and an unset size counts as 0; `awg` rejects a config
+that breaks this, since the module itself answers with a bare `Invalid argument`.
 
 The two 3.1 switches are the exception to that pairing: each end decides for itself.
 `random_trailers` appends a random-length trailer to outgoing packets and relaxes the receive-side
