@@ -1012,8 +1012,8 @@ dependencies = [
 
 [[package]]
 name = "netlink-packet-amnezia-wireguard"
-version = "0.3.0"
-source = "git+https://github.com/slipmesh/netlink-packet-amnezia-wireguard?rev=09dd198a73e145aecae0f1306ba767cdcf132109#09dd198a73e145aecae0f1306ba767cdcf132109"
+version = "0.5.1+sm.1"
+source = "git+https://github.com/slipmesh/netlink-packet-amnezia-wireguard?rev=8f9c7e3f2a25c8fea4619d1af119b216a8fc022f#8f9c7e3f2a25c8fea4619d1af119b216a8fc022f"
 dependencies = [
  "bitflags",
  "libc",
