@@ -1,4 +1,4 @@
-//! Thin wrapper around `netlink-packet-amnezia-wireguard` + `genetlink` - talks the kernel
+//! Thin wrapper around `netlink-packet-amneziawg` + `genetlink` - talks the kernel
 //! module's own genl family ("amneziawg", not "wireguard") directly rather than shelling out to
 //! the `awg` CLI. This module only owns the raw `GetDevice`/`SetDevice` netlink transport;
 //! interface/address/route management is `rt.rs` (a different netlink family).
@@ -11,8 +11,8 @@ use crate::obfuscation::Obfuscation;
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use genetlink::GenetlinkHandle;
-use netlink_packet_amnezia_wireguard::range::u32_range_pack;
-use netlink_packet_amnezia_wireguard::{
+use netlink_packet_amneziawg::range::u32_range_pack;
+use netlink_packet_amneziawg::{
     AmneziaWireguardAttribute, AmneziaWireguardCmd, AmneziaWireguardMessage,
 };
 use netlink_packet_core::{NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST, NetlinkMessage, NetlinkPayload};

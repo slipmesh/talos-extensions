@@ -62,21 +62,12 @@ prometheus-client = "0.25.1"
 socket2 = { version = "0.6.5", features = ["all"] }
 
 genetlink = "0.3.0"
-# Pinned to a specific rev, not crates.io's 0.1.2: the amneziawg kernel module we build against
-# (AWG_REF in talos-kernel's versions.env) speaks genl family version 3, which changed
-# WGDEVICE_A_H1..H4 from a NUL-terminated
-# decimal string to a packed u64 (per the kernel module's own src/netlink.c nla_policy
-# table - .type = NLA_U64). crates.io's 0.1.2 still only emits/parses the
-# old string form for those four attributes, which the current kernel module's nla_policy rejects
-# outright with "attribute type 14 has an invalid length" - and would
-# likely also break parsing GetDevice responses, since the kernel echoes H1 back as raw u64 bytes
-# that are not valid UTF-8. This exact fix (H1Range/H2Range/H3Range/H4Range as packed u64) landed
-# upstream the day before the kernel commit we're pinned to, but was never published to crates.io -
-# push_obfuscation_attrs, in common/src/netlink/awg.rs, is what emits them. The fork is ours
-# because the upstream one stayed on netlink-packet-core 0.8, which held this whole stack a
-# major behind; it carries that same AmneziaWG 3.1 work rebased onto netlink-packet-wireguard
-# 0.5.0. Nothing is published to crates.io, so a rev is the only pin available.
-netlink-packet-amnezia-wireguard = { git = "https://github.com/slipmesh/netlink-packet-amnezia-wireguard", rev = "09dd198a73e145aecae0f1306ba767cdcf132109" }
+# Ours, from a release tag, not crates.io's netlink-packet-amnezia-wireguard 0.1.2: the amneziawg
+# kernel module we build against (AWG_REF in talos-kernel's versions.env) speaks genl family
+# version 3, which carries WGDEVICE_A_H1..H4 as packed u64 ranges, and 0.1.2 only knows the old
+# NUL-terminated strings the module's nla_policy now rejects ("attribute type 14 has an invalid
+# length"). It is built on netlink-packet-wireguard, so it follows the netlink-packet-* majors below.
+netlink-packet-amneziawg = { git = "https://github.com/slipmesh/netlink-packet-amneziawg", tag = "v0.1.0" }
 # These four move as one unit, and the amneziawg crate above is the fifth: its types implement
 # `GenlFamily`/`Nla`/`Emitable` from *these* major versions, so a mismatch anywhere here stops the
 # awg module compiling. It is also the only crate that speaks AmneziaWG's genl family

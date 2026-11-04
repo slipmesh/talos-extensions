@@ -13,7 +13,7 @@ base64.workspace = true
 futures.workspace = true
 minijinja.workspace = true
 genetlink = { workspace = true, optional = true }
-netlink-packet-amnezia-wireguard = { workspace = true, optional = true }
+netlink-packet-amneziawg = { workspace = true, optional = true }
 netlink-packet-core = { workspace = true, optional = true }
 netlink-packet-generic = { workspace = true, optional = true }
 rtnetlink = { workspace = true, optional = true }
@@ -30,7 +30,7 @@ default = ["netlink"]
 # alone, and has to build wherever it is run, so the daemons keep the default and it opts out.
 netlink = [
     "dep:genetlink",
-    "dep:netlink-packet-amnezia-wireguard",
+    "dep:netlink-packet-amneziawg",
     "dep:netlink-packet-core",
     "dep:netlink-packet-generic",
     "dep:rtnetlink",
