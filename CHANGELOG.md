@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.14.5+sm.2] - 2026-11-04
+
+### Build system 🛠️
+
+- Update rust crate genetlink to v0.3.1 (release-1.14) (#60)
+- Take the amneziawg netlink packets from netlink-packet-amneziawg v0.1.0 (#70)
+
+### CI/CD ⚙️
+
+- Release-1.14 calls the shared workflows at slipmesh/.github@v2.3 (#55)
+- Release-1.14 keeps the next line's alpha.0 out of its changelog, through slipmesh/.github@v2.4 (#62)
+
+### Fixed 🐛
+
+- Refuse AmneziaWG obfuscation the kernel module rejects (#68)
+
 ## [1.14.5+sm.1] - 2026-10-30
 
 ### Added ✨
