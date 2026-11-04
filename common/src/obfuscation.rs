@@ -110,7 +110,7 @@ impl Obfuscation {
             .collect();
             anyhow::ensure!(
                 too_small.is_empty(),
-                "obfuscation.header_protection_key needs {} of at least {HEADER_PROTECTION_NONCE_SIZE}",
+                "obfuscation.header_protection_key needs {} to be at least {HEADER_PROTECTION_NONCE_SIZE}, the size of its nonce",
                 too_small.join(", ")
             );
         }
