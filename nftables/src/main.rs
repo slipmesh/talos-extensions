@@ -3,6 +3,7 @@ use nftables::template::{self, DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6, TEMPLATE_
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
+use common::shutdown::Shutdown;
 use std::collections::HashMap;
 use std::future::Future;
 use std::process::ExitCode;
@@ -31,13 +32,27 @@ async fn main() -> ExitCode {
         .init();
     tracing::info!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
 
-    match run().await {
-        Ok(()) => {
-            unreachable!("run() only returns via the watchdog loop exiting, which is always an Err")
-        }
+    let mut shutdown = match Shutdown::install() {
+        Ok(shutdown) => shutdown,
         Err(e) => {
             tracing::error!(error = %e, "nftables failed");
-            ExitCode::FAILURE
+            return ExitCode::FAILURE;
+        }
+    };
+    // The ruleset stays loaded: a restart must not leave the node without its firewall.
+    tokio::select! {
+        result = run() => match result {
+            Ok(()) => {
+                unreachable!("run() only returns via the watchdog loop exiting, which is always an Err")
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "nftables failed");
+                ExitCode::FAILURE
+            }
+        },
+        () = shutdown.requested() => {
+            tracing::info!("SIGTERM received, exiting with the ruleset left in place");
+            ExitCode::SUCCESS
         }
     }
 }
@@ -118,6 +133,7 @@ async fn watchdog(rendered: String) -> Result<()> {
         let mut monitor = match Command::new(ruleset::NFT_BIN)
             .arg("monitor")
             .stdout(Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
         {
             Ok(child) => child,

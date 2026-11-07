@@ -4,6 +4,7 @@ use awg::{config, gc, handshake, interface, metrics};
 use anyhow::{Context, Result};
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
+use common::shutdown::Shutdown;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -25,11 +26,26 @@ async fn main() -> std::process::ExitCode {
         .init();
     tracing::info!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
 
-    match run().await {
-        Ok(()) => unreachable!("run() only returns via the infinite handshake loop or an Err"),
+    let mut shutdown = match Shutdown::install() {
+        Ok(shutdown) => shutdown,
         Err(e) => {
             tracing::error!(error = %e, "awg failed to start");
-            std::process::ExitCode::FAILURE
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    // Nothing to wind down: the interfaces, peers and routes stay as they are, so a restart does
+    // not take the mesh down, and the next start picks its routes up again by protocol.
+    tokio::select! {
+        result = run() => match result {
+            Ok(()) => unreachable!("run() only returns via the infinite handshake loop or an Err"),
+            Err(e) => {
+                tracing::error!(error = %e, "awg failed to start");
+                std::process::ExitCode::FAILURE
+            }
+        },
+        () = shutdown.requested() => {
+            tracing::info!("SIGTERM received, exiting with the mesh left up");
+            std::process::ExitCode::SUCCESS
         }
     }
 }

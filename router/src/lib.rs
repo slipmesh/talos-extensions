@@ -8,6 +8,9 @@
 #[cfg(feature = "runtime")]
 pub mod bird;
 pub mod bird_conf;
+/// Runs the `bird` child process, which `taloscfg` has no business doing.
+#[cfg(feature = "runtime")]
+pub mod bird_process;
 /// Speaks BIRD's control protocol over a unix socket, which is a runtime concern and not portable;
 /// `config` does not touch it.
 #[cfg(feature = "runtime")]

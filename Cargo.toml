@@ -76,6 +76,9 @@ netlink-packet-amneziawg = { git = "https://github.com/slipmesh/netlink-packet-a
 netlink-packet-core = "0.9.0"
 netlink-packet-generic = "0.5.0"
 rtnetlink = "0.24.0"
+# `kill(2)`, for passing SIGTERM on to `bird`: tokio can only SIGKILL a child. Already in the lock graph
+# with `signal` on, via rtnetlink.
+nix = { version = "0.31.3", default-features = false, features = ["signal"] }
 # Deliberately no direct `netlink-packet-route` dependency: rtnetlink re-exports its own pinned
 # version as `rtnetlink::packet_route`, and importing route/link types through that path (not a
 # separate top-level `netlink_packet_route` dependency) avoids two possibly-mismatched copies of
