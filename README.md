@@ -207,6 +207,9 @@ before doing anything else - not from an empty set, which would leak routes acro
 loop never returns under normal operation), not a one-shot job, so any exit - success or failure -
 is grounds for a restart.
 
+The stop itself changes nothing: on SIGTERM, which is how Talos stops a service, `awg` exits and
+leaves its interfaces, peers and routes as they are, so a restart does not take the mesh down.
+
 ---
 
 ## `router`: BIRD-based OSPF/iBGP routing, also driven by a static file
@@ -218,6 +221,10 @@ the other, and spawns `bird` as a supervised child process - staged into the sam
 running as a separate sidecar container: Talos extension services have no sidecar concept, a
 service is always one `container.entrypoint`. It talks to BIRD over BIRD's own control socket
 protocol directly, so no `birdc` binary is shipped.
+
+On SIGTERM `router` passes the signal on to `bird`, whose own shutdown closes the BGP sessions with a
+NOTIFICATION and withdraws the routes it exported to the kernel, and exits once `bird` has. A `bird`
+still running 8 s later is killed, ahead of Talos's own SIGKILL at 10 s.
 
 There is no topology to discover, because there is nothing to discover it from. `router.yaml`
 declares it all:
@@ -304,6 +311,7 @@ re-check its own tables via `nftables::all_present` and reapply if any are missi
 strategy Talos's own `network.NfTablesChainController` uses to keep *its* table present - see that
 controller's source (`internal/app/machined/pkg/controllers/network/nftables_chain.go`) for the
 same event-driven reconcile pattern, and `nftables.rs`'s own doc comment for the full story.
+On SIGTERM it exits with the ruleset still loaded.
 
 The config is not a set of structured fields this binary renders into rules - the template is the
 actual nftables syntax, fed to a vendored static `nft -f` almost unmodified. This binary only does

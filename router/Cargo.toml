@@ -17,6 +17,7 @@ required-features = ["runtime"]
 anyhow.workspace = true
 common.workspace = true
 futures.workspace = true
+nix = { workspace = true, optional = true }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -28,4 +29,4 @@ yaml_serde.workspace = true
 [features]
 default = ["runtime"]
 # The netlink-backed modules and the binary over them; `config` builds without any of it.
-runtime = ["common/netlink"]
+runtime = ["common/netlink", "dep:nix"]

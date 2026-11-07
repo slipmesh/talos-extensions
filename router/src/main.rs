@@ -1,7 +1,8 @@
-use router::{bird, bird_conf, config, exporter, resolver};
+use router::{bird, bird_conf, bird_process, config, exporter, resolver};
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
+use common::shutdown::Shutdown;
 use config::RouterConfig;
 use std::path::Path;
 use std::process::ExitCode;
@@ -42,8 +43,12 @@ async fn main() -> ExitCode {
         .init();
     tracing::info!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
 
-    match run().await {
-        Ok(()) => unreachable!("run() only returns via bird exiting, which is always an Err"),
+    let result = match Shutdown::install() {
+        Ok(mut shutdown) => run(&mut shutdown).await,
+        Err(e) => Err(e),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             tracing::error!(error = %e, "router failed");
             ExitCode::FAILURE
@@ -72,7 +77,52 @@ struct RouterState {
     template: common::template::Template,
 }
 
-async fn run() -> Result<()> {
+async fn run(shutdown: &mut Shutdown) -> Result<()> {
+    // Nothing is running yet that a stop has to wind down, and bypass resolution alone can retry
+    // past Talos's stop timeout.
+    let (ctx, bypass_routes) = tokio::select! {
+        prepared = prepare() => prepared?,
+        () = shutdown.requested() => {
+            tracing::info!("SIGTERM received before bird started, exiting");
+            return Ok(());
+        }
+    };
+
+    let bird_child = Command::new(BIRD_BIN)
+        .args(["-f", "-c", BIRD_CONF_PATH, "-s", bird::BIRD_CONTROL_SOCKET])
+        .spawn()
+        .with_context(|| format!("failed to spawn {BIRD_BIN}"))?;
+
+    wait_for_control_socket().await?;
+
+    // Same render as the pre-spawn write in `prepare` (bypass_routes hasn't changed) - a deliberate
+    // no-op that seeds `bird::reconcile`'s file-diff baseline through the normal code path rather
+    // than trusting the pre-spawn write as a special case.
+    reconcile(&ctx, &bypass_routes).await?;
+
+    if ctx.bypass_cfg.is_some() {
+        tokio::spawn(bypass_refresh_loop(ctx.clone()));
+    }
+    tokio::spawn(bird_health_watchdog(ctx.clone()));
+
+    // After the control socket exists, since that is what the exporter reads - and after bird,
+    // whose exit stays the only fatal one here.
+    if let Some(cfg) = &ctx.metrics {
+        tokio::spawn(exporter::supervise(
+            bird::BIRD_CONTROL_SOCKET.to_string(),
+            cfg.listen.clone(),
+        ));
+    }
+
+    // `router` treats "bird exited" as its own fatal condition, the same way `awg` treats any
+    // exit from its handshake loop as fatal: `extension-services/router.yaml`'s `restart: always`
+    // is what actually recovers from this, by restarting the whole container (both processes,
+    // fresh) - there's no separate in-process supervision/restart-just-bird logic here on purpose.
+    bird_process::supervise(bird_child, shutdown.requested()).await
+}
+
+/// Everything before `bird` is spawned: config, template, `router-lo`, and a `bird.conf` on disk.
+async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
     let raw = tokio::fs::read_to_string(CONFIG_PATH)
         .await
         .with_context(|| format!("failed to read config file {CONFIG_PATH}"))?;
@@ -123,42 +173,7 @@ async fn run() -> Result<()> {
     tokio::fs::write(BIRD_CONF_PATH, &initial_conf)
         .await
         .with_context(|| format!("failed to write {BIRD_CONF_PATH}"))?;
-
-    let mut bird_child = Command::new(BIRD_BIN)
-        .args(["-f", "-c", BIRD_CONF_PATH, "-s", bird::BIRD_CONTROL_SOCKET])
-        .spawn()
-        .with_context(|| format!("failed to spawn {BIRD_BIN}"))?;
-
-    wait_for_control_socket().await?;
-
-    // Same render as the pre-spawn write above (bypass_routes hasn't changed) - a deliberate
-    // no-op that seeds `bird::reconcile`'s file-diff baseline through the normal code path rather
-    // than trusting the pre-spawn write as a special case.
-    reconcile(&ctx, &bypass_routes).await?;
-
-    if ctx.bypass_cfg.is_some() {
-        tokio::spawn(bypass_refresh_loop(ctx.clone()));
-    }
-    tokio::spawn(bird_health_watchdog(ctx.clone()));
-
-    // After the control socket exists, since that is what the exporter reads - and after bird,
-    // whose exit stays the only fatal one here.
-    if let Some(cfg) = &ctx.metrics {
-        tokio::spawn(exporter::supervise(
-            bird::BIRD_CONTROL_SOCKET.to_string(),
-            cfg.listen.clone(),
-        ));
-    }
-
-    // `router` treats "bird exited" as its own fatal condition, the same way `awg` treats any
-    // exit from its handshake loop as fatal: `extension-services/router.yaml`'s `restart: always`
-    // is what actually recovers from this, by restarting the whole container (both processes,
-    // fresh) - there's no separate in-process supervision/restart-just-bird logic here on purpose.
-    let status = bird_child
-        .wait()
-        .await
-        .context("failed to wait on bird child process")?;
-    anyhow::bail!("bird exited unexpectedly: {status}");
+    Ok((ctx, bypass_routes))
 }
 
 /// Polls for `bird::BIRD_CONTROL_SOCKET` to appear after spawning `bird` - bounded (10s at
