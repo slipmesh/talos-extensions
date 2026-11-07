@@ -19,6 +19,10 @@ pub async fn supervise(mut bird: Child, shutdown: impl Future<Output = ()>) -> R
         }
         () = shutdown => {}
     }
+    shut_down(bird).await
+}
+
+pub async fn shut_down(mut bird: Child) -> Result<()> {
     tracing::info!("SIGTERM received, stopping bird");
     let status = stop(&mut bird, STOP_TIMEOUT).await?;
     tracing::info!(%status, "bird stopped");

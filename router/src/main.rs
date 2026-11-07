@@ -93,12 +93,16 @@ async fn run(shutdown: &mut Shutdown) -> Result<()> {
         .spawn()
         .with_context(|| format!("failed to spawn {BIRD_BIN}"))?;
 
-    wait_for_control_socket().await?;
-
-    // Same render as the pre-spawn write in `prepare` (bypass_routes hasn't changed) - a deliberate
-    // no-op that seeds `bird::reconcile`'s file-diff baseline through the normal code path rather
-    // than trusting the pre-spawn write as a special case.
-    reconcile(&ctx, &bypass_routes).await?;
+    tokio::select! {
+        ready = async {
+            wait_for_control_socket().await?;
+            // Same render as the pre-spawn write in `prepare` (bypass_routes hasn't changed) - a
+            // deliberate no-op that seeds `bird::reconcile`'s file-diff baseline through the normal
+            // code path rather than trusting the pre-spawn write as a special case.
+            reconcile(&ctx, &bypass_routes).await
+        } => ready?,
+        () = shutdown.requested() => return bird_process::shut_down(bird_child).await,
+    }
 
     if ctx.bypass_cfg.is_some() {
         tokio::spawn(bypass_refresh_loop(ctx.clone()));
