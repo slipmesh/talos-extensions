@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-alpha.2+sm.1] - 2026-11-07
+
+### Build system 🛠️
+
+- Commit Cargo.lock (#51)
+- Update rust crate genetlink to v0.3.1 (main) (#59)
+- Take the amneziawg netlink packets from netlink-packet-amneziawg v0.1.0 (#69)
+- Update rust crate genetlink to 0.3.1 (main) (#72)
+- Update rust crate minijinja to 3.0.5 (main) (#73)
+- Update rust crate prometheus-client to 0.25.2 (main) (#74)
+- Update rust crate yaml_serde to 0.10.7 (main) (#75)
+- Update rust crate rtnetlink to 0.24.0 (main) (#63)
+
+### CI/CD ⚙️
+
+- Mark the newest stable release latest, through slipmesh/.github@v2.1 (#47)
+- Promote before tagging, through slipmesh/.github@v2.2 (#53)
+- Call the shared workflows at slipmesh/.github@v2.3 (#54)
+- Call the shared workflows at slipmesh/.github@v2.4 (#61)
+
+### Documentation 📚
+
+- Tag alpha.0 when branching a line, and how to withdraw a broken release (#52)
+- Note that renovate opens patch updates on each release branch (#57)
+
+### Fixed 🐛
+
+- Refuse AmneziaWG obfuscation the kernel module rejects (#67)
+- Exit on sigterm instead of waiting to be killed
+
+### Miscellaneous 🧹
+
+- Hand dependency updates to renovate (#56)
+
+## [1.15.0-alpha.0] - 2026-10-30
+
+### Added ✨
+
+- Ship the extension-service specs in the daemons image (#42)
+- Render one rw endpoint, any host or address (#45)
+
+### Build system 🛠️
+
+- Require tokio 1.54.1, minijinja 3.0.4 and similar 3.2.1 (#39)
+
+### CI/CD ⚙️
+
+- Build natively through the shared workflows and publish the binaries as an image (#38)
+- Open release PRs from a workflow and release on their merge (#40)
+- Take the release notes from git-cliff through slipmesh/.github@v1.2 (#41)
+- Build only the merged release PR, through the v2 shared workflows (#44)
+
+### Documentation 📚
+
+- State why bird.conf comes first and which bird the fixtures match
+- Point at talos-installer for the extension packaging (#43)
+- Release per Talos line from release-1.X branches (#46)
+
 ## [0.4.0] - 2026-10-19
 
 ### Added ✨
