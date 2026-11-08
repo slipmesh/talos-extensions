@@ -39,6 +39,18 @@ jobs:
       contents: read
       packages: write
 
+  # Builds the image from placeholders and pushes nothing, so a Dockerfile the release build
+  # would fail on fails here.
+  image-check:
+    if: github.event_name == 'pull_request'
+    uses: slipmesh/.github/.github/workflows/image.yml@v4.0.2
+    permissions:
+      contents: read
+      packages: write
+    with:
+      push: false
+      binaries: awg router nftables slipmesh-taloscfg
+
   promote:
     needs: [release-commit, image]
     uses: slipmesh/.github/.github/workflows/promote.yml@v4.0.2
