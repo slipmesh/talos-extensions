@@ -491,6 +491,10 @@ Every run mints for the whole topology, whichever nodes it renders, and renders 
 node before it writes any patch file. `--check` and `--diff` never write: when a secret would have
 to be minted they stop and name it, because a key minted and not kept would differ on the next run.
 
+`--diff` prints no secret. The value of every `private_key`, `header_protection_key` and `password`
+line, at any depth, shows as `<redacted>` when it is the same on both sides and as
+`<redacted, old>` and `<redacted, new>` where it changed.
+
 ### Road warriors
 
 `rw-add`/`rw-del` add or remove one client in the pool's own document the same way, so the rest of
