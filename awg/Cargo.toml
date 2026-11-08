@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Talos extension service: converges AmneziaWG interfaces (mesh links and/or road-warrior peers) from a static config file, tracks handshakes and installs kernel routes for explicitly-addressed peers"
 
 [[bin]]
