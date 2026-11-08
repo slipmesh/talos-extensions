@@ -279,9 +279,9 @@ impl TryFrom<ClientEntry> for RoadwarriorClient {
         let name = entry.name;
         let public_key = match (entry.public_key, &entry.private_key) {
             (Some(public), None) => public,
-            (None, Some(private)) => private
-                .public_key()
-                .map_err(|e| format!("client {name:?}: private_key: {e}"))?,
+            (None, Some(private)) => private.public_key().map_err(|e| {
+                format!("client {name:?}: private_key: {:#}", anyhow::Error::new(e))
+            })?,
             (None, None) => {
                 return Err(format!("client {name:?}: needs public_key or private_key"));
             }
