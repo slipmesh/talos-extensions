@@ -4,8 +4,6 @@ pub mod cidr;
 #[cfg(feature = "netlink")]
 pub mod netlink;
 pub mod obfuscation;
-#[cfg(unix)]
-pub mod shutdown;
 pub mod template;
 
 pub use obfuscation::Obfuscation;

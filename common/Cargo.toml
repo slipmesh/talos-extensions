@@ -19,11 +19,10 @@ netlink-packet-generic = { workspace = true, optional = true }
 rtnetlink = { workspace = true, optional = true }
 serde.workspace = true
 sliplib-secrets.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "sync"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 tracing.workspace = true
 
 [dev-dependencies]
-nix.workspace = true
 tokio = { workspace = true, features = ["time"] }
 yaml_serde.workspace = true
 
