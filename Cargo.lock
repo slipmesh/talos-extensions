@@ -91,7 +91,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "awg"
-version = "1.15.0-alpha.2+sm.1"
+version = "1.15.0-alpha.2+sm.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -292,7 +292,7 @@ dependencies = [
 
 [[package]]
 name = "common"
-version = "1.15.0-alpha.2+sm.1"
+version = "1.15.0-alpha.2+sm.2"
 dependencies = [
  "anyhow",
  "futures",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "nftables"
-version = "1.15.0-alpha.2+sm.1"
+version = "1.15.0-alpha.2+sm.2"
 dependencies = [
  "anyhow",
  "common",
@@ -1424,7 +1424,7 @@ dependencies = [
 
 [[package]]
 name = "router"
-version = "1.15.0-alpha.2+sm.1"
+version = "1.15.0-alpha.2+sm.2"
 dependencies = [
  "anyhow",
  "common",
@@ -1811,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "taloscfg"
-version = "1.15.0-alpha.2+sm.1"
+version = "1.15.0-alpha.2+sm.2"
 dependencies = [
  "anstream",
  "anstyle",
