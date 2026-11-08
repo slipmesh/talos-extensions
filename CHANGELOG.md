@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-alpha.2+sm.2] - 2026-11-08
+
+### Build system 🛠️
+
+- Update rust crate minijinja to 3.1.0 (main) (#85)
+
+### CI/CD ⚙️
+
+- Check licenses and ship third-party notices through slipmesh/.github@v3.1.0 (#87)
+
+### Fixed 🐛
+
+- Keep secrets out of generate --diff output (#84)
+- Keep keys out of debug output through the sliplib-secrets types (#86)
+
 ## [1.15.0-alpha.2+sm.1] - 2026-11-07
 
 ### Build system 🛠️
