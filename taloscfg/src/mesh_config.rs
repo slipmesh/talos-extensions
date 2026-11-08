@@ -11,6 +11,7 @@
 use common::Obfuscation;
 use router::config::BfdSettings;
 use serde::Deserialize;
+use sliplib_secrets::wireguard::PrivateKey;
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
 
@@ -173,7 +174,7 @@ pub struct NodeEntry {
     /// (one identity per node, not per link - same as the old schema's per-node `NodeConfig`
     /// public key). See `render.rs`'s idempotency handling for when this is left unset.
     #[serde(default)]
-    pub mesh_private_key: Option<String>,
+    pub mesh_private_key: Option<PrivateKey>,
     /// Overrides (replaces, does not merge with) `cluster.direct_interfaces` for this node only -
     /// for a node whose physically-connected interfaces don't follow the fleet-wide CNI-bridge
     /// convention the global default is for (e.g. a non-Talos mesh peer with its own LAN-facing
@@ -226,7 +227,7 @@ pub struct RoadwarriorPool {
     /// Shared identity across every node in `node_hostnames` - same precedent as the old schema's
     /// single roadwarriors device key, not per-node.
     #[serde(default)]
-    pub private_key: Option<String>,
+    pub private_key: Option<PrivateKey>,
     /// This pool is plain WireGuard, no AmneziaWG obfuscation at all - for clients that can't do
     /// AmneziaWG's extensions (a phone/laptop running a stock WireGuard app, not the AmneziaWG
     /// app). Same precedent and same reason as `MeshLink::plain`.
@@ -253,7 +254,7 @@ pub struct RoadwarriorPool {
 pub struct RoadwarriorClient {
     pub name: String,
     pub public_key: String,
-    pub private_key: Option<String>,
+    pub private_key: Option<PrivateKey>,
     pub allowed_ips: Vec<String>,
     pub advanced_security: bool,
 }
@@ -264,7 +265,7 @@ struct ClientEntry {
     #[serde(default)]
     public_key: Option<String>,
     #[serde(default)]
-    private_key: Option<String>,
+    private_key: Option<PrivateKey>,
     #[serde(default)]
     allowed_ips: Vec<String>,
     #[serde(default)]
@@ -278,8 +279,9 @@ impl TryFrom<ClientEntry> for RoadwarriorClient {
         let name = entry.name;
         let public_key = match (entry.public_key, &entry.private_key) {
             (Some(public), None) => public,
-            (None, Some(private)) => crate::keys::public_key_from_private(private)
-                .map_err(|e| format!("client {name:?}: private_key: {e:#}"))?,
+            (None, Some(private)) => private.public_key().map_err(|e| {
+                format!("client {name:?}: private_key: {:#}", anyhow::Error::new(e))
+            })?,
             (None, None) => {
                 return Err(format!("client {name:?}: needs public_key or private_key"));
             }
@@ -468,14 +470,40 @@ nodes:
     }
 
     #[test]
+    fn debug_output_never_carries_a_secret() {
+        let [node, header, pool, client] =
+            ["A", "E", "I", "M"].map(|c| format!("{}=", c.repeat(43)));
+        let yaml = format!(
+            "{}    mesh_private_key: \"{node}\"
+obfuscation: {{header_protection_key: \"{header}\"}}
+roadwarriors:
+  - name: rw
+    node_hostnames: [a]
+    address: 10.99.0.1/24
+    listen_port: 51900
+    private_key: \"{pool}\"
+    clients:
+      - {{name: laptop, private_key: \"{client}\"}}
+",
+            minimal_yaml()
+        );
+        let cfg: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
+        let printed = format!("{cfg:?}");
+        for secret in [node, header, pool, client] {
+            assert!(!printed.contains(&secret), "{printed}");
+        }
+    }
+
+    #[test]
     fn a_client_needs_exactly_one_of_its_keys() {
         let neither = yaml_serde::from_str::<RoadwarriorClient>("{name: laptop}").unwrap_err();
         assert!(neither.to_string().contains("laptop"), "{neither}");
 
-        let private = crate::keys::generate_private_key();
-        let public = crate::keys::public_key_from_private(&private).unwrap();
+        let private = PrivateKey::generate();
+        let public = private.public_key().unwrap();
         let both = yaml_serde::from_str::<RoadwarriorClient>(&format!(
-            "{{name: laptop, public_key: \"{public}\", private_key: \"{private}\"}}"
+            "{{name: laptop, public_key: \"{public}\", private_key: \"{}\"}}",
+            private.expose()
         ))
         .unwrap_err();
         assert!(both.to_string().contains("not both"), "{both}");

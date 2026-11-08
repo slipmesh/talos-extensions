@@ -8,6 +8,7 @@ pub use common::MetricsConfig;
 use common::Obfuscation;
 use common::cidr::parse_cidr;
 use serde::{Deserialize, Serialize};
+use sliplib_secrets::wireguard::PrivateKey;
 use std::collections::HashSet;
 
 #[derive(Deserialize, Serialize, Debug, Default, PartialEq)]
@@ -37,7 +38,7 @@ pub struct InterfaceEntry {
     /// giving a node its own per-interface key, or the same key across every node's config when a
     /// single shared identity is needed (e.g. so roaming clients see one consistent server
     /// identity regardless of which node they connect to).
-    pub private_key: String,
+    pub private_key: PrivateKey,
     #[serde(default)]
     pub obfuscation: Obfuscation,
     /// Only meaningful for peers that have an explicit `allowed_ips` (see `PeerEntry`) - ignored
@@ -151,16 +152,14 @@ mod tests {
             name: name.to_string(),
             listen_port: 51820,
             addresses: vec![],
-            private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
+            private_key: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into(),
             obfuscation: Obfuscation::default(),
             handshake_stale_secs: None,
             peers: vec![],
         }
     }
 
-    #[test]
-    fn parses_a_full_config_from_yaml() {
-        let yaml = r#"
+    const FULL_CONFIG: &str = r#"
 interfaces:
   - name: mesh-a1b2c3d4
     listen_port: 51820
@@ -187,6 +186,23 @@ interfaces:
         allowed_ips: ["10.99.0.5/32"]
         advanced_security: true
 "#;
+
+    #[test]
+    fn debug_output_never_carries_a_secret() {
+        let cfg: AwgConfig = yaml_serde::from_str(FULL_CONFIG).unwrap();
+        let printed = format!("{cfg:?}");
+        for secret in [
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=",
+            "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE=",
+        ] {
+            assert!(!printed.contains(secret), "{printed}");
+        }
+    }
+
+    #[test]
+    fn parses_a_full_config_from_yaml() {
+        let yaml = FULL_CONFIG;
         let cfg: AwgConfig = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(cfg.interfaces.len(), 2);
         assert_eq!(cfg.interfaces[0].peers[0].allowed_ips, None);
@@ -199,7 +215,7 @@ interfaces:
         assert_eq!(cfg.interfaces[1].obfuscation.i1, Some("5-10".to_string()));
         assert_eq!(
             cfg.interfaces[1].obfuscation.header_protection_key,
-            Some("EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE=".to_string())
+            Some("EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE=".into())
         );
         assert_eq!(
             cfg.interfaces[1].obfuscation.content_padding_addition,
@@ -304,7 +320,7 @@ interfaces:
     fn accepts_advanced_security_peer_with_header_protection_key() {
         let mut a = iface("a");
         a.obfuscation.header_protection_key =
-            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string());
+            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into());
         a.peers.push(PeerEntry {
             public_key: "k".to_string(),
             name: None,

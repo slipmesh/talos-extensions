@@ -12,6 +12,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use sliplib_secrets::wireguard::PrivateKey;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use taloscfg::slipmesh_file::SlipmeshFile;
@@ -105,7 +106,7 @@ enum Command {
         /// This client's private key, if you have it and rw-add did not keep it - fills in the
         /// config in full instead of a placeholder.
         #[arg(long = "private-key")]
-        private_key: Option<String>,
+        private_key: Option<PrivateKey>,
         /// The client's Endpoint: one of the pool's node_hostnames (default: the first one), or
         /// any other host or address taken as written, the pool's listen_port added when it
         /// carries no port of its own.
@@ -172,7 +173,7 @@ fn main() -> Result<()> {
         } => rw_inspect(
             &if_,
             &name,
-            private_key.as_deref(),
+            private_key.as_ref(),
             endpoint.as_deref(),
             export,
             qr,
@@ -254,7 +255,7 @@ fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
 fn rw_inspect(
     if_: &str,
     name: &str,
-    private_key: Option<&str>,
+    private_key: Option<&PrivateKey>,
     endpoint: Option<&str>,
     export: bool,
     qr: bool,
@@ -939,14 +940,14 @@ clients:
         );
         let topology = paths.topology();
         let dave = &topology.roadwarriors[0].clients[0];
-        let private = dave.private_key.as_deref().unwrap();
-        assert_eq!(
-            taloscfg::keys::public_key_from_private(private).unwrap(),
-            dave.public_key
-        );
+        let private = dave.private_key.as_ref().unwrap();
+        assert_eq!(private.public_key().unwrap(), dave.public_key);
         let (secrets, _) = secrets::resolve(&topology);
         let text = roadwarrior::inspect(&topology, &secrets, "first", "dave", None, None).unwrap();
-        assert!(text.contains(&format!("PrivateKey = {private}")), "{text}");
+        assert!(
+            text.contains(&format!("PrivateKey = {}", private.expose())),
+            "{text}"
+        );
     }
 
     #[test]

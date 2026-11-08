@@ -13,7 +13,6 @@
 use crate::config::{InterfaceEntry, PeerEntry};
 use anyhow::{Context, Result};
 use common::cidr::parse_cidr;
-use common::keys::decode_key;
 use common::netlink::awg::{AwgClient, push_obfuscation_attrs};
 use common::netlink::rt::RtClient;
 use netlink_packet_amneziawg::{
@@ -22,6 +21,7 @@ use netlink_packet_amneziawg::{
     AmneziaWireguardPeerFlags,
 };
 use netlink_packet_core::DefaultNla;
+use sliplib_secrets::wireguard::{decode_key, encode_key};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
@@ -123,8 +123,6 @@ fn allowed_ip_to_cidr(attrs: &[AmneziaWireguardAllowedIpAttr]) -> Option<String>
 /// Reads back the peer set actually configured on the kernel interface. Always called, never
 /// assumed empty - see this module's doc comment for why (no in-memory state survives a restart).
 pub async fn current_peers(awg: &mut AwgClient, iface: &str) -> Result<Vec<Peer>> {
-    use base64::Engine;
-
     let attrs = awg.get_device(iface).await?;
     let mut peers = Vec::new();
     for attr in attrs {
@@ -138,7 +136,7 @@ pub async fn current_peers(awg: &mut AwgClient, iface: &str) -> Result<Vec<Peer>
             for pattr in peer.0 {
                 match pattr {
                     AmneziaWireguardPeerAttribute::PublicKey(k) => {
-                        public_key = Some(base64::engine::general_purpose::STANDARD.encode(k));
+                        public_key = Some(encode_key(&k));
                     }
                     AmneziaWireguardPeerAttribute::AllowedIps(ips) => {
                         allowed_ips = ips
@@ -306,7 +304,7 @@ async fn sync_peers(
 async fn set_identity(awg: &mut AwgClient, iface: &InterfaceEntry) -> Result<()> {
     let mut device_attrs = vec![
         AmneziaWireguardAttribute::IfName(iface.name.clone()),
-        AmneziaWireguardAttribute::PrivateKey(decode_key(&iface.private_key)?),
+        AmneziaWireguardAttribute::PrivateKey(decode_key(iface.private_key.expose())?),
         AmneziaWireguardAttribute::ListenPort(iface.listen_port),
     ];
     push_obfuscation_attrs(&mut device_attrs, &iface.obfuscation)?;

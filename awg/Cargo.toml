@@ -15,7 +15,6 @@ required-features = ["runtime"]
 
 [dependencies]
 anyhow.workspace = true
-base64.workspace = true
 common.workspace = true
 bytes.workspace = true
 http-body-util.workspace = true
@@ -26,6 +25,7 @@ netlink-packet-core = { workspace = true, optional = true }
 prometheus-client.workspace = true
 rtnetlink = { workspace = true, optional = true }
 serde.workspace = true
+sliplib-secrets.workspace = true
 socket2.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true

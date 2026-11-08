@@ -24,6 +24,7 @@ use common::ROUTE_PROTOCOL;
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
 use netlink_packet_amneziawg::{AmneziaWireguardAttribute, AmneziaWireguardPeerAttribute};
+use sliplib_secrets::wireguard::encode_key;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -65,8 +66,6 @@ pub struct PeerStats {
 /// re-emitting its `PublicKey` and nothing else, so replacing on every frame would reset a real
 /// handshake and real counters to zero for exactly the peers that carry the most state.
 pub fn merge_peer_attrs(attrs: &[AmneziaWireguardAttribute]) -> HashMap<String, PeerStats> {
-    use base64::Engine;
-
     let mut out: HashMap<String, PeerStats> = HashMap::new();
     for attr in attrs {
         let AmneziaWireguardAttribute::Peers(device_peers) = attr else {
@@ -74,9 +73,7 @@ pub fn merge_peer_attrs(attrs: &[AmneziaWireguardAttribute]) -> HashMap<String, 
         };
         for peer in device_peers {
             let Some(public_key) = peer.0.iter().find_map(|pattr| match pattr {
-                AmneziaWireguardPeerAttribute::PublicKey(k) => {
-                    Some(base64::engine::general_purpose::STANDARD.encode(k))
-                }
+                AmneziaWireguardPeerAttribute::PublicKey(k) => Some(encode_key(k)),
                 _ => None,
             }) else {
                 continue;
@@ -242,8 +239,7 @@ mod tests {
     const KEY: [u8; 32] = [7u8; 32];
 
     fn key_b64() -> String {
-        use base64::Engine;
-        base64::engine::general_purpose::STANDARD.encode(KEY)
+        encode_key(&KEY)
     }
 
     fn handshake_at(seconds: i64) -> AmneziaWireguardPeerAttribute {

@@ -12,16 +12,16 @@
 //!   rendering node A's config requires already knowing node B's resolved private key, not just
 //!   A's own.
 
-use crate::keys;
 use crate::mesh_config::MeshConfig;
 use crate::obfuscation_gen;
 use common::Obfuscation;
+use sliplib_secrets::wireguard::PrivateKey;
 use std::collections::HashMap;
 
 pub struct ResolvedSecrets {
-    pub mesh_private_keys: HashMap<String, String>,
+    pub mesh_private_keys: HashMap<String, PrivateKey>,
     pub mesh_link_obfuscation: HashMap<String, Obfuscation>,
-    pub roadwarrior_private_keys: HashMap<String, String>,
+    pub roadwarrior_private_keys: HashMap<String, PrivateKey>,
     pub roadwarrior_obfuscation: HashMap<String, Obfuscation>,
 }
 
@@ -36,7 +36,7 @@ pub fn link_key(pair: &[String; 2]) -> String {
 #[derive(Default)]
 pub struct Minted {
     /// By the node's position in `nodes`.
-    pub node_keys: Vec<(usize, String)>,
+    pub node_keys: Vec<(usize, PrivateKey)>,
     /// By the link's position in `mesh.links`; only the fields generated.
     pub link_obfuscation: Vec<(usize, Obfuscation)>,
     pub pools: Vec<PoolMinted>,
@@ -46,7 +46,7 @@ pub struct Minted {
 
 pub struct PoolMinted {
     pub name: String,
-    pub private_key: Option<String>,
+    pub private_key: Option<PrivateKey>,
     /// Only the fields generated.
     pub obfuscation: Option<Obfuscation>,
 }
@@ -63,11 +63,11 @@ impl Minted {
 }
 
 /// `specific`, else a fresh key - which is also returned as the one generated.
-fn resolve_key(specific: Option<&str>) -> (String, Option<String>) {
+fn resolve_key(specific: Option<&PrivateKey>) -> (PrivateKey, Option<PrivateKey>) {
     match specific {
-        Some(key) => (key.to_owned(), None),
+        Some(key) => (key.clone(), None),
         None => {
-            let key = keys::generate_private_key();
+            let key = PrivateKey::generate();
             (key.clone(), Some(key))
         }
     }
@@ -142,7 +142,7 @@ pub fn resolve(topology: &MeshConfig) -> (ResolvedSecrets, Minted) {
 
     let mut mesh_private_keys = HashMap::new();
     for (index, node) in topology.nodes.iter().enumerate() {
-        let (key, generated) = resolve_key(node.mesh_private_key.as_deref());
+        let (key, generated) = resolve_key(node.mesh_private_key.as_ref());
         if let Some(generated) = generated {
             minted.node_keys.push((index, generated));
             minted
@@ -167,7 +167,7 @@ pub fn resolve(topology: &MeshConfig) -> (ResolvedSecrets, Minted) {
     let mut roadwarrior_private_keys = HashMap::new();
     let mut roadwarrior_obfuscation = HashMap::new();
     for pool in &topology.roadwarriors {
-        let (key, private_key) = resolve_key(pool.private_key.as_deref());
+        let (key, private_key) = resolve_key(pool.private_key.as_ref());
         if private_key.is_some() {
             minted
                 .names
@@ -297,9 +297,9 @@ roadwarriors:
     #[test]
     fn resolve_uses_explicit_node_private_key() {
         let mut topology = topology();
-        topology.nodes[0].mesh_private_key = Some("explicit-key".to_owned());
+        topology.nodes[0].mesh_private_key = Some("explicit-key".into());
         let (resolved, minted) = resolve(&topology);
-        assert_eq!(resolved.mesh_private_keys["a"], "explicit-key");
+        assert_eq!(resolved.mesh_private_keys["a"], "explicit-key".into());
         assert_eq!(minted.node_keys.len(), 1);
         assert_eq!(minted.node_keys[0].0, 1);
     }

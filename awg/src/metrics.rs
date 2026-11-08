@@ -430,7 +430,7 @@ mod tests {
             name: name.to_string(),
             listen_port: 51820,
             addresses: vec![],
-            private_key: PRIVATE_KEY.to_string(),
+            private_key: PRIVATE_KEY.into(),
             obfuscation: Obfuscation::default(),
             handshake_stale_secs: None,
             peers,

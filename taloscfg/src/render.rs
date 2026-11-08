@@ -5,7 +5,6 @@
 //! Every function here takes the topology's secrets already resolved - see `secrets`.
 
 use crate::addressing;
-use crate::keys;
 use crate::mesh_config::{BypassSourceEntry, MeshConfig};
 use crate::secrets::{ResolvedSecrets, link_key};
 use anyhow::{Context, Result};
@@ -317,7 +316,7 @@ fn mesh_interfaces_for(
             obfuscation,
             handshake_stale_secs: None,
             peers: vec![PeerEntry {
-                public_key: keys::public_key_from_private(peer_private_key)?,
+                public_key: peer_private_key.public_key()?,
                 name: Some(peer_name.clone()),
                 endpoint: peer_node
                     .endpoint
@@ -337,22 +336,23 @@ fn roadwarrior_interfaces_for(
     mesh: &MeshConfig,
     node_name: &str,
     resolved: &ResolvedSecrets,
-) -> Vec<InterfaceEntry> {
+) -> Result<Vec<InterfaceEntry>> {
     mesh.roadwarriors
         .iter()
         .filter(|pool| pool.node_hostnames.iter().any(|h| h == node_name))
         .map(|pool| {
+            let private_key = resolved
+                .roadwarrior_private_keys
+                .get(&pool.name)
+                .cloned()
+                .with_context(|| format!("no resolved private key for pool {:?}", pool.name))?;
             let mut addresses = vec![pool.address.clone()];
             addresses.extend(pool.address6.clone());
-            InterfaceEntry {
+            Ok(InterfaceEntry {
                 name: format!("rw-{}", pool.name),
                 listen_port: pool.listen_port,
                 addresses,
-                private_key: resolved
-                    .roadwarrior_private_keys
-                    .get(&pool.name)
-                    .cloned()
-                    .unwrap_or_default(),
+                private_key,
                 obfuscation: resolved
                     .roadwarrior_obfuscation
                     .get(&pool.name)
@@ -370,7 +370,7 @@ fn roadwarrior_interfaces_for(
                         advanced_security: c.advanced_security,
                     })
                     .collect(),
-            }
+            })
         })
         .collect()
 }
@@ -381,7 +381,7 @@ pub fn render_awg_config(
     resolved: &ResolvedSecrets,
 ) -> Result<AwgConfig> {
     let mut interfaces = mesh_interfaces_for(mesh, node_name, resolved)?;
-    interfaces.extend(roadwarrior_interfaces_for(mesh, node_name, resolved));
+    interfaces.extend(roadwarrior_interfaces_for(mesh, node_name, resolved)?);
     Ok(AwgConfig {
         interfaces,
         metrics: metrics_for(
@@ -688,8 +688,7 @@ roadwarriors:
         let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
-        let expected_public =
-            keys::public_key_from_private(&resolved.mesh_private_keys["b"]).unwrap();
+        let expected_public = resolved.mesh_private_keys["b"].public_key().unwrap();
         assert_eq!(ifaces[0].peers[0].public_key, expected_public);
     }
 
@@ -789,7 +788,7 @@ mesh:
     fn roadwarrior_interfaces_for_builds_a_tracked_peer_per_client() {
         let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
-        let ifaces = roadwarrior_interfaces_for(&mesh, "a", &resolved);
+        let ifaces = roadwarrior_interfaces_for(&mesh, "a", &resolved).unwrap();
         assert_eq!(ifaces.len(), 1);
         assert_eq!(ifaces[0].name, "rw-eu");
         assert_eq!(ifaces[0].listen_port, 51900);
@@ -801,10 +800,23 @@ mesh:
     }
 
     #[test]
+    fn roadwarrior_interfaces_for_a_pool_without_a_resolved_key_is_an_error() {
+        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mut resolved = resolved_for(&mesh);
+        resolved.roadwarrior_private_keys.clear();
+        let err = roadwarrior_interfaces_for(&mesh, "a", &resolved).unwrap_err();
+        assert!(err.to_string().contains("eu"), "{err}");
+    }
+
+    #[test]
     fn roadwarrior_interfaces_for_a_node_not_in_node_hostnames_is_empty() {
         let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
-        assert!(roadwarrior_interfaces_for(&mesh, "c", &resolved).is_empty());
+        assert!(
+            roadwarrior_interfaces_for(&mesh, "c", &resolved)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
