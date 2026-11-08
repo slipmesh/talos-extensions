@@ -626,7 +626,9 @@ versions and the steps are in [docs/RELEASING.md](docs/RELEASING.md).
 Pull requests and pushes run fmt, clippy, the tests, `cargo audit`, which also runs weekly, and the
 `licenses` check, which holds every dependency to the licenses and sources [`deny.toml`](deny.toml)
 allows and renders the third-party notices from [`about.toml`](about.toml); only
-the push of a merged release PR builds, once every check of that push passes. An advisory with no
+the push of a merged release PR builds, once every check of that push passes. A pull request also
+builds the image from empty placeholders and pushes nothing, so a Dockerfile the release build would
+fail on fails there. An advisory with no
 fix yet is ignored in `.cargo/audit.toml`, with the reason next to it. It builds every binary for
 the musl target on a runner of each arch and packs the four of them, in `/usr/local/bin/`, into
 `ghcr.io/slipmesh/talos-extensions`, together with the `extension-services/` specs of the three
