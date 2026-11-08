@@ -587,6 +587,7 @@ Install it with `cargo install --path taloscfg`.
 cargo test
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
+cargo deny --locked check licenses bans sources
 ```
 
 No mocking framework - pure logic (`config::validate`, `interface::diff_peers`,
@@ -622,14 +623,20 @@ how it read `0.1.0` at tag `v0.1.6`. The Release PR workflow (Actions, then Rele
 commit as a PR with `CHANGELOG.md` regenerated, and merging it tags the release. Release lines,
 versions and the steps are in [docs/RELEASING.md](docs/RELEASING.md).
 
-Pull requests and pushes run fmt, clippy, the tests and `cargo audit`, which also runs weekly; only
+Pull requests and pushes run fmt, clippy, the tests, `cargo audit`, which also runs weekly, and the
+`licenses` check, which holds every dependency to the licenses and sources [`deny.toml`](deny.toml)
+allows and renders the third-party notices from [`about.toml`](about.toml); only
 the push of a merged release PR builds, once every check of that push passes. An advisory with no
 fix yet is ignored in `.cargo/audit.toml`, with the reason next to it. It builds every binary for
 the musl target on a runner of each arch and packs the four of them, in `/usr/local/bin/`, into
 `ghcr.io/slipmesh/talos-extensions`, together with the `extension-services/` specs of the three
-daemons in `/usr/local/etc/containers/`. The image is pushed as `sha-<commit>`, retagged as the
+daemons in `/usr/local/etc/containers/` and the license notices of what is linked into the binaries
+in `/usr/share/licenses/talos-extensions/`: `THIRD-PARTY-NOTICES` for the crates, rendered by
+[cargo-about](https://embarkstudios.github.io/cargo-about/) with [`about.hbs`](about.hbs), and
+`COPYRIGHT-rust-std.html` and `COPYRIGHT-musl` for the Rust standard library and the musl libc. The
+image is pushed as `sha-<commit>`, retagged as the
 release once the build succeeds, the commit is tagged, and the GitHub Release gets the same
-binaries with a `SHA256SUMS`. Only a released image is one talos-installer can pin, so a daemon
+binaries and notices with a `SHA256SUMS`. Only a released image is one talos-installer can pin, so a daemon
 change reaches it through a release.
 
 To reproduce one binary locally, build on a Linux host of that arch with `musl-tools` installed:

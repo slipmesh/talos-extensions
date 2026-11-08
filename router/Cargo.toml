@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Talos extension service: renders BIRD config (OSPFv3 over mesh links, full-mesh iBGP over loopbacks) and resolves bypass-route prefixes from a static config file, supervising a bundled bird process"
 
 [[bin]]

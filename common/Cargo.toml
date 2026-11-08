@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Netlink helpers (rtnetlink + amneziawg genl) and small utilities shared by talos-extensions services - no Kubernetes dependency"
 
 [dependencies]
