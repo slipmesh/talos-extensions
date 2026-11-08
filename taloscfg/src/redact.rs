@@ -63,7 +63,7 @@ fn secret(line: &str) -> Option<(&str, &str)> {
         rest = item.trim_start_matches(' ');
     }
     let colon = rest.find(':')?;
-    let field = rest[..colon].trim_end_matches(' ');
+    let field = rest[..colon].trim_end_matches([' ', '\t']);
     let after_colon = &line[line.len() - rest.len() + colon + 1..];
     let value = after_colon.trim_start_matches([' ', '\t']);
     let prefix = &line[..line.len() - value.len()];
@@ -110,6 +110,7 @@ mod tests {
             format!("        header_protection_key: \"{OLD}\""),
             format!("    private_key:   {OLD}   "),
             format!("private_key :\t{OLD}"),
+            format!("  private_key\t: {OLD}"),
         ] {
             let (masked, _) = mask_pair(&line, &line);
             assert!(!masked.contains(OLD), "{masked}");
