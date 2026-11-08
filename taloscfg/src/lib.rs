@@ -3,7 +3,6 @@
 pub mod addressing;
 pub mod defaults;
 pub mod edit;
-pub mod keys;
 pub mod merge;
 pub mod mesh_config;
 pub mod obfuscation_gen;

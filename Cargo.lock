@@ -94,7 +94,6 @@ name = "awg"
 version = "1.15.0-alpha.2+sm.1"
 dependencies = [
  "anyhow",
- "base64",
  "bytes",
  "common",
  "http-body-util",
@@ -105,6 +104,7 @@ dependencies = [
  "prometheus-client",
  "rtnetlink",
  "serde",
+ "sliplib-secrets",
  "socket2",
  "tokio",
  "tracing",
@@ -295,7 +295,6 @@ name = "common"
 version = "1.15.0-alpha.2+sm.1"
 dependencies = [
  "anyhow",
- "base64",
  "futures",
  "genetlink",
  "minijinja",
@@ -305,6 +304,7 @@ dependencies = [
  "nix",
  "rtnetlink",
  "serde",
+ "sliplib-secrets",
  "tokio",
  "tracing",
  "yaml_serde",
@@ -1722,6 +1722,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
+name = "sliplib-secrets"
+version = "0.2.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.2.0#3ceabfac49b55f586623343c8a63e4bc7ad76f10"
+dependencies = [
+ "base64",
+ "curve25519-dalek",
+ "serde",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1806,7 +1818,6 @@ dependencies = [
  "anyhow",
  "atomic-write-file",
  "awg",
- "base64",
  "clap",
  "common",
  "nftables",
@@ -1816,7 +1827,7 @@ dependencies = [
  "serde",
  "sha2",
  "similar",
- "x25519-dalek",
+ "sliplib-secrets",
  "yaml-rt",
  "yaml_serde",
 ]
@@ -2405,6 +2416,20 @@ name = "zeroize"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "zerotrie"

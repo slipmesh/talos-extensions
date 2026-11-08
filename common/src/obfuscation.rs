@@ -25,6 +25,7 @@
 //!   fingerprintable signature.
 
 use serde::{Deserialize, Serialize};
+use sliplib_secrets::Secret;
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
 pub struct Obfuscation {
@@ -64,10 +65,9 @@ pub struct Obfuscation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub i5: Option<String>,
 
-    /// Base64, same wire format/length as `InterfaceEntry::private_key` - decoded via
-    /// `common::keys::decode_key`.
+    /// Base64 of 32 bytes like a WireGuard key, but one both peers share.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub header_protection_key: Option<String>,
+    pub header_protection_key: Option<Secret>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_padding_addition: Option<u32>,
@@ -183,7 +183,7 @@ mod tests {
     fn header_protected(junk_sizes: [Option<u16>; 4]) -> Obfuscation {
         let [s1, s2, s3, s4] = junk_sizes;
         Obfuscation {
-            header_protection_key: Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string()),
+            header_protection_key: Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into()),
             s1,
             s2,
             s3,

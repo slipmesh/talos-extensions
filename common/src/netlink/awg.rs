@@ -6,7 +6,6 @@
 //! Ported from slipmesh-operators' `common::netlink::awg` -
 //! functionally identical, just re-homed into a project with no Kubernetes dependency.
 
-use crate::keys::decode_key;
 use crate::obfuscation::Obfuscation;
 use anyhow::{Context, Result};
 use futures::StreamExt;
@@ -17,6 +16,7 @@ use netlink_packet_amneziawg::{
 };
 use netlink_packet_core::{NLM_F_ACK, NLM_F_DUMP, NLM_F_REQUEST, NetlinkMessage, NetlinkPayload};
 use netlink_packet_generic::GenlMessage;
+use sliplib_secrets::wireguard::decode_key;
 
 /// Appends every device-level obfuscation attribute AmneziaWG's `SetDevice` accepts.
 ///
@@ -90,7 +90,7 @@ pub fn push_obfuscation_attrs(
     }
     if let Some(key) = &o.header_protection_key {
         attrs.push(AmneziaWireguardAttribute::HeaderProtectionKey(
-            decode_key(key).context("invalid header_protection_key")?,
+            decode_key(key.expose()).context("invalid header_protection_key")?,
         ));
     }
     if let Some(v) = o.content_padding_addition {

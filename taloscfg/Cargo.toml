@@ -16,15 +16,14 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 awg.workspace = true
-base64.workspace = true
 clap.workspace = true
 common.workspace = true
 nftables.workspace = true
 router.workspace = true
 serde.workspace = true
+sliplib-secrets.workspace = true
 sha2 = "0.11.1"
 similar = "3.2.1"
-x25519-dalek = { version = "3.0.0", features = ["static_secrets", "getrandom"] }
 rand = "0.10.3"
 yaml_serde.workspace = true
 qrcode.workspace = true

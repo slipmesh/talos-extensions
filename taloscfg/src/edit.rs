@@ -133,7 +133,7 @@ pub fn record(yaml: &mut YamlDoc, file: &SlipmeshFile, minted: &Minted) -> Resul
                 .nodes
                 .get_mut(*node)
                 .context("a node the network document does not have")?
-                .mesh_private_key = Some(key.clone());
+                .mesh_private_key = Some(key.expose().to_owned());
         }
         for (link, generated) in &minted.link_obfuscation {
             network
@@ -155,7 +155,7 @@ pub fn record(yaml: &mut YamlDoc, file: &SlipmeshFile, minted: &Minted) -> Resul
             .with_context(|| format!("pool {name:?} is in no document"))?;
         let mut pool: PoolDocument = yaml.read_document(index)?;
         if let Some(key) = &pool_minted.private_key {
-            pool.private_key = Some(key.clone());
+            pool.private_key = Some(key.expose().to_owned());
         }
         if let Some(generated) = &pool_minted.obfuscation {
             pool.obfuscation
@@ -177,7 +177,10 @@ pub fn add_client(yaml: &mut YamlDoc, document: usize, client: &RoadwarriorClien
             .private_key
             .is_none()
             .then(|| client.public_key.clone()),
-        private_key: client.private_key.clone(),
+        private_key: client
+            .private_key
+            .as_ref()
+            .map(|key| key.expose().to_owned()),
         allowed_ips: client.allowed_ips.clone(),
     });
     yaml.write_document(document, &pool)?;
@@ -313,8 +316,9 @@ plain: true
             let key = node.mesh_private_key.expect(&node.name);
             assert!(
                 recorded.contains(&format!(
-                    "      node_id: {}\n      mesh_private_key: {key}\n",
-                    node.node_id
+                    "      node_id: {}\n      mesh_private_key: {}\n",
+                    node.node_id,
+                    key.expose()
                 )),
                 "{recorded}"
             );

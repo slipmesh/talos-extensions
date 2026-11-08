@@ -3,18 +3,18 @@
 //! `slipmesh.yaml` is `edit`'s.
 
 use crate::addressing;
-use crate::keys;
 use crate::mesh_config::{MeshConfig, RoadwarriorClient, RoadwarriorPool};
 use crate::secrets::ResolvedSecrets;
 use anyhow::{Context, Result, bail};
 use common::Obfuscation;
+use sliplib_secrets::wireguard::PrivateKey;
 use std::net::{IpAddr, Ipv4Addr};
 
 /// A private key we know (was just generated, or given via `--public-key`'s absence) vs. one we
 /// never had (given via `--public-key`, or looking up an existing client with `rw-inspect`).
 #[derive(Debug)]
 pub enum ClientPrivateKey {
-    Known(String),
+    Known(PrivateKey),
     Unknown,
 }
 
@@ -85,7 +85,7 @@ fn check_not_duplicate(pool: &RoadwarriorPool, name: &str, public_key: &str) -> 
 fn pool_identity(
     pool: &RoadwarriorPool,
     secrets: &ResolvedSecrets,
-) -> Result<(String, Obfuscation)> {
+) -> Result<(PrivateKey, Obfuscation)> {
     let private_key = secrets
         .roadwarrior_private_keys
         .get(&pool.name)
@@ -176,7 +176,7 @@ pub(crate) fn render_client_config(
     let mut out = String::new();
     out.push_str("[Interface]\n");
     let key_line = match private_key {
-        ClientPrivateKey::Known(k) => k.as_str(),
+        ClientPrivateKey::Known(k) => k.expose(),
         ClientPrivateKey::Unknown => "<enter your private key here>",
     };
     out.push_str(&format!("PrivateKey = {key_line}\n"));
@@ -280,8 +280,8 @@ pub fn add(
     let (client_private_key, resolved_public_key) = match public_key {
         Some(pk) => (ClientPrivateKey::Unknown, pk.to_string()),
         None => {
-            let sk = keys::generate_private_key();
-            let pk = keys::public_key_from_private(&sk)?;
+            let sk = PrivateKey::generate();
+            let pk = sk.public_key()?;
             (ClientPrivateKey::Known(sk), pk)
         }
     };
@@ -306,7 +306,7 @@ pub fn add(
         });
     }
     let (server_private_key, obfuscation) = pool_identity(pool, secrets)?;
-    let server_public_key = keys::public_key_from_private(&server_private_key)?;
+    let server_public_key = server_private_key.public_key()?;
     let endpoint = pool_endpoint(mesh, pool, endpoint)?;
     let text = render_client_config(
         &client_private_key,
@@ -341,25 +341,25 @@ pub fn inspect(
     secrets: &ResolvedSecrets,
     if_: &str,
     name: &str,
-    private_key: Option<&str>,
+    private_key: Option<&PrivateKey>,
     endpoint: Option<&str>,
 ) -> Result<String> {
     let pool = find_pool(mesh, if_)?;
     let (_, client) = find_client(mesh, if_, name)?;
 
     let (server_private_key, obfuscation) = pool_identity(pool, secrets)?;
-    let server_public_key = keys::public_key_from_private(&server_private_key)?;
+    let server_public_key = server_private_key.public_key()?;
     let endpoint = pool_endpoint(mesh, pool, endpoint)?;
     let client_private_key = match private_key {
         Some(pk) => {
-            let derived = keys::public_key_from_private(pk).context("--private-key")?;
+            let derived = pk.public_key().context("--private-key")?;
             anyhow::ensure!(
                 derived == client.public_key,
                 "--private-key doesn't match {name:?}'s stored public_key in slipmesh.yaml \
                  (derived {derived:?}, expected {:?}) - wrong key, or wrong client",
                 client.public_key
             );
-            ClientPrivateKey::Known(pk.to_string())
+            ClientPrivateKey::Known(pk.clone())
         }
         None => match &client.private_key {
             Some(kept) => ClientPrivateKey::Known(kept.clone()),
@@ -457,12 +457,11 @@ roadwarriors:
 
     #[test]
     fn inspect_fills_in_a_private_key_only_when_it_matches() {
-        let carol_priv = keys::generate_private_key();
+        let carol_priv = PrivateKey::generate();
         let mut m = mesh();
-        m.roadwarriors[1].clients[0].public_key =
-            keys::public_key_from_private(&carol_priv).unwrap();
+        m.roadwarriors[1].clients[0].public_key = carol_priv.public_key().unwrap();
         let inspect_carol =
-            |key: Option<&str>| inspect(&m, &secrets(&m), "obfuscation", "carol", key, None);
+            |key: Option<&PrivateKey>| inspect(&m, &secrets(&m), "obfuscation", "carol", key, None);
 
         let cfg = inspect_carol(None).unwrap();
         assert!(cfg.contains("<enter your private key here>"), "{cfg}");
@@ -470,9 +469,12 @@ roadwarriors:
         assert!(cfg.contains("Jc = 4"), "{cfg}");
 
         let cfg = inspect_carol(Some(&carol_priv)).unwrap();
-        assert!(cfg.contains(&format!("PrivateKey = {carol_priv}")), "{cfg}");
+        assert!(
+            cfg.contains(&format!("PrivateKey = {}", carol_priv.expose())),
+            "{cfg}"
+        );
 
-        let err = inspect_carol(Some(&keys::generate_private_key())).unwrap_err();
+        let err = inspect_carol(Some(&PrivateKey::generate())).unwrap_err();
         assert!(
             err.to_string().contains("doesn't match"),
             "error was: {err}"
@@ -533,7 +535,7 @@ roadwarriors:
         let m = mesh();
         let pool = find_pool(&m, "obfuscation").unwrap();
         let (server_key, obf) = pool_identity(pool, &secrets(&m)).unwrap();
-        let server_pub = keys::public_key_from_private(&server_key).unwrap();
+        let server_pub = server_key.public_key().unwrap();
         let endpoint = pool_endpoint(&m, pool, None).unwrap();
         let cfg = render_client_config(
             &ClientPrivateKey::Unknown,
@@ -558,10 +560,10 @@ roadwarriors:
         let pool = find_pool(&m, "plain").unwrap();
         let (server_key, obf) = pool_identity(pool, &secrets(&m)).unwrap();
         assert_eq!(obf, Obfuscation::default());
-        let server_pub = keys::public_key_from_private(&server_key).unwrap();
+        let server_pub = server_key.public_key().unwrap();
         let endpoint = pool_endpoint(&m, pool, None).unwrap();
         let cfg = render_client_config(
-            &ClientPrivateKey::Known("client-priv-key".to_string()),
+            &ClientPrivateKey::Known("client-priv-key".into()),
             &["198.51.100.41/32".to_string()],
             resolve_dns(&m, pool).as_deref(),
             &server_pub,
@@ -615,10 +617,7 @@ roadwarriors:
         let ClientPrivateKey::Known(key) = key else {
             panic!("no key returned");
         };
-        assert_eq!(
-            keys::public_key_from_private(&key).unwrap(),
-            added.client.public_key
-        );
+        assert_eq!(key.public_key().unwrap(), added.client.public_key);
         assert!(!text.contains("<enter your private key here>"));
     }
 
