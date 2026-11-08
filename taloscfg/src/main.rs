@@ -476,13 +476,15 @@ fn render_hosts(
         .collect()
 }
 
-/// A unified diff of one host's patch file, `None` when nothing would change.
+/// A unified diff of one host's patch file with its secrets masked, `None` when nothing would
+/// change. A file whose only change is a secret still has a diff: the masked line says it changed.
 fn diff_text(host: &str, before: &str, after: &str) -> Option<String> {
     if before == after {
         return None;
     }
+    let (before, after) = taloscfg::redact::mask_pair(before, after);
     Some(
-        similar::TextDiff::from_lines(before, after)
+        similar::TextDiff::from_lines(&before, &after)
             .unified_diff()
             .header(&format!("{host} (current)"), &format!("{host} (generated)"))
             .to_string(),
@@ -511,6 +513,26 @@ fn print_diff(host: &str, before: &str, after: &str) {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn a_diff_shows_that_a_key_changed_and_never_a_key() {
+        let (old, new, kept) = (
+            "b2xkLWtleS1vbGQta2V5LW9sZC1rZXktb2xkLWtleQ==",
+            "bmV3LWtleS1uZXcta2V5LW5ldy1rZXktbmV3LWtleQ==",
+            "a2VwdC1rZXkta2VwdC1rZXkta2VwdC1rZXkta2VwdA==",
+        );
+        let before =
+            format!("- name: mesh-b\n  private_key: {old}\n- name: rw-a\n  private_key: {kept}\n");
+        let after =
+            format!("- name: mesh-b\n  private_key: {new}\n- name: rw-a\n  private_key: {kept}\n");
+        let text = diff_text("node-a", &before, &after).unwrap();
+        for key in [old, new, kept] {
+            assert!(!text.contains(key), "{text}");
+        }
+        assert!(text.contains("-  private_key: <redacted, old>"), "{text}");
+        assert!(text.contains("+  private_key: <redacted, new>"), "{text}");
+        assert!(text.contains("   private_key: <redacted>"), "{text}");
+    }
 
     #[test]
     fn an_unchanged_file_has_no_diff() {
