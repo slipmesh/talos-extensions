@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-alpha.2+sm.3] - 2026-11-09
+
+### CI/CD ⚙️
+
+- Check the image in pull requests and let shared ci add its notices (#90)
+- Ship the image's license notices as plain files, not executables (#91)
+
+### Changed 🔧
+
+- Stop on sigterm and log through sliplib-runtime (#93)
+
+### Miscellaneous 🧹
+
+- Name slipmesh contributors as the copyright holder in LICENSE-MIT (#92)
+
 ## [1.15.0-alpha.2+sm.2] - 2026-11-08
 
 ### Build system 🛠️
