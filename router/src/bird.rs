@@ -32,7 +32,7 @@ pub fn exact_iface_names(ospf_interfaces: &[String]) -> Vec<String> {
     ospf_interfaces
         .iter()
         .filter(|entry| {
-            !entry.contains('*') && !entry.contains('?') && common::cidr::parse_cidr(entry).is_err()
+            !entry.contains('*') && !entry.contains('?') && sliplib_net::parse(entry).is_err()
         })
         .cloned()
         .collect()
@@ -150,7 +150,7 @@ pub async fn ensure_loopback(
     ipv6_loopback: Ipv6Addr,
 ) -> Result<()> {
     let (index, _created) = rt.ensure_link(ROUTER_LOOPBACK_IFACE, "dummy").await?;
-    let link_local = crate::cidr::link_local_from_loopback(ipv6_loopback);
+    let link_local = crate::addressing::link_local_from_loopback(ipv6_loopback);
     rt.ensure_addresses(
         index,
         &[

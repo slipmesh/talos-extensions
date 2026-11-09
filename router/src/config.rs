@@ -7,7 +7,6 @@
 use crate::resolver::BypassSourceEntry;
 use anyhow::Result;
 use common::MetricsConfig;
-use common::cidr::parse_cidr as parse_dual_family_cidr;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv6Addr};
@@ -137,11 +136,12 @@ fn default_bypass_refresh_interval_secs() -> u64 {
 
 /// Parses a loopback-identity address: `"<addr>/<prefix>"`, or a bare address (defaults to `/32`
 /// for IPv4, `/128` for IPv6 - the whole point of a loopback identity is that it has no host
-/// bits). Delegates to `common::cidr::parse_cidr` (already used by `awg` for the same
-/// dual-family CIDR shape) whenever a prefix is present, so both parsers agree on what's valid.
+/// bits). Delegates to `sliplib_net::parse` whenever a prefix is present, so it accepts exactly
+/// what every other CIDR in the configs accepts.
 pub fn parse_loopback_address(s: &str) -> Result<(IpAddr, u8)> {
     if s.contains('/') {
-        return parse_dual_family_cidr(s);
+        let net = sliplib_net::parse(s)?;
+        return Ok((net.addr(), net.prefix_len()));
     }
     let addr: IpAddr = s
         .parse()
@@ -223,12 +223,12 @@ pub fn validate(cfg: &RouterConfig) -> Result<()> {
     }
 
     for cidr in &cfg.learn {
-        crate::cidr::parse_cidr(cidr)
+        sliplib_net::parse_ipv4(cidr)
             .map_err(|e| anyhow::anyhow!("learn: invalid IPv4 CIDR {cidr:?}: {e}"))?;
     }
 
     for entry in &cfg.announce {
-        crate::cidr::parse_cidr(&entry.net)
+        sliplib_net::parse_ipv4(&entry.net)
             .map_err(|e| anyhow::anyhow!("announce: invalid IPv4 CIDR {:?}: {e}", entry.net))?;
     }
 
@@ -256,7 +256,7 @@ fn validate_bypass_entry(entry: &BypassSourceEntry) -> Result<()> {
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("literal bypass source requires `prefixes`"))?;
             for p in prefixes {
-                crate::cidr::parse_cidr(&p.net).map_err(|e| {
+                sliplib_net::parse_ipv4(&p.net).map_err(|e| {
                     anyhow::anyhow!("bypass: invalid literal prefix {:?}: {e}", p.net)
                 })?;
             }

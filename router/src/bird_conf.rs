@@ -121,7 +121,7 @@ impl SanitizedRoute {
 /// `ospf_interfaces` doc comment) - if CIDR-by-address matching turns out not to work the way this
 /// assumes, falling back to name/glob-only entries doesn't change anything else in this module.
 fn render_iface_pattern(entry: &str) -> String {
-    if common::cidr::parse_cidr(entry).is_ok() {
+    if sliplib_net::parse(entry).is_ok() {
         entry.to_string()
     } else {
         format!("\"{}\"", sanitize_quoted(entry))

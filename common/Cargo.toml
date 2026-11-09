@@ -18,6 +18,7 @@ netlink-packet-core = { workspace = true, optional = true }
 netlink-packet-generic = { workspace = true, optional = true }
 rtnetlink = { workspace = true, optional = true }
 serde.workspace = true
+sliplib-net.workspace = true
 sliplib-secrets.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 tracing.workspace = true

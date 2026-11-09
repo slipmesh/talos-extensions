@@ -15,10 +15,9 @@
 //! (and any peer's) public endpoint if it could otherwise fall inside `bypass.include`, the same
 //! "config-authoring concern" pattern `awg`'s README already documents for private keys.
 
-use crate::cidr::{self, Cidr};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::net::Ipv4Addr;
+use sliplib_net::{IpNet, Ipv4Net};
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -80,15 +79,6 @@ static RIPESTAT_CLIENT: LazyLock<reqwest::Result<reqwest::Client>> = LazyLock::n
         .user_agent("talos-extensions-router")
         .build()
 });
-
-fn parse_cidr(s: &str) -> Option<Cidr> {
-    let (addr, len) = cidr::parse_cidr(s).ok()?;
-    Some((u32::from(addr), len))
-}
-
-fn format_cidr((addr, len): Cidr) -> String {
-    format!("{}/{len}", Ipv4Addr::from(addr))
-}
 
 /// RIPEstat's documented limit is 8 concurrent requests per IP
 /// (https://stat.ripe.net/docs/02.data-api/); kept comfortably under that cap.
@@ -259,23 +249,23 @@ async fn collect_source(source: &BypassSourceEntry) -> Result<Vec<(String, Strin
 
 /// Dedupe exact-duplicate CIDRs (first label wins), group by label, collapse each label's set
 /// independently - a merge never crosses label/org boundaries.
-fn dedupe_and_aggregate(entries: Vec<(String, String)>) -> Vec<(Cidr, String)> {
-    let mut by_net: std::collections::BTreeMap<Cidr, String> = std::collections::BTreeMap::new();
+fn dedupe_and_aggregate(entries: Vec<(String, String)>) -> Vec<(Ipv4Net, String)> {
+    let mut by_net: std::collections::BTreeMap<Ipv4Net, String> = std::collections::BTreeMap::new();
     for (cidr_str, label) in entries {
-        let Some(cidr) = parse_cidr(&cidr_str) else {
+        let Ok(cidr) = sliplib_net::parse_ipv4(&cidr_str) else {
             tracing::warn!(cidr = cidr_str, "skipping malformed CIDR in bypass source");
             continue;
         };
         by_net.entry(cidr).or_insert(label);
     }
-    let mut by_label: std::collections::BTreeMap<String, Vec<Cidr>> =
+    let mut by_label: std::collections::BTreeMap<String, Vec<Ipv4Net>> =
         std::collections::BTreeMap::new();
     for (cidr, label) in by_net {
         by_label.entry(label).or_default().push(cidr);
     }
     let mut result = Vec::new();
     for (label, nets) in by_label {
-        for net in cidr::collapse(&nets) {
+        for net in Ipv4Net::aggregate(&nets) {
             result.push((net, label.clone()));
         }
     }
@@ -283,7 +273,7 @@ fn dedupe_and_aggregate(entries: Vec<(String, String)>) -> Vec<(Cidr, String)> {
     result
 }
 
-async fn resolve_entries(sources: &[BypassSourceEntry]) -> Result<Vec<(Cidr, String)>> {
+async fn resolve_entries(sources: &[BypassSourceEntry]) -> Result<Vec<(Ipv4Net, String)>> {
     let per_source = futures::future::try_join_all(sources.iter().map(collect_source)).await?;
     Ok(dedupe_and_aggregate(
         per_source.into_iter().flatten().collect(),
@@ -318,7 +308,7 @@ async fn resolve_inner(
          return an empty bypass"
     );
 
-    let exclude_nets: Vec<Cidr> = resolve_entries(exclude)
+    let exclude_nets: Vec<Ipv4Net> = resolve_entries(exclude)
         .await?
         .into_iter()
         .map(|(net, _label)| net)
@@ -327,28 +317,18 @@ async fn resolve_inner(
 }
 
 /// Every included prefix with every excluded network punched out of it, as `(cidr, label)` text.
-fn exclude_all(included: Vec<(Cidr, String)>, exclude: Vec<Cidr>) -> Vec<(String, String)> {
-    let exclude_nets = cidr::collapse(&exclude);
+fn exclude_all(included: Vec<(Ipv4Net, String)>, exclude: Vec<Ipv4Net>) -> Vec<(String, String)> {
+    let exclude_nets = Ipv4Net::aggregate(&exclude);
     let mut out = Vec::new();
     for (net, label) in included {
-        let mut pending = vec![net];
-        for &exc in &exclude_nets {
-            let mut next_pending = Vec::new();
-            for n in pending {
-                if cidr::contains(exc, n) {
-                    continue;
-                }
-                if cidr::contains(n, exc) {
-                    next_pending.extend(cidr::address_exclude(n, exc));
-                } else {
-                    next_pending.push(n);
-                }
-            }
-            pending = next_pending;
+        let mut rest = vec![IpNet::V4(net)];
+        for &excluded in &exclude_nets {
+            rest = rest
+                .into_iter()
+                .flat_map(|n| sliplib_net::exclude(n, IpNet::V4(excluded)))
+                .collect();
         }
-        for n in pending {
-            out.push((format_cidr(n), label.clone()));
-        }
+        out.extend(rest.into_iter().map(|n| (n.to_string(), label.clone())));
     }
     out.sort();
     out
@@ -367,7 +347,7 @@ mod tests {
     fn resolved(list: &[(&str, &str)]) -> Vec<(String, String)> {
         dedupe_and_aggregate(entries(list))
             .into_iter()
-            .map(|(net, label)| (format_cidr(net), label))
+            .map(|(net, label)| (net.to_string(), label))
             .collect()
     }
 
@@ -407,7 +387,7 @@ mod tests {
 
     #[test]
     fn excluded_networks_are_punched_out_of_every_included_prefix() {
-        let net = |s: &str| parse_cidr(s).unwrap();
+        let net = |s: &str| s.parse::<Ipv4Net>().unwrap();
         assert_eq!(
             exclude_all(
                 vec![
