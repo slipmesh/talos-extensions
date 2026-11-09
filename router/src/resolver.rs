@@ -318,13 +318,17 @@ async fn resolve_inner(
          return an empty bypass"
     );
 
-    let mut exclude_nets: Vec<Cidr> = resolve_entries(exclude)
+    let exclude_nets: Vec<Cidr> = resolve_entries(exclude)
         .await?
         .into_iter()
         .map(|(net, _label)| net)
         .collect();
-    exclude_nets = cidr::collapse(&exclude_nets);
+    Ok(exclude_all(included, exclude_nets))
+}
 
+/// Every included prefix with every excluded network punched out of it, as `(cidr, label)` text.
+fn exclude_all(included: Vec<(Cidr, String)>, exclude: Vec<Cidr>) -> Vec<(String, String)> {
+    let exclude_nets = cidr::collapse(&exclude);
     let mut out = Vec::new();
     for (net, label) in included {
         let mut pending = vec![net];
@@ -347,12 +351,85 @@ async fn resolve_inner(
         }
     }
     out.sort();
-    Ok(out)
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entries(list: &[(&str, &str)]) -> Vec<(String, String)> {
+        list.iter()
+            .map(|(c, l)| (c.to_string(), l.to_string()))
+            .collect()
+    }
+
+    fn resolved(list: &[(&str, &str)]) -> Vec<(String, String)> {
+        dedupe_and_aggregate(entries(list))
+            .into_iter()
+            .map(|(net, label)| (format_cidr(net), label))
+            .collect()
+    }
+
+    #[test]
+    fn each_label_is_aggregated_on_its_own() {
+        assert_eq!(
+            resolved(&[
+                ("10.0.0.0/25", "a"),
+                ("10.0.0.128/25", "a"),
+                ("10.0.1.0/25", "a"),
+                ("10.0.1.128/25", "b"),
+                ("10.0.2.0/24", "a"),
+                ("10.0.2.0/26", "a"),
+            ]),
+            entries(&[
+                ("10.0.0.0/24", "a"),
+                ("10.0.1.0/25", "a"),
+                ("10.0.1.128/25", "b"),
+                ("10.0.2.0/24", "a"),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_duplicate_keeps_its_first_label_and_malformed_or_ipv6_entries_are_dropped() {
+        assert_eq!(
+            resolved(&[
+                ("10.0.0.0/24", "a"),
+                ("10.0.0.0/24", "b"),
+                ("not a cidr", "a"),
+                ("10.0.0.0/33", "a"),
+                ("2001:db8::/32", "a"),
+            ]),
+            entries(&[("10.0.0.0/24", "a")])
+        );
+    }
+
+    #[test]
+    fn excluded_networks_are_punched_out_of_every_included_prefix() {
+        let net = |s: &str| parse_cidr(s).unwrap();
+        assert_eq!(
+            exclude_all(
+                vec![
+                    (net("10.0.0.0/24"), "a".into()),
+                    (net("10.0.1.0/24"), "b".into()),
+                    (net("192.168.0.0/24"), "c".into()),
+                    (net("172.16.0.0/24"), "d".into()),
+                ],
+                vec![
+                    net("10.0.0.64/26"),
+                    net("10.0.1.0/25"),
+                    net("10.0.1.128/25"),
+                    net("172.16.0.0/16"),
+                ],
+            ),
+            entries(&[
+                ("10.0.0.0/26", "a"),
+                ("10.0.0.128/25", "a"),
+                ("192.168.0.0/24", "c"),
+            ])
+        );
+    }
 
     #[test]
     fn validate_asn_accepts_well_formed() {
