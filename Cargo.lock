@@ -445,7 +445,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1345,7 +1345,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1569,7 +1569,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1767,8 +1767,8 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "sliplib-runtime"
-version = "0.4.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.4.0#f75d7a63fd0574ba9643f905590513d51e40bb36"
+version = "0.5.1"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.5.1#04d0ea14ee991a53e16f90c3eded9bf195e801ed"
 dependencies = [
  "anyhow",
  "tokio-graceful-shutdown",
@@ -1778,8 +1778,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-secrets"
-version = "0.4.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.4.0#f75d7a63fd0574ba9643f905590513d51e40bb36"
+version = "0.5.1"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.5.1#04d0ea14ee991a53e16f90c3eded9bf195e801ed"
 dependencies = [
  "base64",
  "curve25519-dalek",
@@ -2288,7 +2288,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
