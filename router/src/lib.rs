@@ -3,6 +3,7 @@
 //! config types and `validate()` instead of duplicating them. `main.rs` is a thin binary entry
 //! point over this same module tree, not a separate copy.
 
+pub mod addressing;
 /// Talks netlink (address bookkeeping around BIRD). Gated so `taloscfg` can reuse `config` alone
 /// without building rtnetlink, which does not exist off Linux.
 #[cfg(feature = "runtime")]
@@ -15,7 +16,6 @@ pub mod bird_process;
 /// `config` does not touch it.
 #[cfg(feature = "runtime")]
 pub mod birdc;
-pub mod cidr;
 pub mod config;
 /// Spawns a child process, which `taloscfg` has no business doing.
 #[cfg(feature = "runtime")]

@@ -6,8 +6,8 @@
 
 pub use common::MetricsConfig;
 use common::Obfuscation;
-use common::cidr::parse_cidr;
 use serde::{Deserialize, Serialize};
+use sliplib_net::parse as parse_cidr;
 use sliplib_secrets::wireguard::PrivateKey;
 use std::collections::HashSet;
 

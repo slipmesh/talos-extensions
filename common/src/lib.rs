@@ -1,4 +1,3 @@
-pub mod cidr;
 /// Gated so that `taloscfg`, which only needs the config types, builds without the netlink stack -
 /// it is Linux-only, and the generator has to build wherever it is run.
 #[cfg(feature = "netlink")]

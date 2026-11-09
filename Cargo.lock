@@ -113,6 +113,7 @@ dependencies = [
  "prometheus-client",
  "rtnetlink",
  "serde",
+ "sliplib-net",
  "sliplib-runtime",
  "sliplib-secrets",
  "socket2",
@@ -326,6 +327,7 @@ dependencies = [
  "netlink-packet-generic",
  "rtnetlink",
  "serde",
+ "sliplib-net",
  "sliplib-secrets",
  "tokio",
  "tracing",
@@ -445,7 +447,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1345,7 +1347,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1477,6 +1479,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sliplib-net",
  "sliplib-runtime",
  "tokio",
  "tracing",
@@ -1569,7 +1572,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1766,9 +1769,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
+name = "sliplib-net"
+version = "0.6.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.6.0#b1874b04a0a09b5d1714f7242a2041d95b188000"
+dependencies = [
+ "ipnet",
+]
+
+[[package]]
 name = "sliplib-runtime"
-version = "0.5.1"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.5.1#04d0ea14ee991a53e16f90c3eded9bf195e801ed"
+version = "0.6.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.6.0#b1874b04a0a09b5d1714f7242a2041d95b188000"
 dependencies = [
  "anyhow",
  "tokio-graceful-shutdown",
@@ -1778,8 +1789,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-secrets"
-version = "0.5.1"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.5.1#04d0ea14ee991a53e16f90c3eded9bf195e801ed"
+version = "0.6.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.6.0#b1874b04a0a09b5d1714f7242a2041d95b188000"
 dependencies = [
  "base64",
  "curve25519-dalek",
@@ -1882,6 +1893,7 @@ dependencies = [
  "serde",
  "sha2",
  "similar",
+ "sliplib-net",
  "sliplib-secrets",
  "yaml-rt",
  "yaml_serde",
@@ -2288,7 +2300,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

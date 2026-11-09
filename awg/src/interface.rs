@@ -12,7 +12,6 @@
 
 use crate::config::{InterfaceEntry, PeerEntry};
 use anyhow::{Context, Result};
-use common::cidr::parse_cidr;
 use common::netlink::awg::{AwgClient, push_obfuscation_attrs};
 use common::netlink::rt::RtClient;
 use netlink_packet_amneziawg::{
@@ -96,7 +95,8 @@ async fn resolve_endpoint(host_port: &str) -> Result<String> {
 }
 
 fn cidr_to_allowed_ip(cidr: &str) -> Result<AmneziaWireguardAllowedIp> {
-    let (addr, prefix) = parse_cidr(cidr)?;
+    let net = sliplib_net::parse(cidr)?;
+    let (addr, prefix) = (net.addr(), net.prefix_len());
     let family = match addr {
         IpAddr::V4(_) => AmneziaWireguardAddressFamily::Ipv4,
         IpAddr::V6(_) => AmneziaWireguardAddressFamily::Ipv6,

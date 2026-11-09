@@ -51,9 +51,9 @@ fn find_client_index(pool: &RoadwarriorPool, name: &str) -> Result<usize> {
 pub(crate) fn parse_allowed_ip(input: &str) -> Result<String> {
     let input = input.trim();
     if input.contains('/') {
-        let (addr, prefix) = common::cidr::parse_cidr(input)
+        let net = sliplib_net::parse(input)
             .with_context(|| format!("invalid --allowed-ips entry {input:?}"))?;
-        Ok(format!("{addr}/{prefix}"))
+        Ok(net.to_string())
     } else {
         let addr: IpAddr = input
             .parse()
@@ -150,10 +150,15 @@ pub(crate) fn resolve_dns(mesh: &MeshConfig, pool: &RoadwarriorPool) -> Option<S
         return Some(dns.clone());
     }
     let subnet = mesh.cluster.service_subnet.as_deref()?;
-    let (IpAddr::V4(network), prefix) = common::cidr::parse_cidr(subnet).ok()? else {
-        return None;
-    };
-    Some(addressing::ipv4_loopback(network, prefix, Ipv4Addr::new(0, 0, 0, 10)).to_string())
+    let subnet = sliplib_net::parse_ipv4(subnet).ok()?;
+    Some(
+        addressing::ipv4_loopback(
+            subnet.addr(),
+            subnet.prefix_len(),
+            Ipv4Addr::new(0, 0, 0, 10),
+        )
+        .to_string(),
+    )
 }
 
 /// Renders a client-side config: stock WireGuard `.conf` shape for both cases (AmneziaWG apps

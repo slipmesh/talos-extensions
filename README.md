@@ -591,7 +591,8 @@ cargo deny --locked check licenses bans sources
 ```
 
 No mocking framework - pure logic (`config::validate`, `interface::diff_peers`,
-`rt::to_remove`, `cidr::parse_cidr`, all of `taloscfg`'s rendering) is unit-tested directly;
+`rt::to_remove`, the bypass set arithmetic in `resolver.rs`, all of `taloscfg`'s rendering) is
+unit-tested directly; CIDR parsing and exclusion come from `sliplib-net` and are tested there;
 netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`).
 
 Exercising a daemon end to end needs a Linux host with `CAP_NET_ADMIN`, and for `awg` the

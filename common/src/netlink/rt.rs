@@ -12,7 +12,6 @@
 //! Route/link types are imported via `rtnetlink::packet_route::...`, not a separate top-level
 //! `netlink-packet-route` dependency - see this workspace's root `Cargo.toml` comment on why.
 
-use crate::cidr::parse_cidr;
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
 use rtnetlink::packet_route::link::InfoKind;
@@ -20,6 +19,7 @@ use rtnetlink::packet_route::route::{RouteMessage, RouteProtocol};
 use rtnetlink::{
     AddressMessageBuilder, Handle, LinkMessageBuilder, RouteMessageBuilder, new_connection,
 };
+use sliplib_net::IpNet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -305,9 +305,9 @@ impl RtClient {
         let mut v4 = Vec::new();
         let mut v6 = Vec::new();
         for cidr in cidrs {
-            match parse_cidr(cidr)? {
-                (IpAddr::V4(a), p) => v4.push((a, p)),
-                (IpAddr::V6(a), p) => v6.push((a, p)),
+            match sliplib_net::parse(cidr)? {
+                IpNet::V4(net) => v4.push((net.addr(), net.prefix_len())),
+                IpNet::V6(net) => v6.push((net.addr(), net.prefix_len())),
             }
         }
         self.ensure_v4_addresses(index, &v4).await?;
@@ -361,9 +361,15 @@ impl RtClient {
     /// family. `protocol` marks the route as ours - see `crate::ROUTE_PROTOCOL`.
     pub async fn route_add(&self, index: u32, cidr: &str, protocol: RouteProtocol) -> Result<()> {
         let _guard = self.netlink_lock.lock().await;
-        match parse_cidr(cidr)? {
-            (IpAddr::V4(a), p) => self.route_add_v4(index, a, p, protocol).await,
-            (IpAddr::V6(a), p) => self.route_add_v6(index, a, p, protocol).await,
+        match sliplib_net::parse(cidr)? {
+            IpNet::V4(net) => {
+                self.route_add_v4(index, net.addr(), net.prefix_len(), protocol)
+                    .await
+            }
+            IpNet::V6(net) => {
+                self.route_add_v6(index, net.addr(), net.prefix_len(), protocol)
+                    .await
+            }
         }
     }
 
@@ -383,8 +389,9 @@ impl RtClient {
                 }
             }
         };
-        match parse_cidr(cidr)? {
-            (IpAddr::V4(a), p) => {
+        match sliplib_net::parse(cidr)? {
+            IpNet::V4(net) => {
+                let (a, p) = (net.addr(), net.prefix_len());
                 let msg: RouteMessage = RouteMessageBuilder::<Ipv4Addr>::new()
                     .destination_prefix(a, p)
                     .output_interface(index)
@@ -392,7 +399,8 @@ impl RtClient {
                     .build();
                 del(msg).await
             }
-            (IpAddr::V6(a), p) => {
+            IpNet::V6(net) => {
+                let (a, p) = (net.addr(), net.prefix_len());
                 let msg: RouteMessage = RouteMessageBuilder::<Ipv6Addr>::new()
                     .destination_prefix(a, p)
                     .output_interface(index)
