@@ -4,50 +4,34 @@ use awg::{config, gc, handshake, interface, metrics};
 use anyhow::{Context, Result};
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
-use common::shutdown::Shutdown;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::watch;
 
 /// Fixed path, matching `extension-services/awg.yaml`'s `configFiles[].mountPath` - never an env
 /// var or CLI flag: everything comes from the `ExtensionServiceConfig`, nothing else.
 const CONFIG_PATH: &str = "/etc/talos-extensions/awg.yaml";
+/// Inside the 10 s Talos waits after SIGTERM before it sends SIGKILL.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
-async fn main() -> std::process::ExitCode {
-    // No timestamp/ANSI: this only ever runs as a container's stdout, which Talos's own logging
-    // (`logToConsole: true` -> dmesg, or the container runtime's own log capture) already
-    // timestamps - matches slipmesh-operators' own reasoning for the same choice.
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .without_time()
-        .with_ansi(false)
-        .init();
+async fn main() -> Result<()> {
+    sliplib_runtime::init_tracing();
     tracing::info!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
-
-    let mut shutdown = match Shutdown::install() {
-        Ok(shutdown) => shutdown,
-        Err(e) => {
-            tracing::error!(error = %e, "awg failed to start");
-            return std::process::ExitCode::FAILURE;
-        }
-    };
     // Nothing to wind down: the interfaces, peers and routes stay as they are, so a restart does
     // not take the mesh down, and the next start picks its routes up again by protocol.
-    tokio::select! {
-        result = run() => match result {
-            Ok(()) => unreachable!("run() only returns via the infinite handshake loop or an Err"),
-            Err(e) => {
-                tracing::error!(error = %e, "awg failed to start");
-                std::process::ExitCode::FAILURE
+    sliplib_runtime::serve("awg", SHUTDOWN_TIMEOUT, async |shutdown| {
+        tokio::select! {
+            result = run() => result,
+            () = shutdown.requested() => {
+                tracing::info!("SIGTERM received, exiting with the mesh left up");
+                Ok(())
             }
-        },
-        () = shutdown.requested() => {
-            tracing::info!("SIGTERM received, exiting with the mesh left up");
-            std::process::ExitCode::SUCCESS
         }
-    }
+    })
+    .await
 }
 
 async fn run() -> Result<()> {

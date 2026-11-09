@@ -2,10 +2,9 @@ use router::{bird, bird_conf, bird_process, config, exporter, resolver};
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
-use common::shutdown::Shutdown;
 use config::RouterConfig;
+use sliplib_runtime::Shutdown;
 use std::path::Path;
-use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
@@ -29,31 +28,17 @@ const BIRD_CONF_PATH: &str = "/run/bird/bird.conf";
 /// doc comment for what it's watching for.
 const BIRD_HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(15);
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    // No timestamp/ANSI: this only ever runs as a container's stdout, which Talos's own logging
-    // (`logToConsole: true` -> dmesg, or the container runtime's own log capture) already
-    // timestamps - matches `awg`'s own reasoning for the same choice. `bird` itself logs to its
-    // own stderr (`log stderr { ... };` in the rendered config), inherited by this process's
-    // stdio by default, so both daemons' logs land in the same place with no extra plumbing.
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .without_time()
-        .with_ansi(false)
-        .init();
-    tracing::info!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
+/// Past `bird_process::STOP_TIMEOUT`, so that `bird` is stopped before the toplevel gives up, and
+/// inside the 10 s Talos waits after SIGTERM before it sends SIGKILL.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(9);
 
-    let result = match Shutdown::install() {
-        Ok(mut shutdown) => run(&mut shutdown).await,
-        Err(e) => Err(e),
-    };
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            tracing::error!(error = %e, "router failed");
-            ExitCode::FAILURE
-        }
-    }
+#[tokio::main]
+async fn main() -> Result<()> {
+    // `bird` logs to its own stderr (`log stderr { ... };` in the rendered config), inherited by
+    // this process's stdio, so both daemons' logs land in the same place.
+    sliplib_runtime::init_tracing();
+    tracing::info!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
+    sliplib_runtime::serve("router", SHUTDOWN_TIMEOUT, run).await
 }
 
 /// Shared state for the two background loops (`bypass_refresh_loop`, `bird_health_watchdog`) -
@@ -77,7 +62,7 @@ struct RouterState {
     template: common::template::Template,
 }
 
-async fn run(shutdown: &mut Shutdown) -> Result<()> {
+async fn run(shutdown: Shutdown) -> Result<()> {
     // Nothing is running yet that a stop has to wind down, and bypass resolution alone can retry
     // past Talos's stop timeout.
     let (ctx, bypass_routes) = tokio::select! {

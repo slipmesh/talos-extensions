@@ -30,7 +30,7 @@ sliplib-secrets.workspace = true
 socket2.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true
-tracing-subscriber.workspace = true
+sliplib-runtime.workspace = true
 yaml_serde.workspace = true
 
 [features]

@@ -3,10 +3,8 @@ use nftables::template::{self, DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6, TEMPLATE_
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
-use common::shutdown::Shutdown;
 use std::collections::HashMap;
 use std::future::Future;
-use std::process::ExitCode;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -19,42 +17,24 @@ use tokio::process::Command;
 /// rather than silently looping on forever.
 const DEFAULT_ROUTE_RETRIES: u32 = 10;
 const DEFAULT_ROUTE_RETRY_INTERVAL: Duration = Duration::from_secs(2);
+/// Inside the 10 s Talos waits after SIGTERM before it sends SIGKILL.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
-async fn main() -> ExitCode {
-    // No timestamp/ANSI: this only ever runs as a container's stdout, which Talos's own logging
-    // (`logToConsole: true` -> dmesg, or the container runtime's own log capture) already
-    // timestamps - matches `awg`/`router`'s own reasoning for the same choice.
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .without_time()
-        .with_ansi(false)
-        .init();
+async fn main() -> Result<()> {
+    sliplib_runtime::init_tracing();
     tracing::info!("{} {}", env!("CARGO_BIN_NAME"), env!("CARGO_PKG_VERSION"));
-
-    let mut shutdown = match Shutdown::install() {
-        Ok(shutdown) => shutdown,
-        Err(e) => {
-            tracing::error!(error = %e, "nftables failed");
-            return ExitCode::FAILURE;
-        }
-    };
     // The ruleset stays loaded: a restart must not leave the node without its firewall.
-    tokio::select! {
-        result = run() => match result {
-            Ok(()) => {
-                unreachable!("run() only returns via the watchdog loop exiting, which is always an Err")
+    sliplib_runtime::serve("nftables", SHUTDOWN_TIMEOUT, async |shutdown| {
+        tokio::select! {
+            result = run() => result,
+            () = shutdown.requested() => {
+                tracing::info!("SIGTERM received, exiting with the ruleset left in place");
+                Ok(())
             }
-            Err(e) => {
-                tracing::error!(error = %e, "nftables failed");
-                ExitCode::FAILURE
-            }
-        },
-        () = shutdown.requested() => {
-            tracing::info!("SIGTERM received, exiting with the ruleset left in place");
-            ExitCode::SUCCESS
         }
-    }
+    })
+    .await
 }
 
 async fn run() -> Result<()> {
