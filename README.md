@@ -473,10 +473,11 @@ down, and neither are `random_trailers` and `disable_cookies`, which are never g
 node out of the `network` document takes its key with it, so putting it back mints a new one.
 
 So `slipmesh.yaml` holds private keys in the clear, as the patch files it renders do - keep it
-where those are kept. What the tool adds goes in through [yaml-rt](https://crates.io/crates/yaml-rt),
-which changes only the lines it adds: comments and layout stay as written, and an entry written in
-flow style, `{...}`, takes an addition in flow style. It refuses a file with a line of just `---`
-inside an indented block scalar, which YAML allows; a ruleset should not carry one.
+where those are kept. What the tool adds goes in through `sliplib-yaml`, as patches applied by
+[yaml-rt](https://crates.io/crates/yaml-rt), which change only the lines they add: comments and
+layout stay as written, and an entry written in flow style, `{...}`, takes an addition in flow
+style. It refuses a file with a line of just `---` inside an indented block scalar, which YAML
+allows; a ruleset should not carry one.
 
 Each rendered config is validated through the real daemon's own `validate()` - the daemons are
 depended on as libraries here, so there is no second implementation to drift.

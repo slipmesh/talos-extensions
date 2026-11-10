@@ -1770,16 +1770,16 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "sliplib-net"
-version = "0.6.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.6.0#b1874b04a0a09b5d1714f7242a2041d95b188000"
+version = "0.7.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.7.0#4be11f2a3aa66e8b973071899b1dfdd46a41b39e"
 dependencies = [
  "ipnet",
 ]
 
 [[package]]
 name = "sliplib-runtime"
-version = "0.6.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.6.0#b1874b04a0a09b5d1714f7242a2041d95b188000"
+version = "0.7.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.7.0#4be11f2a3aa66e8b973071899b1dfdd46a41b39e"
 dependencies = [
  "anyhow",
  "tokio-graceful-shutdown",
@@ -1789,14 +1789,26 @@ dependencies = [
 
 [[package]]
 name = "sliplib-secrets"
-version = "0.6.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.6.0#b1874b04a0a09b5d1714f7242a2041d95b188000"
+version = "0.7.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.7.0#4be11f2a3aa66e8b973071899b1dfdd46a41b39e"
 dependencies = [
  "base64",
  "curve25519-dalek",
  "serde",
  "x25519-dalek",
  "zeroize",
+]
+
+[[package]]
+name = "sliplib-yaml"
+version = "0.7.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.7.0#4be11f2a3aa66e8b973071899b1dfdd46a41b39e"
+dependencies = [
+ "anyhow",
+ "atomic-write-file",
+ "serde",
+ "yaml-rt",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -1882,7 +1894,6 @@ dependencies = [
  "anstream",
  "anstyle",
  "anyhow",
- "atomic-write-file",
  "awg",
  "clap",
  "common",
@@ -1895,8 +1906,7 @@ dependencies = [
  "similar",
  "sliplib-net",
  "sliplib-secrets",
- "yaml-rt",
- "yaml_serde",
+ "sliplib-yaml",
 ]
 
 [[package]]

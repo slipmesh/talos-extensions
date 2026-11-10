@@ -13,11 +13,10 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use sliplib_secrets::wireguard::PrivateKey;
-use std::io::Write;
+use sliplib_yaml::MultiDoc;
 use std::path::{Path, PathBuf};
 use taloscfg::slipmesh_file::SlipmeshFile;
 use taloscfg::{defaults, edit, mesh_config, patch_file, roadwarrior, secrets};
-use yaml_rt::YamlDoc;
 
 #[derive(Parser)]
 #[command(
@@ -196,13 +195,12 @@ fn rw_add(
     keep_private: bool,
     config_path: &Path,
 ) -> Result<()> {
-    let (_, mut yaml, file) = read_slipmesh(config_path)?;
+    let (mut yaml, file) = read_slipmesh(config_path)?;
     let topology = file.topology();
     let document = pool_document(&file, topology, if_)?;
     // Minted and written in along with the client: a pool key minted for the exported config has
     // to be the one `generate` puts on the wire, not a key that dies with this process.
     let (secrets, minted) = settle_secrets(config_path, &mut yaml, &file, false)?;
-    yaml.commit_edits()?;
 
     let added = roadwarrior::add(
         topology,
@@ -236,7 +234,7 @@ fn rw_add(
 }
 
 fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
-    let (_, mut yaml, file) = read_slipmesh(config_path)?;
+    let (mut yaml, file) = read_slipmesh(config_path)?;
     let topology = file.topology();
     let document = pool_document(&file, topology, if_)?;
 
@@ -262,7 +260,7 @@ fn rw_inspect(
     invert: bool,
     config_path: &Path,
 ) -> Result<()> {
-    let (_, _, file) = read_slipmesh(config_path)?;
+    let (_, file) = read_slipmesh(config_path)?;
     let topology = file.topology();
     let (secrets, minted) = secrets::resolve(topology);
     // Only this pool's: a config rendered with a key that is never written down would not connect.
@@ -287,15 +285,12 @@ fn rw_inspect(
     Ok(())
 }
 
-/// `slipmesh.yaml` as its text, parsed for editing, and read.
-fn read_slipmesh(config_path: &Path) -> Result<(String, YamlDoc, SlipmeshFile)> {
-    let raw = std::fs::read_to_string(config_path)
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    let yaml =
-        YamlDoc::parse(&raw).with_context(|| format!("reading {}", config_path.display()))?;
-    let file = SlipmeshFile::read(&raw, &yaml)
-        .with_context(|| format!("reading {}", config_path.display()))?;
-    Ok((raw, yaml, file))
+/// `slipmesh.yaml`, parsed for editing, and read.
+fn read_slipmesh(config_path: &Path) -> Result<(MultiDoc, SlipmeshFile)> {
+    let yaml = MultiDoc::read(config_path)?;
+    let file =
+        SlipmeshFile::read(&yaml).with_context(|| format!("reading {}", config_path.display()))?;
+    Ok((yaml, file))
 }
 
 /// The position of pool `name`'s document, erring with the pools there are.
@@ -311,14 +306,14 @@ fn pool_document(
 
 /// Writes `yaml` with its edits to `config_path` - once the result still reads as a valid
 /// `slipmesh.yaml`, so a bad edit is refused instead of written.
-fn write_edits(config_path: &Path, yaml: &YamlDoc) -> Result<()> {
-    write_text(config_path, &yaml.to_string())
+fn write_edits(config_path: &Path, yaml: &MultiDoc) -> Result<()> {
+    write_text(config_path, &yaml.text())
 }
 
 fn write_text(config_path: &Path, updated: &str) -> Result<()> {
     SlipmeshFile::parse(updated)
         .context("the edited slipmesh.yaml does not read back - not written")?;
-    write_replacing(config_path, updated)
+    sliplib_yaml::replace_file(config_path, updated)
 }
 
 /// One host's patch file: what is on disk now, and what it would become.
@@ -336,7 +331,7 @@ fn generate(
     config_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
-    let (_, mut yaml, file) = read_slipmesh(config_path)?;
+    let (mut yaml, file) = read_slipmesh(config_path)?;
     if let Some(n) = node {
         anyhow::ensure!(file.hosts().contains(&n), "unknown node {n:?}");
     }
@@ -350,7 +345,7 @@ fn generate(
          write them",
         config_path.display()
     );
-    let updated = defaults::append(&yaml.to_string(), &added);
+    let updated = defaults::append(&yaml.text(), &added);
     let file = if added.is_empty() {
         file
     } else {
@@ -391,16 +386,12 @@ fn generate(
         return Ok(());
     }
 
-    std::fs::create_dir_all(patches_dir)
-        .with_context(|| format!("creating {}", patches_dir.display()))?;
     for host in &hosts {
-        if host.before == host.after {
+        if sliplib_yaml::write_if_changed(&host.path, &host.after)? {
+            println!("wrote {}", host.path.display());
+        } else {
             println!("{}: no changes", host.host);
-            continue;
         }
-        std::fs::write(&host.path, &host.after)
-            .with_context(|| format!("writing {}", host.path.display()))?;
-        println!("wrote {}", host.path.display());
     }
     Ok(())
 }
@@ -411,7 +402,7 @@ fn generate(
 /// on the next run.
 fn settle_secrets(
     config_path: &Path,
-    yaml: &mut YamlDoc,
+    yaml: &mut MultiDoc,
     file: &SlipmeshFile,
     dry_run: bool,
 ) -> Result<(secrets::ResolvedSecrets, String)> {
@@ -435,19 +426,6 @@ fn report_minted(routes: &str, config_path: &Path) {
     }
 }
 
-/// Replaces `path` with `content` atomically, so an interrupted write cannot leave the file
-/// half-written - a key lost that way is an identity rotated. Its permissions carry over, and a
-/// symlink is followed rather than replaced.
-fn write_replacing(path: &Path, content: &str) -> Result<()> {
-    let target =
-        std::fs::canonicalize(path).with_context(|| format!("resolving {}", path.display()))?;
-    let mut file = atomic_write_file::AtomicWriteFile::open(&target)
-        .with_context(|| format!("opening {} for writing", target.display()))?;
-    file.write_all(content.as_bytes())
-        .and_then(|()| file.commit())
-        .with_context(|| format!("writing {}", target.display()))
-}
-
 /// Every target host's patch file, rendered and validated in memory.
 fn render_hosts(
     file: &SlipmeshFile,
@@ -462,11 +440,7 @@ fn render_hosts(
             let path = patches_dir.join(format!("{host}.yaml"));
             // A missing file is the from-scratch case; anything else must not read as "there was
             // nothing here", or the diff would show a whole file where one line changed.
-            let before = match std::fs::read_to_string(&path) {
-                Ok(raw) => raw,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-                Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-            };
+            let before = sliplib_yaml::read_or_empty(&path)?;
             Ok(HostFile {
                 host: host.to_owned(),
                 path,
@@ -743,7 +717,7 @@ installer:
         let paths = setup("");
         paths.generate(None, false, false).unwrap();
         let render = || {
-            let (_, mut yaml, file) = read_slipmesh(&paths.config).unwrap();
+            let (mut yaml, file) = read_slipmesh(&paths.config).unwrap();
             let (resolved, _) = settle_secrets(&paths.config, &mut yaml, &file, true).unwrap();
             render_hosts(&file, &resolved, &["a", "b", "c", "d"], &paths.patches)
                 .unwrap()
