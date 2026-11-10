@@ -491,7 +491,7 @@ for that pass.
 Every node publishes what the cluster needs to know about the mesh as annotations on its Node
 object: `generate` puts them into the node's `KubeNodeConfig`, merged with the one a `patch`
 document gives, since Talos takes one document of that kind. An annotation is named after the path
-of its value in `slipmesh.yaml`, each list in the path replaced by the name of one element:
+of its value in `slipmesh.yaml`, with `nodes[]` read as `node`:
 
 | path | annotation | default |
 | --- | --- | --- |

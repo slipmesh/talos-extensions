@@ -358,10 +358,10 @@ fn generate(
         config_path.display()
     );
     let updated = defaults::append(&yaml.text()?, &added);
-    let file = if added.is_empty() && unset.is_empty() {
+    let file = if added.is_empty() {
         file
     } else {
-        SlipmeshFile::parse(&updated).context("slipmesh.yaml with its defaults written in")?
+        SlipmeshFile::parse(&updated).context("slipmesh.yaml with the default templates")?
     };
     let targets = match node {
         Some(n) => vec![n],
