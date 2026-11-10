@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-alpha.2+sm.4] - 2026-11-10
+
+### Changed 🔧
+
+- Take cidr parsing and exclusion from sliplib-net (#98)
+- Read and write every YAML file through sliplib-yaml (#99)
+- Take the patch format from sliplib-config (#103)
+
+### Fixed 🐛
+
+- Log the daemons' info lines on talos, where rust_log is unset (#97)
+
+### Tests ✅
+
+- Pin each daemon's failed start: exit status and error chain in the log (#96)
+
 ## [1.15.0-alpha.2+sm.3] - 2026-11-09
 
 ### CI/CD ⚙️
