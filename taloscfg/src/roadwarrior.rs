@@ -6,7 +6,7 @@ use crate::addressing;
 use crate::mesh_config::{MeshConfig, RoadwarriorClient, RoadwarriorPool};
 use crate::secrets::ResolvedSecrets;
 use anyhow::{Context, Result, bail};
-use common::Obfuscation;
+use sliplib_config::Obfuscation;
 use sliplib_secrets::wireguard::PrivateKey;
 use std::net::{IpAddr, Ipv4Addr};
 

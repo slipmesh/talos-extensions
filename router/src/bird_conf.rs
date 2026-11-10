@@ -187,7 +187,7 @@ pub struct RenderInputs<'a> {
     /// interface stays up whether or not packets still cross it, so without BFD a dead path is
     /// only noticed when OSPF's dead timer expires; the cost is constant control traffic through
     /// every tunnel, which is why this is a `mesh.yaml` switch rather than always on.
-    pub bfd: Option<&'a crate::config::BfdSettings>,
+    pub bfd: Option<&'a sliplib_config::router::BfdSettings>,
 }
 
 /// Where the template reaches the daemon - a `configFiles` entry of its `ExtensionServiceConfig`,
@@ -238,16 +238,16 @@ pub struct StaticInputs {
     pub bgp_peers: Vec<BgpPeer>,
     pub announce: Vec<AnnounceRoute>,
     pub learn: Vec<String>,
-    pub bfd: Option<crate::config::BfdSettings>,
+    pub bfd: Option<sliplib_config::router::BfdSettings>,
 }
 
 impl StaticInputs {
     /// `cfg` as `config::validate` left it.
-    pub fn from_config(cfg: &crate::config::RouterConfig) -> Result<Self> {
+    pub fn from_config(cfg: &sliplib_config::router::RouterConfig) -> Result<Self> {
         let mut v4 = None;
         let mut v6 = None;
         for addr in &cfg.node.loopback_addresses {
-            match crate::config::parse_loopback_address(addr)?.0 {
+            match sliplib_config::router::parse_loopback_address(addr)?.0 {
                 IpAddr::V4(a) => v4 = Some(a),
                 IpAddr::V6(a) => v6 = Some(a),
             }
@@ -335,7 +335,7 @@ struct BirdConfigContext {
     announce: Vec<SanitizedRoute>,
     learn: Vec<String>,
     direct_interfaces: Vec<RenderedDirectIface>,
-    bfd: Option<crate::config::BfdSettings>,
+    bfd: Option<sliplib_config::router::BfdSettings>,
     awg_route_protocol: u8,
 }
 
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn static_inputs_render_what_router_yaml_declares() {
-        let cfg: crate::config::RouterConfig = sliplib_yaml::from_str(
+        let cfg: sliplib_config::router::RouterConfig = sliplib_yaml::from_str(
             r#"
 node:
   loopback_addresses: ["10.62.0.1/32", "fd00::1/128"]
@@ -433,7 +433,7 @@ learn: [10.61.0.0/16]
     /// does not.
     #[test]
     fn variables_are_the_fields_of_the_context() {
-        let bfd = crate::config::BfdSettings::default();
+        let bfd = sliplib_config::router::BfdSettings::default();
         let mut inputs = RenderInputs {
             ospf_interfaces: &[],
             bgp_peers: &[],
@@ -512,7 +512,7 @@ learn: [10.61.0.0/16]
             "10.99.0.0/24".to_string(),
             "router-lo".to_string(),
         ];
-        let settings = crate::config::BfdSettings {
+        let settings = sliplib_config::router::BfdSettings {
             min_rx_ms: 500,
             ..Default::default()
         };

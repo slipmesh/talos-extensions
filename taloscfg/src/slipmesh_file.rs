@@ -10,6 +10,7 @@ use crate::merge::merge_document;
 use crate::mesh_config::{self, MeshConfig, RoadwarriorPool};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
+use sliplib_config::talos::{self, Identity};
 use sliplib_yaml::{MultiDoc, Value};
 
 /// The generator's own top-level block in every document: what the document is for and which
@@ -318,7 +319,7 @@ impl SlipmeshFile {
                 let mut document = rest.iter().fold(first.value.clone(), |base, patch| {
                     merge_document(base, &patch.value)
                 });
-                contents_as_text(&mut document)?;
+                talos::contents_as_text(&mut document)?;
                 let text =
                     sliplib_yaml::to_string(&document).context("serializing a patch document")?;
                 Ok(HostDocument {
@@ -335,14 +336,7 @@ impl SlipmeshFile {
     pub fn sets_file(&self, service: &str, mount_path: &str) -> bool {
         self.patches
             .iter()
-            .filter(|p| {
-                let identity = Identity::of(&p.value);
-                identity.kind.as_deref() == Some("ExtensionServiceConfig")
-                    && identity.name.as_deref() == Some(service)
-            })
-            .filter_map(|p| p.value.get("configFiles").and_then(Value::as_sequence))
-            .flatten()
-            .any(|f| f.get("mountPath").and_then(Value::as_str) == Some(mount_path))
+            .any(|p| talos::sets_file(&p.value, service, mount_path))
     }
 
     fn ensure_host(&self, host: &str) -> Result<()> {
@@ -365,57 +359,6 @@ fn model(network: &Value, pools: &[Document]) -> Result<MeshConfig> {
     let model: MeshConfig = sliplib_yaml::from_value(value).context("assembling the topology")?;
     mesh_config::validate(&model)?;
     Ok(model)
-}
-
-/// Replaces each `configFiles[].content` of `document` written as a mapping or a list with that
-/// YAML's text.
-///
-/// Such a content is the file's contents given as YAML, each of its fields a field of
-/// `slipmesh.yaml` like any other. Talos takes only a string there.
-fn contents_as_text(document: &mut Value) -> Result<()> {
-    let Some(files) = document
-        .get_mut("configFiles")
-        .and_then(Value::as_sequence_mut)
-    else {
-        return Ok(());
-    };
-    for content in files.iter_mut().filter_map(|file| file.get_mut("content")) {
-        if content.is_mapping() || content.is_sequence() {
-            let text =
-                sliplib_yaml::to_string(&*content).context("serializing a file's contents")?;
-            *content = Value::String(text);
-        }
-    }
-    Ok(())
-}
-
-/// What Talos keys a document by - two `patch` documents with the same one are merged.
-#[derive(PartialEq)]
-struct Identity {
-    api_version: Option<String>,
-    kind: Option<String>,
-    name: Option<String>,
-}
-
-impl Identity {
-    fn of(value: &Value) -> Self {
-        let field = |key: &str| value.get(key).and_then(Value::as_str).map(str::to_owned);
-        Self {
-            api_version: field("apiVersion"),
-            kind: field("kind"),
-            name: field("name"),
-        }
-    }
-}
-
-impl std::fmt::Display for Identity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.kind.as_deref().unwrap_or_default())?;
-        if let Some(name) = &self.name {
-            write!(f, "/{name}")?;
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]

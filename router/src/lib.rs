@@ -16,7 +16,6 @@ pub mod bird_process;
 /// `config` does not touch it.
 #[cfg(feature = "runtime")]
 pub mod birdc;
-pub mod config;
 /// Spawns a child process, which `taloscfg` has no business doing.
 #[cfg(feature = "runtime")]
 pub mod exporter;

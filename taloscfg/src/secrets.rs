@@ -14,7 +14,7 @@
 
 use crate::mesh_config::MeshConfig;
 use crate::obfuscation_gen;
-use common::Obfuscation;
+use sliplib_config::Obfuscation;
 use sliplib_secrets::wireguard::PrivateKey;
 use std::collections::HashMap;
 

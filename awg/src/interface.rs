@@ -10,7 +10,6 @@
 //! a diff against a single peer degenerates to exactly the same SetDevice call an unconditional
 //! resend would have made.
 
-use crate::config::{InterfaceEntry, PeerEntry};
 use anyhow::{Context, Result};
 use common::netlink::awg::{AwgClient, push_obfuscation_attrs};
 use common::netlink::rt::RtClient;
@@ -20,6 +19,7 @@ use netlink_packet_amneziawg::{
     AmneziaWireguardPeerFlags,
 };
 use netlink_packet_core::DefaultNla;
+use sliplib_config::awg::{InterfaceEntry, PeerEntry};
 use sliplib_secrets::wireguard::{decode_key, encode_key};
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;

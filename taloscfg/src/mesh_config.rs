@@ -8,9 +8,9 @@
 //! (`slipmesh-core::mesh_types`/`node_config_types`/`router_types`/`cluster_config_types`) - see
 //! `render.rs`'s module doc comment for exactly what changed and why.
 
-use common::Obfuscation;
-use router::config::BfdSettings;
 use serde::Deserialize;
+use sliplib_config::Obfuscation;
+use sliplib_config::router::{BfdSettings, BypassSourceEntry};
 use sliplib_secrets::wireguard::PrivateKey;
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
@@ -310,32 +310,6 @@ pub struct BypassEntry {
     pub include: Vec<BypassSourceEntry>,
     #[serde(default)]
     pub exclude: Vec<BypassSourceEntry>,
-}
-
-/// Same shape as `router::config::BypassSourceEntry` - re-declared here (not reused directly)
-/// because `slipmesh.yaml`'s `bypass[]` is a flat list keyed by `node`, not yet split per-node the way
-/// `router::config::BypassConfig` expects; `render.rs` does that split, constructing the real
-/// `router::config` type from these fields.
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-pub struct BypassSourceEntry {
-    pub kind: String,
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default)]
-    pub asns: Option<Vec<String>>,
-    #[serde(default)]
-    pub prefixes: Option<Vec<LabeledPrefix>>,
-    #[serde(default)]
-    pub country: Option<String>,
-    #[serde(default)]
-    pub hostnames: Option<Vec<String>>,
-}
-
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-pub struct LabeledPrefix {
-    pub net: String,
-    #[serde(default)]
-    pub label: Option<String>,
 }
 
 /// Pure validation, no I/O: referential integrity across `slipmesh.yaml`'s own cross-references

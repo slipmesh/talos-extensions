@@ -2,8 +2,8 @@
 //! RIPEstat, dns -> A record) into (net, label) pairs, dedupe/collapse per label, then punch out
 //! every excluded network (resolved the same way). Ported from `slipmesh/core`'s `resolver.rs`,
 //! which carried no `kube`/`k8s-openapi` import, so this is close to verbatim; the only
-//! structural change is `BypassSourceEntry`
-//! below, a plain `#[derive(Deserialize)]` struct read straight out of `router.yaml` instead of
+//! structural change is `BypassSourceEntry` (`sliplib_config::router`), a plain
+//! `#[derive(Deserialize)]` struct read straight out of `router.yaml` instead of
 //! the CRD-schema'd version in `core/src/router_types.rs` (which derives `JsonSchema`/
 //! `CustomResource` via `kube`'s macros - exactly the dependency this workspace refuses to take).
 //!
@@ -16,42 +16,11 @@
 //! "config-authoring concern" pattern `awg`'s README already documents for private keys.
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use sliplib_config::router::BypassSourceEntry;
 use sliplib_net::{IpNet, Ipv4Net};
 use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::Semaphore;
-
-/// One bypass-prefix source, resolved into concrete CIDRs by `collect_source`: `asn` via
-/// RIPEstat's announced-prefixes API, `literal` verbatim, `geoip` via RIPEstat's
-/// country-resource-list, `dns` via a live A-record lookup.
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
-pub struct BypassSourceEntry {
-    /// "asn" | "literal" | "geoip" | "dns" - validated in `collect_source`/`config::validate`,
-    /// not by the deserializer (a tagged enum would fit, but this mirrors the CRD original's
-    /// four-way, mostly-optional-fields shape closely enough that keeping it a plain string keeps
-    /// the two implementations easy to diff against each other).
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub asns: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prefixes: Option<Vec<LabeledPrefix>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub country: Option<String>,
-    /// "dns" only - resolved via a live A-record lookup at resolve time, on the same
-    /// startup/refresh-interval schedule as everything else. Whole list shares `label`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hostnames: Option<Vec<String>>,
-}
-
-#[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
-pub struct LabeledPrefix {
-    pub net: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-}
 
 /// Per-call ceiling for one RIPEstat request or one DNS lookup. `reqwest`'s default is *no*
 /// request timeout at all unless configured, hence `RIPESTAT_CLIENT` below.

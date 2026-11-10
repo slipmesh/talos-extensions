@@ -111,8 +111,7 @@ dependencies = [
  "netlink-packet-amneziawg",
  "netlink-packet-core",
  "prometheus-client",
- "rtnetlink",
- "serde",
+ "sliplib-config",
  "sliplib-net",
  "sliplib-runtime",
  "sliplib-secrets",
@@ -327,6 +326,7 @@ dependencies = [
  "netlink-packet-generic",
  "rtnetlink",
  "serde",
+ "sliplib-config",
  "sliplib-net",
  "sliplib-secrets",
  "sliplib-yaml",
@@ -1479,6 +1479,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sliplib-config",
  "sliplib-net",
  "sliplib-runtime",
  "sliplib-yaml",
@@ -1769,9 +1770,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
+name = "sliplib-config"
+version = "0.9.0"
+source = "git+https://github.com/slipmesh/sliplib?rev=8f523c83bd60f5696cecfbfb10c522aa04901e34#8f523c83bd60f5696cecfbfb10c522aa04901e34"
+dependencies = [
+ "anyhow",
+ "serde",
+ "sliplib-net",
+ "sliplib-secrets",
+ "sliplib-yaml",
+]
+
+[[package]]
 name = "sliplib-net"
 version = "0.9.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.9.0#c560faaee9da65ea612bbebac1f8572dc33c6f9d"
+source = "git+https://github.com/slipmesh/sliplib?rev=8f523c83bd60f5696cecfbfb10c522aa04901e34#8f523c83bd60f5696cecfbfb10c522aa04901e34"
 dependencies = [
  "ipnet",
 ]
@@ -1779,7 +1792,7 @@ dependencies = [
 [[package]]
 name = "sliplib-runtime"
 version = "0.9.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.9.0#c560faaee9da65ea612bbebac1f8572dc33c6f9d"
+source = "git+https://github.com/slipmesh/sliplib?rev=8f523c83bd60f5696cecfbfb10c522aa04901e34#8f523c83bd60f5696cecfbfb10c522aa04901e34"
 dependencies = [
  "anyhow",
  "tokio-graceful-shutdown",
@@ -1790,7 +1803,7 @@ dependencies = [
 [[package]]
 name = "sliplib-secrets"
 version = "0.9.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.9.0#c560faaee9da65ea612bbebac1f8572dc33c6f9d"
+source = "git+https://github.com/slipmesh/sliplib?rev=8f523c83bd60f5696cecfbfb10c522aa04901e34#8f523c83bd60f5696cecfbfb10c522aa04901e34"
 dependencies = [
  "base64",
  "curve25519-dalek",
@@ -1802,7 +1815,7 @@ dependencies = [
 [[package]]
 name = "sliplib-yaml"
 version = "0.9.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.9.0#c560faaee9da65ea612bbebac1f8572dc33c6f9d"
+source = "git+https://github.com/slipmesh/sliplib?rev=8f523c83bd60f5696cecfbfb10c522aa04901e34#8f523c83bd60f5696cecfbfb10c522aa04901e34"
 dependencies = [
  "anyhow",
  "atomic-write-file",
@@ -1893,9 +1906,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "anyhow",
- "awg",
  "clap",
- "common",
  "nftables",
  "qrcode",
  "rand",
@@ -1903,6 +1914,7 @@ dependencies = [
  "serde",
  "sha2",
  "similar",
+ "sliplib-config",
  "sliplib-net",
  "sliplib-secrets",
  "sliplib-yaml",

@@ -1,8 +1,8 @@
-use router::{bird, bird_conf, bird_process, config, exporter, resolver};
+use router::{bird, bird_conf, bird_process, exporter, resolver};
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
-use config::RouterConfig;
+use sliplib_config::router::{self as config, RouterConfig};
 use sliplib_runtime::Shutdown;
 use std::path::Path;
 use std::sync::Arc;
@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
 /// there's nothing here that's watched, only what `router.yaml` declared once at startup.
 struct RouterState {
     inputs: bird_conf::StaticInputs,
-    metrics: Option<common::MetricsConfig>,
+    metrics: Option<sliplib_config::MetricsConfig>,
     bypass_cfg: Option<config::BypassConfig>,
     /// Last-successful bypass resolution - re-resolving (RIPEstat/DNS) only happens on the
     /// startup/refresh-interval schedule (`bypass_refresh_loop`); a resolve failure serves this

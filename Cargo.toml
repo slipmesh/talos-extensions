@@ -16,7 +16,6 @@ publish = false
 # needs the config types alone - builds off Linux. The daemons re-enable them through their own
 # `runtime` feature, which is on by default for each of them.
 common = { path = "common", default-features = false }
-awg = { path = "awg", default-features = false }
 router = { path = "router", default-features = false }
 nftables = { path = "nftables", default-features = false }
 
@@ -27,10 +26,11 @@ clap = { version = "4.6.7", features = ["derive"] }
 minijinja = { version = "3.1.0", default-features = false, features = ["builtins", "serde"] }
 base64 = "0.23.1"
 # Ours, from a release tag: sliplib is not published to crates.io.
-sliplib-net = { git = "https://github.com/slipmesh/sliplib", tag = "v0.9.0" }
-sliplib-runtime = { git = "https://github.com/slipmesh/sliplib", tag = "v0.9.0" }
-sliplib-secrets = { git = "https://github.com/slipmesh/sliplib", tag = "v0.9.0" }
-sliplib-yaml = { git = "https://github.com/slipmesh/sliplib", tag = "v0.9.0" }
+sliplib-config = { git = "https://github.com/slipmesh/sliplib", rev = "8f523c83bd60f5696cecfbfb10c522aa04901e34" }
+sliplib-net = { git = "https://github.com/slipmesh/sliplib", rev = "8f523c83bd60f5696cecfbfb10c522aa04901e34" }
+sliplib-runtime = { git = "https://github.com/slipmesh/sliplib", rev = "8f523c83bd60f5696cecfbfb10c522aa04901e34" }
+sliplib-secrets = { git = "https://github.com/slipmesh/sliplib", rev = "8f523c83bd60f5696cecfbfb10c522aa04901e34" }
+sliplib-yaml = { git = "https://github.com/slipmesh/sliplib", rev = "8f523c83bd60f5696cecfbfb10c522aa04901e34" }
 futures = "0.3.34"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }

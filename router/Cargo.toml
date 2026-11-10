@@ -24,6 +24,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "time", "process", "io-util", "net", "fs"] }
 tracing.workspace = true
+sliplib-config.workspace = true
 sliplib-net.workspace = true
 sliplib-runtime.workspace = true
 sliplib-yaml.workspace = true
