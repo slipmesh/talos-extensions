@@ -180,6 +180,21 @@ impl RtClient {
             .with_context(|| format!("failed to set link {index} up"))
     }
 
+    /// Equivalent to `ip link set <index> mtu <mtu>`.
+    pub async fn set_mtu(&self, index: u32, mtu: u32) -> Result<()> {
+        let _guard = self.netlink_lock.lock().await;
+        let msg = LinkMessageBuilder::<()>::default()
+            .index(index)
+            .mtu(mtu)
+            .build();
+        self.handle
+            .link()
+            .set(msg)
+            .execute()
+            .await
+            .with_context(|| format!("failed to set the mtu of link {index} to {mtu}"))
+    }
+
     async fn v4_addresses(&self, index: u32) -> Result<Vec<(Ipv4Addr, u8)>> {
         use rtnetlink::packet_route::address::AddressAttribute;
         let mut addrs = self

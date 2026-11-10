@@ -5,6 +5,7 @@ pub mod defaults;
 pub mod edit;
 pub mod merge;
 pub mod mesh_config;
+pub mod mtu;
 pub mod obfuscation_gen;
 pub mod patch_file;
 pub mod redact;

@@ -253,6 +253,7 @@ fn mesh_interfaces_for(
         .get(node_name)
         .with_context(|| format!("no resolved mesh private key for node {node_name:?}"))?;
 
+    let mtu = crate::mtu::mesh_mtu(mesh, resolved)?;
     let mut out = Vec::new();
     for link in &mesh.mesh.links {
         let peer_name = if link.pair[0] == node_name {
@@ -289,13 +290,14 @@ fn mesh_interfaces_for(
             private_key: own_private_key.clone(),
             obfuscation,
             handshake_stale_secs: None,
+            mtu,
             peers: vec![PeerEntry {
                 public_key: peer_private_key.public_key()?,
                 name: Some(peer_name.clone()),
                 endpoint: peer_node
                     .endpoint
                     .as_ref()
-                    .map(|host| format!("{host}:{}", link.port)),
+                    .map(|host| addressing::endpoint(host, link.port)),
                 allowed_ips: None,
                 advanced_security: false,
             }],
@@ -333,6 +335,7 @@ fn roadwarrior_interfaces_for(
                     .cloned()
                     .unwrap_or_default(),
                 handshake_stale_secs: pool.handshake_stale_secs,
+                mtu: None,
                 peers: pool
                     .clients
                     .iter()
@@ -622,6 +625,28 @@ roadwarriors:
 
     fn resolved_for(mesh: &MeshConfig) -> ResolvedSecrets {
         crate::secrets::resolve(mesh).0
+    }
+
+    #[test]
+    fn every_mesh_interface_takes_the_mesh_mtu_and_a_pool_interface_none() {
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let resolved = resolved_for(&mesh);
+        let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
+        let mtu = |name: &str| cfg.interfaces.iter().find(|i| i.name == name).unwrap().mtu;
+        // a-b is dialed at b's hostname, IPv6 when unsaid: 1500 - 32 - 8 - 40.
+        assert_eq!(mtu("mesh-b"), Some(1420));
+        assert_eq!(mtu("rw-eu"), None);
+    }
+
+    #[test]
+    fn an_ipv6_endpoint_is_dialed_in_brackets() {
+        let yaml = mesh_and_roadwarriors_yaml().replace("b.example.com", "2001:db8::11");
+        let mesh: MeshConfig = sliplib_yaml::from_str(&yaml).unwrap();
+        let ifaces = mesh_interfaces_for(&mesh, "a", &resolved_for(&mesh)).unwrap();
+        assert_eq!(
+            ifaces[0].peers[0].endpoint.as_deref(),
+            Some("[2001:db8::11]:51820")
+        );
     }
 
     #[test]

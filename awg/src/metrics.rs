@@ -433,6 +433,7 @@ mod tests {
             private_key: PRIVATE_KEY.into(),
             obfuscation: Obfuscation::default(),
             handshake_stale_secs: None,
+            mtu: None,
             peers,
         }
     }
