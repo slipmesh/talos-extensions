@@ -2,13 +2,13 @@
 //! document for each of `awg` and `router`, carrying that daemon's config once the daemon's own
 //! `validate()` accepts it, and any files the `patch` documents add to it.
 
+use crate::merge::is_deletion;
 use crate::render;
 use crate::secrets::ResolvedSecrets;
 use crate::slipmesh_file::{GENERATED, HostDocument, SlipmeshFile};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use sliplib_config::talos::{ConfigFile, ExtensionServiceConfig};
 use sliplib_yaml::{Mapping, Value};
-use std::collections::BTreeMap;
 
 /// What opens every patch file this tool writes.
 pub const HEADER: &str =
@@ -139,24 +139,36 @@ const KUBE_NODE_CONFIG: &str = "KubeNodeConfig";
 /// Puts `annotations` into the `KubeNodeConfig` among `patches`, or into a new one when they have
 /// none. A `patch` document may set annotations of its own, but none in this generator's
 /// namespace: those come from `slipmesh.yaml`, and a second source would be overwritten silently.
-fn publish_annotations(
-    patches: &mut Vec<HostDocument>,
-    annotations: BTreeMap<String, String>,
-) -> Result<()> {
-    let position = patches.iter().position(|p| p.identity == KUBE_NODE_CONFIG);
-    let mut document = match position {
-        Some(index) => patches[index].value.clone(),
-        None => sliplib_yaml::from_str("apiVersion: v1alpha1\nkind: KubeNodeConfig\n")?,
+fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) -> Result<()> {
+    let index = match patches.iter().position(|p| p.identity == KUBE_NODE_CONFIG) {
+        Some(index) => index,
+        None => {
+            let value = sliplib_yaml::from_str("apiVersion: v1alpha1\nkind: KubeNodeConfig\n")?;
+            patches.push(HostDocument {
+                identity: KUBE_NODE_CONFIG.to_owned(),
+                text: String::new(),
+                value,
+            });
+            patches.len() - 1
+        }
     };
-    let mapping = document
+    let document = &mut patches[index];
+    ensure!(
+        !is_deletion(&document.value),
+        "a `patch` document deletes the KubeNodeConfig, which carries the annotations in {}",
+        crate::annotations::NAMESPACE
+    );
+    let given = document
+        .value
         .as_mapping_mut()
-        .context("a KubeNodeConfig document is not a mapping")?;
-    if !mapping.contains_key("annotations") {
-        mapping.insert("annotations".into(), Value::Mapping(Mapping::new()));
+        .context("a KubeNodeConfig document is not a mapping")?
+        .entry("annotations".into())
+        .or_insert(Value::Null);
+    if given.is_null() {
+        *given = Value::Mapping(Mapping::new());
     }
-    let given = mapping
-        .get_mut("annotations")
-        .and_then(Value::as_mapping_mut)
+    let given = given
+        .as_mapping_mut()
         .context("KubeNodeConfig annotations is not a mapping")?;
     if let Some(ours) = given
         .keys()
@@ -169,21 +181,9 @@ fn publish_annotations(
             crate::annotations::NAMESPACE
         );
     }
-    for (name, value) in annotations {
-        given.insert(name.into(), value.into());
-    }
-    let text = sliplib_yaml::to_string(&document).context("serializing the KubeNodeConfig")?;
-    match position {
-        Some(index) => {
-            patches[index].value = document;
-            patches[index].text = text;
-        }
-        None => patches.push(HostDocument {
-            identity: KUBE_NODE_CONFIG.to_owned(),
-            text,
-            value: document,
-        }),
-    }
+    given.extend(annotations);
+    document.text =
+        sliplib_yaml::to_string(&document.value).context("serializing the KubeNodeConfig")?;
     Ok(())
 }
 
@@ -217,7 +217,10 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
     validate_nftables_template(&patches)
         .with_context(|| format!("the nftables ruleset for node {host:?} is invalid"))?;
     add_legacy_nftables_file(&mut patches)?;
-    publish_annotations(&mut patches, crate::annotations::for_node(&model, host)?)?;
+    publish_annotations(
+        &mut patches,
+        crate::annotations::for_node(&model.cluster, model.node(host)?),
+    )?;
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
 
     let generated = vec![
@@ -332,17 +335,43 @@ configFiles:
     fn a_kube_node_config_a_patch_gives_takes_the_annotations_in() {
         let raw = format!(
             "{}---\nslipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: KubeNodeConfig\nnodeIP:\n  \
-             validSubnets: [10.62.0.0/16]\nannotations:\n  example.com/rack: r1\n",
+             validSubnets: [192.0.2.0/24]\nannotations:\n  example.com/rack: r1\n",
             with_router_files(&[("", TEMPLATE)])
         );
         let configs = kube_node_configs(&render_raw(&raw, "a").unwrap());
         assert_eq!(configs.len(), 1, "{configs:?}");
-        assert_eq!(configs[0]["nodeIP"]["validSubnets"][0], "10.62.0.0/16");
+        assert_eq!(configs[0]["nodeIP"]["validSubnets"][0], "192.0.2.0/24");
         assert_eq!(configs[0]["annotations"]["example.com/rack"], "r1");
         assert_eq!(
             configs[0]["annotations"]["slipmesh.net/endpoint"],
             "192.0.2.10"
         );
+    }
+
+    fn with_kube_node_config(body: &str) -> String {
+        format!(
+            "{}---\nslipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: KubeNodeConfig\n{body}",
+            with_router_files(&[("", TEMPLATE)])
+        )
+    }
+
+    #[test]
+    fn a_kube_node_config_with_empty_annotations_takes_ours_in() {
+        let file = render_raw(&with_kube_node_config("annotations:\n"), "a").unwrap();
+        let configs = kube_node_configs(&file);
+        assert_eq!(
+            configs[0]["annotations"]["slipmesh.net/endpoint"],
+            "192.0.2.10"
+        );
+    }
+
+    #[test]
+    fn a_patch_that_deletes_the_kube_node_config_is_refused() {
+        let err = format!(
+            "{:#}",
+            render_raw(&with_kube_node_config("$patch: delete\n"), "a").unwrap_err()
+        );
+        assert!(err.contains("KubeNodeConfig"), "{err}");
     }
 
     #[test]

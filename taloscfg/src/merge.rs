@@ -24,7 +24,7 @@ pub fn merge_document(base: Value, overlay: &Value) -> Value {
     sliplib_yaml::merge(base, overlay)
 }
 
-fn is_deletion(document: &Value) -> bool {
+pub(crate) fn is_deletion(document: &Value) -> bool {
     document.get(PATCH_KEY).and_then(Value::as_str) == Some("delete")
 }
 

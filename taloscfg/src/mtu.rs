@@ -65,13 +65,7 @@ pub fn mesh_mtu(mesh: &MeshConfig, resolved: &ResolvedSecrets) -> Result<Option<
 /// The largest MTU at which a full-size packet crosses `link` unfragmented.
 fn link_limit(mesh: &MeshConfig, link: &MeshLink, resolved: &ResolvedSecrets) -> Result<u32> {
     let [a, b] = &link.pair;
-    let node = |name: &str| {
-        mesh.nodes
-            .iter()
-            .find(|n| n.name == name)
-            .with_context(|| format!("unknown node {name:?}"))
-    };
-    let (a, b) = (node(a)?, node(b)?);
+    let (a, b) = (mesh.node(a)?, mesh.node(b)?);
     let ip_header = match link_family(a, b)? {
         AddressFamily::Ipv4 => 20,
         AddressFamily::Ipv6 => 40,

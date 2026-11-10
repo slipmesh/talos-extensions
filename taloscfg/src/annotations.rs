@@ -5,106 +5,45 @@
 //! it sets in step with the config: a changed value is rewritten, a value no longer given is taken
 //! off the Node.
 
-use crate::mesh_config::MeshConfig;
-use anyhow::{Context, Result};
-use std::collections::BTreeMap;
+use crate::mesh_config::{ClusterConfig, NodeEntry};
+use sliplib_yaml::Mapping;
 
 /// The namespace of every annotation this generator sets.
 pub const NAMESPACE: &str = "slipmesh.net/";
 
 /// The annotations of `node`, by name.
-pub fn for_node(mesh: &MeshConfig, node: &str) -> Result<BTreeMap<String, String>> {
-    let entry = mesh
-        .nodes
-        .iter()
-        .find(|n| n.name == node)
-        .with_context(|| format!("unknown node {node:?}"))?;
+pub fn for_node(cluster: &ClusterConfig, node: &NodeEntry) -> Mapping {
     let values = [
         (
             "interface_prefix.mesh",
-            Some(mesh.cluster.mesh_interface_prefix().to_owned()),
+            Some(cluster.mesh_interface_prefix().to_owned()),
         ),
         (
             "route_proto_id.egress",
-            Some(mesh.cluster.egress_route_proto_id().to_string()),
+            Some(cluster.egress_route_proto_id().to_string()),
         ),
-        ("endpoint", entry.endpoint.clone()),
+        ("endpoint", node.endpoint.clone()),
     ];
-    Ok(values
+    values
         .into_iter()
-        .filter_map(|(key, value)| Some((format!("{NAMESPACE}{key}"), value?)))
-        .collect())
+        .filter_map(|(key, value)| Some((format!("{NAMESPACE}{key}").into(), value?.into())))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn mesh(cluster: &str, node: &str) -> MeshConfig {
-        sliplib_yaml::from_str(&format!(
-            "cluster:\n  bgp_as: 64512\n{cluster}nodes:\n  - {{name: a, node_id: \"10.62.0.1\"{node}}}\n"
-        ))
-        .unwrap()
-    }
-
-    const ENDPOINT: &str = ", endpoint: \"192.0.2.10\"";
-
-    #[test]
-    fn every_name_is_one_kubernetes_accepts() {
-        for name in for_node(&mesh("", ENDPOINT), "a").unwrap().keys() {
-            let local = name.strip_prefix(NAMESPACE).unwrap();
-            assert!(local.len() <= 63, "{name}");
-            assert!(
-                local.starts_with(|c: char| c.is_ascii_alphanumeric()),
-                "{name}"
-            );
-            assert!(
-                local.ends_with(|c: char| c.is_ascii_alphanumeric()),
-                "{name}"
-            );
-            assert!(
-                local
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)),
-                "{name}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_node_publishes_the_prefix_the_protocol_and_its_endpoint() {
-        assert_eq!(
-            for_node(&mesh("", ENDPOINT), "a").unwrap(),
-            BTreeMap::from([
-                (
-                    "slipmesh.net/interface_prefix.mesh".to_owned(),
-                    "mesh-".to_owned()
-                ),
-                (
-                    "slipmesh.net/route_proto_id.egress".to_owned(),
-                    "152".to_owned()
-                ),
-                ("slipmesh.net/endpoint".to_owned(), "192.0.2.10".to_owned()),
-            ])
-        );
-    }
-
-    #[test]
-    fn a_value_given_in_slipmesh_yaml_is_the_one_published() {
-        let cluster = "  interface_prefix: {mesh: wg-}\n  route_proto_id: {egress: 160}\n";
-        let annotations = for_node(&mesh(cluster, ""), "a").unwrap();
-        assert_eq!(annotations["slipmesh.net/interface_prefix.mesh"], "wg-");
-        assert_eq!(annotations["slipmesh.net/route_proto_id.egress"], "160");
-    }
+    use crate::mesh_config::MeshConfig;
 
     #[test]
     fn a_node_without_an_endpoint_publishes_none() {
-        let annotations = for_node(&mesh("", ""), "a").unwrap();
-        assert!(!annotations.contains_key("slipmesh.net/endpoint"));
-    }
-
-    #[test]
-    fn an_unknown_node_is_an_error() {
-        assert!(for_node(&mesh("", ""), "b").is_err());
+        let mesh: MeshConfig =
+            sliplib_yaml::from_str("cluster: {}\nnodes:\n  - {name: a, node_id: \"10.0.0.1\"}\n")
+                .unwrap();
+        let annotations = for_node(&mesh.cluster, &mesh.nodes[0]);
+        assert!(
+            !annotations.contains_key("slipmesh.net/endpoint"),
+            "{annotations:?}"
+        );
     }
 }

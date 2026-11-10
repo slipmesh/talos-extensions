@@ -117,11 +117,7 @@ fn pool_endpoint(
             .first()
             .expect("mesh_config::validate: node_hostnames is non-empty"),
     };
-    let node = mesh
-        .nodes
-        .iter()
-        .find(|n| n.name == host)
-        .expect("mesh_config::validate: node_hostnames name known nodes");
+    let node = mesh.node(host)?;
     let endpoint = node.endpoint.as_deref().with_context(|| {
         format!("node {host:?} has no endpoint - can't terminate a roadwarrior pool")
     })?;

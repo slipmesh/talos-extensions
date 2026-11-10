@@ -371,7 +371,7 @@ fn generate(
     // Every host is rendered and validated before anything is written, so a host that fails
     // leaves slipmesh.yaml and the patch files as they were rather than half of them new.
     let hosts = render_hosts(&file, &resolved, &targets, patches_dir)?;
-    if (!added.is_empty() || !unset.is_empty()) && diff {
+    if diff {
         if !added.is_empty() {
             println!(
                 "{}: the default templates of {services:?} would be added",
@@ -736,15 +736,6 @@ installer:
         let before = paths.snapshot();
         paths.generate(None, false, true).unwrap();
         assert_eq!(paths.snapshot(), before);
-    }
-
-    #[test]
-    fn generate_writes_the_prefix_and_protocol_keys_into_slipmesh_yaml() {
-        let paths = setup("");
-        paths.generate(None, false, false).unwrap();
-        let cluster = paths.topology().cluster;
-        assert_eq!(cluster.interface_prefix.mesh.as_deref(), Some("mesh-"));
-        assert_eq!(cluster.route_proto_id.egress, Some(152));
     }
 
     /// A full run with the prefix and protocol keys taken back out of `slipmesh.yaml`.

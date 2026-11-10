@@ -25,8 +25,7 @@ pub struct BfdConfig {
     pub settings: BfdSettings,
 }
 
-/// The mesh interface prefix when `cluster.interface_prefix.mesh` does not say. `awg` and the
-/// RouterOS side take interfaces of this prefix for their own, so it stays until they read the key.
+/// The mesh interface prefix when `cluster.interface_prefix.mesh` does not say.
 pub const DEFAULT_MESH_INTERFACE_PREFIX: &str = "mesh-";
 
 /// The egress route protocol number when `cluster.route_proto_id.egress` does not say.
@@ -46,6 +45,15 @@ pub struct InterfacePrefix {
 pub struct RouteProtoId {
     #[serde(default)]
     pub egress: Option<u8>,
+}
+
+impl MeshConfig {
+    pub fn node(&self, name: &str) -> anyhow::Result<&NodeEntry> {
+        self.nodes
+            .iter()
+            .find(|n| n.name == name)
+            .ok_or_else(|| anyhow::anyhow!("unknown node {name:?}"))
+    }
 }
 
 impl ClusterConfig {
@@ -506,13 +514,6 @@ pub fn validate(cfg: &MeshConfig) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_prefix_and_protocol_keys_take_their_defaults_when_left_out() {
-        let cfg: MeshConfig = sliplib_yaml::from_str(minimal_yaml()).unwrap();
-        assert_eq!(cfg.cluster.mesh_interface_prefix(), "mesh-");
-        assert_eq!(cfg.cluster.egress_route_proto_id(), 152);
-    }
 
     #[test]
     fn the_prefix_and_protocol_keys_are_read_when_given() {

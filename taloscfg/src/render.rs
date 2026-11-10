@@ -39,11 +39,7 @@ fn parse_tunnel_networks(mesh: &MeshConfig) -> Result<Option<(Ipv4Addr, u8, Ipv6
 }
 
 fn node_id_of(mesh: &MeshConfig, node_name: &str) -> Result<Ipv4Addr> {
-    let node = mesh
-        .nodes
-        .iter()
-        .find(|n| n.name == node_name)
-        .with_context(|| format!("unknown node {node_name:?}"))?;
+    let node = mesh.node(node_name)?;
     node.node_id.parse().with_context(|| {
         format!("node {node_name:?}: node_id must be a valid IPv4-shaped identity")
     })
@@ -138,12 +134,8 @@ fn mesh_glob(mesh: &MeshConfig) -> String {
 /// what a node would actually announce without reading this file too. An operator-visible list
 /// that is wrong gets noticed; an implicit one that is wrong does not.
 fn direct_interfaces_for(mesh: &MeshConfig, node_name: &str) -> Result<Vec<String>> {
-    let node = mesh
-        .nodes
-        .iter()
-        .find(|n| n.name == node_name)
-        .with_context(|| format!("unknown node {node_name:?}"))?;
-    Ok(node
+    Ok(mesh
+        .node(node_name)?
         .direct_interfaces
         .clone()
         .unwrap_or_else(|| mesh.cluster.direct_interfaces.clone()))
@@ -268,11 +260,7 @@ fn mesh_interfaces_for(
         } else {
             continue;
         };
-        let peer_node = mesh
-            .nodes
-            .iter()
-            .find(|n| &n.name == peer_name)
-            .with_context(|| format!("unknown node {peer_name:?}"))?;
+        let peer_node = mesh.node(peer_name)?;
         let peer_private_key = resolved
             .mesh_private_keys
             .get(peer_name)
