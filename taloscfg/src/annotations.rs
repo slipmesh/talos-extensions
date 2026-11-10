@@ -37,9 +37,10 @@ mod tests {
 
     #[test]
     fn a_node_without_an_endpoint_publishes_none() {
-        let mesh: MeshConfig =
-            sliplib_yaml::from_str("cluster: {}\nnodes:\n  - {name: a, node_id: \"10.0.0.1\"}\n")
-                .unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(
+            "cluster: {}\nnodes:\n  - {name: a, node_id: \"198.51.100.1\"}\n",
+        )
+        .unwrap();
         let annotations = for_node(&mesh.cluster, &mesh.nodes[0]);
         assert!(
             !annotations.contains_key("slipmesh.net/endpoint"),
