@@ -13,26 +13,27 @@ use std::collections::BTreeMap;
 pub const NAMESPACE: &str = "slipmesh.net/";
 
 /// The annotations of `node`, by name.
-pub fn for_node(mesh: &MeshConfig, node: &str) -> Result<BTreeMap<&'static str, String>> {
+pub fn for_node(mesh: &MeshConfig, node: &str) -> Result<BTreeMap<String, String>> {
     let entry = mesh
         .nodes
         .iter()
         .find(|n| n.name == node)
         .with_context(|| format!("unknown node {node:?}"))?;
-    let mut annotations = BTreeMap::from([
+    let values = [
         (
-            "slipmesh.net/interface_prefix.mesh",
-            mesh.cluster.mesh_interface_prefix().to_owned(),
+            "interface_prefix.mesh",
+            Some(mesh.cluster.mesh_interface_prefix().to_owned()),
         ),
         (
-            "slipmesh.net/route_proto_id.egress",
-            mesh.cluster.egress_route_proto_id().to_string(),
+            "route_proto_id.egress",
+            Some(mesh.cluster.egress_route_proto_id().to_string()),
         ),
-    ]);
-    if let Some(endpoint) = &entry.endpoint {
-        annotations.insert("slipmesh.net/endpoint", endpoint.clone());
-    }
-    Ok(annotations)
+        ("endpoint", entry.endpoint.clone()),
+    ];
+    Ok(values
+        .into_iter()
+        .filter_map(|(key, value)| Some((format!("{NAMESPACE}{key}"), value?)))
+        .collect())
 }
 
 #[cfg(test)]
@@ -75,9 +76,15 @@ mod tests {
         assert_eq!(
             for_node(&mesh("", ENDPOINT), "a").unwrap(),
             BTreeMap::from([
-                ("slipmesh.net/interface_prefix.mesh", "mesh-".to_owned()),
-                ("slipmesh.net/route_proto_id.egress", "152".to_owned()),
-                ("slipmesh.net/endpoint", "192.0.2.10".to_owned()),
+                (
+                    "slipmesh.net/interface_prefix.mesh".to_owned(),
+                    "mesh-".to_owned()
+                ),
+                (
+                    "slipmesh.net/route_proto_id.egress".to_owned(),
+                    "152".to_owned()
+                ),
+                ("slipmesh.net/endpoint".to_owned(), "192.0.2.10".to_owned()),
             ])
         );
     }

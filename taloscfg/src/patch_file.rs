@@ -141,7 +141,7 @@ const KUBE_NODE_CONFIG: &str = "KubeNodeConfig";
 /// namespace: those come from `slipmesh.yaml`, and a second source would be overwritten silently.
 fn publish_annotations(
     patches: &mut Vec<HostDocument>,
-    annotations: BTreeMap<&str, String>,
+    annotations: BTreeMap<String, String>,
 ) -> Result<()> {
     let position = patches.iter().position(|p| p.identity == KUBE_NODE_CONFIG);
     let mut document = match position {
