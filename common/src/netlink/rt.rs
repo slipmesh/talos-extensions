@@ -553,29 +553,29 @@ mod tests {
     #[test]
     fn to_remove_empty_current_removes_nothing() {
         assert_eq!(
-            to_remove(&[], &[(Ipv4Addr::new(10, 0, 0, 1), 31)]),
+            to_remove(&[], &[(Ipv4Addr::new(198, 51, 100, 193), 31)]),
             Vec::new()
         );
     }
 
     #[test]
     fn to_remove_matching_current_removes_nothing() {
-        let desired = (Ipv4Addr::new(10, 0, 0, 1), 31);
+        let desired = (Ipv4Addr::new(198, 51, 100, 193), 31);
         assert_eq!(to_remove(&[desired], &[desired]), Vec::new());
     }
 
     #[test]
     fn to_remove_flags_a_single_stale_address() {
-        let stale = (Ipv4Addr::new(10, 62, 255, 6), 31);
-        let desired = (Ipv4Addr::new(10, 62, 255, 10), 31);
+        let stale = (Ipv4Addr::new(198, 51, 100, 198), 31);
+        let desired = (Ipv4Addr::new(198, 51, 100, 202), 31);
         assert_eq!(to_remove(&[stale], &[desired]), vec![stale]);
     }
 
     #[test]
     fn to_remove_keeps_desired_and_flags_every_other_one() {
-        let stale_a = (Ipv4Addr::new(10, 0, 0, 2), 31);
-        let stale_b = (Ipv4Addr::new(10, 0, 0, 4), 31);
-        let desired = (Ipv4Addr::new(10, 0, 0, 6), 31);
+        let stale_a = (Ipv4Addr::new(198, 51, 100, 194), 31);
+        let stale_b = (Ipv4Addr::new(198, 51, 100, 196), 31);
+        let desired = (Ipv4Addr::new(198, 51, 100, 198), 31);
         let mut removed = to_remove(&[stale_a, desired, stale_b], &[desired]);
         removed.sort();
         assert_eq!(removed, vec![stale_a, stale_b]);
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn to_remove_keeps_every_entry_in_a_multi_address_desired_set() {
-        let global: (Ipv6Addr, u8) = ("fd00::1".parse().unwrap(), 128);
+        let global: (Ipv6Addr, u8) = ("3fff::1".parse().unwrap(), 128);
         let link_local: (Ipv6Addr, u8) = ("fe80::1".parse().unwrap(), 64);
         let stale: (Ipv6Addr, u8) = ("fe80::dead".parse().unwrap(), 64);
         let mut removed = to_remove(&[global, link_local, stale], &[global, link_local]);

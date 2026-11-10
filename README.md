@@ -71,15 +71,15 @@ interfaces:
     mtu: 1420                          # unset leaves the kernel's default
     peers:
       - public_key: "...peer's base64 public key..."
-        endpoint: "203.0.113.7:51820"
+        endpoint: "192.0.2.7:51820"
         # no allowed_ips -> full-tunnel, untracked
-  - name: rw-eu
+  - name: rw-north
     listen_port: 51900
-    addresses: ["10.99.0.1/24", "fd00:99::1/64"]
+    addresses: ["203.0.113.1/27", "3fff:99::1/64"]
     private_key: "...base64, same value on every node that should share this identity..."
     peers:
       - public_key: "...client's base64 public key..."
-        allowed_ips: ["10.99.0.5/32"]   # tracked: handshake polled, route installed while fresh
+        allowed_ips: ["203.0.113.5/32"] # tracked: handshake polled, route installed while fresh
         advanced_security: true         # requires header_protection_key below, same on both ends
     obfuscation:
       jc: 4
@@ -101,7 +101,7 @@ interfaces:
       random_trailers: true            # 3.1: pad outgoing packets to a varying length
       disable_cookies: true            # 3.1: never send cookie replies
 metrics:
-  listen: "10.62.0.4:9586"             # omit the whole section to serve nothing
+  listen: "198.51.100.4:9586"           # omit the whole section to serve nothing
 ```
 
 **Private keys always come from the config - this binary never generates or persists one.**
@@ -362,21 +362,21 @@ slipmesh:
   kind: network
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/24", ipv6: "fd00:62::/120"}
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/120"}
 nodes:
-  - {name: node-a, node_id: "10.62.0.1", endpoint: "192.0.2.1"}
-  - {name: node-b, node_id: "10.62.0.2", endpoint: "192.0.2.2"}
-  - {name: router-1, node_id: "10.62.0.3", endpoint: "192.0.2.3"}
+  - {name: node-a, node_id: "198.51.100.1", endpoint: "192.0.2.1"}
+  - {name: node-b, node_id: "198.51.100.2", endpoint: "192.0.2.2"}
+  - {name: router-1, node_id: "198.51.100.3", endpoint: "192.0.2.3"}
 mesh:
   links:
-    - {pair: [node-a, node-b], port: 52801}
-    - {pair: [router-1, node-a], port: 52891, plain: true}
+    - {pair: [node-a, node-b], port: 51830}
+    - {pair: [router-1, node-a], port: 51831, plain: true}
 ---
 slipmesh:
   kind: roadwarriors
 name: plain
 node_hostnames: [node-a]
-address: "198.51.100.1/24"
+address: "203.0.113.1/27"
 listen_port: 51820
 plain: true
 clients: []
@@ -529,7 +529,7 @@ line, at any depth, shows as `<redacted>` when it is the same on both sides and 
 back the same way:
 
 ```sh
-slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 10.62.253.5/32 --export --qr
+slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 203.0.113.5/32 --export --qr
 slipmesh-taloscfg rw-inspect --if plain --name laptop --qr   # re-render, change nothing
 slipmesh-taloscfg rw-del --if plain --name laptop
 ```

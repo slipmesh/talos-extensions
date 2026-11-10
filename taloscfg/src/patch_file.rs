@@ -207,10 +207,10 @@ mod tests {
   kind: network
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
 nodes:
-  - {name: a, node_id: "10.62.0.1", endpoint: "192.0.2.10"}
-  - {name: b, node_id: "10.62.0.2", endpoint: "192.0.2.11"}
+  - {name: a, node_id: "198.51.100.1", endpoint: "192.0.2.10"}
+  - {name: b, node_id: "198.51.100.2", endpoint: "192.0.2.11"}
 mesh:
   links:
     - {pair: [a, b], port: 51820}

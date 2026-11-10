@@ -113,13 +113,14 @@ pub struct ClusterConfig {
     ///
     /// Why `learn` and not `direct_interfaces`: every CNI installs a route for the node's podCIDR
     /// into the main table, but only some of them also put an address carrying that prefix on an
-    /// interface. `bridge`/`host-local` does (`10.61.x.1/24` on `cni0`), which is why `protocol
+    /// interface. `bridge`/`host-local` does (`203.0.113.145/28` on `cni0`), which is why `protocol
     /// direct` on `cni*` worked at all; Cilium does not (`cilium_host` carries a `/32`, the podCIDR
-    /// exists only as `10.61.x.0/24 via 10.61.x.1 dev cilium_host`). Learning by prefix reads the
-    /// route itself rather than an interface-address side effect of one particular plugin, so it
-    /// holds for any CNI and doesn't couple this generator to a foreign interface name.
+    /// exists only as `203.0.113.144/28 via 203.0.113.145 dev cilium_host`). Learning by prefix
+    /// reads the route itself rather than an interface-address side effect of one particular
+    /// plugin, so it holds for any CNI and doesn't couple this generator to a foreign interface
+    /// name.
     ///
-    /// A *range*, not this node's own `/24`: which sub-prefix kube-controller-manager hands a node
+    /// A *range*, not this node's own `/28`: which sub-prefix kube-controller-manager hands a node
     /// isn't knowable at render time (unlike `service_subnet`, fixed at cluster bootstrap), so the
     /// filter covers the whole pod range and the kernel supplies the specific one. `None` by
     /// default - same reasoning as `service_subnet`, there's no sensible universal value.
@@ -455,12 +456,12 @@ mod tests {
         r#"
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
 nodes:
   - name: a
-    node_id: "10.62.0.1"
+    node_id: "198.51.100.1"
   - name: b
-    node_id: "10.62.0.2"
+    node_id: "198.51.100.2"
 "#
     }
 
@@ -474,7 +475,7 @@ obfuscation: {{header_protection_key: \"{header}\"}}
 roadwarriors:
   - name: rw
     node_hostnames: [a]
-    address: 10.99.0.1/24
+    address: 203.0.113.1/27
     listen_port: 51900
     private_key: \"{pool}\"
     clients:
@@ -519,7 +520,7 @@ roadwarriors:
     fn an_unknown_roadwarriors_pool_key_is_refused() {
         let yaml = "name: plain
 node_hostnames: [a]
-address: 10.0.0.1/24
+address: 203.0.113.1/27
 listen_port: 51820
 listen-port: 1
 ";
@@ -587,7 +588,7 @@ listen-port: 1
         let mut cfg: MeshConfig = sliplib_yaml::from_str(minimal_yaml()).unwrap();
         cfg.nodes.push(NodeEntry {
             name: "c".to_string(),
-            node_id: "10.62.0.3".to_string(),
+            node_id: "198.51.100.3".to_string(),
             endpoint: None,
             mesh_private_key: None,
             direct_interfaces: None,
@@ -614,7 +615,7 @@ listen-port: 1
         let mut cfg: MeshConfig = sliplib_yaml::from_str(minimal_yaml()).unwrap();
         cfg.nodes.push(NodeEntry {
             name: "c".to_string(),
-            node_id: "10.62.0.3".to_string(),
+            node_id: "198.51.100.3".to_string(),
             endpoint: None,
             mesh_private_key: None,
             direct_interfaces: None,
@@ -640,9 +641,9 @@ listen-port: 1
     fn rejects_roadwarriors_pool_referencing_unknown_node() {
         let mut cfg: MeshConfig = sliplib_yaml::from_str(minimal_yaml()).unwrap();
         cfg.roadwarriors.push(RoadwarriorPool {
-            name: "eu".to_string(),
+            name: "north".to_string(),
             node_hostnames: vec!["ghost".to_string()],
-            address: "10.62.253.1/24".to_string(),
+            address: "203.0.113.1/27".to_string(),
             address6: None,
             listen_port: 51820,
             handshake_stale_secs: None,
@@ -659,9 +660,9 @@ listen-port: 1
     fn rejects_roadwarriors_pool_with_empty_node_hostnames() {
         let mut cfg: MeshConfig = sliplib_yaml::from_str(minimal_yaml()).unwrap();
         cfg.roadwarriors.push(RoadwarriorPool {
-            name: "eu".to_string(),
+            name: "north".to_string(),
             node_hostnames: vec![],
-            address: "10.62.253.1/24".to_string(),
+            address: "203.0.113.1/27".to_string(),
             address6: None,
             listen_port: 51820,
             handshake_stale_secs: None,
@@ -678,9 +679,9 @@ listen-port: 1
     fn rejects_duplicate_roadwarrior_client_public_key_in_one_pool() {
         let mut cfg: MeshConfig = sliplib_yaml::from_str(minimal_yaml()).unwrap();
         cfg.roadwarriors.push(RoadwarriorPool {
-            name: "eu".to_string(),
+            name: "north".to_string(),
             node_hostnames: vec!["a".to_string()],
-            address: "10.62.253.1/24".to_string(),
+            address: "203.0.113.1/27".to_string(),
             address6: None,
             listen_port: 51820,
             handshake_stale_secs: None,
@@ -693,14 +694,14 @@ listen-port: 1
                     name: "alice".to_string(),
                     public_key: "k".to_string(),
                     private_key: None,
-                    allowed_ips: vec!["10.62.253.5/32".to_string()],
+                    allowed_ips: vec!["203.0.113.5/32".to_string()],
                     advanced_security: false,
                 },
                 RoadwarriorClient {
                     name: "bob".to_string(),
                     public_key: "k".to_string(),
                     private_key: None,
-                    allowed_ips: vec!["10.62.253.6/32".to_string()],
+                    allowed_ips: vec!["203.0.113.6/32".to_string()],
                     advanced_security: false,
                 },
             ],
@@ -729,9 +730,9 @@ listen-port: 1
             plain: false,
         });
         cfg.roadwarriors.push(RoadwarriorPool {
-            name: "eu".to_string(),
+            name: "north".to_string(),
             node_hostnames: vec!["a".to_string()],
-            address: "10.62.253.1/24".to_string(),
+            address: "203.0.113.1/27".to_string(),
             address6: None,
             listen_port: 51821,
             handshake_stale_secs: None,

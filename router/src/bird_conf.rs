@@ -161,10 +161,10 @@ pub struct RenderInputs<'a> {
     /// Installing it locally is safe precisely because the service subnet is never a real
     /// Internet destination.
     pub announce: &'a [AnnounceRoute],
-    /// IPv4 CIDR *ranges*. Each is rendered with a trailing `+` (`net ~ [ 10.99.0.0/24+ ]`) -
-    /// the network and everything more specific inside it, not an exact-match list of
-    /// individual `/32`s. The routes `awg` installs are learned whatever this holds, by their
-    /// protocol number rather than by range.
+    /// IPv4 CIDR *ranges*. Each is rendered with a trailing `+`
+    /// (`net ~ [ 203.0.113.128/26+ ]`) - the network and everything more specific inside it, not
+    /// an exact-match list of individual `/32`s. The routes `awg` installs are learned whatever
+    /// this holds, by their protocol number rather than by range.
     ///
     /// Rendered as `learn all`, not a bare `learn`: a bare `learn` is `KRT_LEARN_ALIEN` and picks
     /// up only routes installed by other daemons, while `learn all` is `KRT_LEARN_ALL` and also
@@ -401,31 +401,31 @@ mod tests {
         let cfg: sliplib_config::router::RouterConfig = sliplib_yaml::from_str(
             r#"
 node:
-  loopback_addresses: ["10.62.0.1/32", "fd00::1/128"]
+  loopback_addresses: ["198.51.100.1/32", "3fff::1/128"]
 bgp_as: 64512
 bgp_peers:
-  - {name: node-b, address: "fd00::2"}
+  - {name: node-b, address: "3fff::2"}
 announce:
-  - {net: 10.60.0.0/16}
-learn: [10.61.0.0/16]
+  - {net: 203.0.113.192/26}
+learn: [203.0.113.128/26]
 "#,
         )
         .unwrap();
         let bypass = [BypassRoute {
-            net: "203.0.113.0/24".to_string(),
+            net: "192.0.2.0/24".to_string(),
             label: "example".to_string(),
         }];
         let out = StaticInputs::from_config(&cfg)
             .unwrap()
             .render(&compile(REFERENCE_TEMPLATE).unwrap(), &bypass)
             .unwrap();
-        assert!(out.contains("router id 10.62.0.1;"));
-        assert!(out.contains("local fd00::1 as 64512;"));
+        assert!(out.contains("router id 198.51.100.1;"));
+        assert!(out.contains("local 3fff::1 as 64512;"));
         assert!(out.contains("protocol bgp ibgp6_node_b {"));
-        assert!(out.contains("neighbor fd00::2 as 64512;"));
-        assert!(out.contains("route 10.60.0.0/16 via \"router-lo\";"));
-        assert!(out.contains("if net ~ [ 10.61.0.0/16+ ] then accept;"));
-        assert!(out.contains("route 203.0.113.0/24 blackhole; # example"));
+        assert!(out.contains("neighbor 3fff::2 as 64512;"));
+        assert!(out.contains("route 203.0.113.192/26 via \"router-lo\";"));
+        assert!(out.contains("if net ~ [ 203.0.113.128/26+ ] then accept;"));
+        assert!(out.contains("route 192.0.2.0/24 blackhole; # example"));
     }
 
     /// `VARIABLES` is what a template is checked against, the context is what it gets - a field
@@ -460,8 +460,8 @@ learn: [10.61.0.0/16]
 
     fn identity() -> RouterIdentity {
         RouterIdentity {
-            loopback: "10.62.0.1".parse().unwrap(),
-            ipv6_loopback: "fd00::1".parse().unwrap(),
+            loopback: "198.51.100.1".parse().unwrap(),
+            ipv6_loopback: "3fff::1".parse().unwrap(),
         }
     }
 
@@ -509,7 +509,7 @@ learn: [10.61.0.0/16]
         // unquoted - both shapes have to come out right in the BFD block as well as the OSPF one.
         let ifaces = vec![
             "mesh-*".to_string(),
-            "10.99.0.0/24".to_string(),
+            "198.51.100.192/26".to_string(),
             "router-lo".to_string(),
         ];
         let settings = sliplib_config::router::BfdSettings {
@@ -526,7 +526,7 @@ learn: [10.61.0.0/16]
         assert!(on.contains("min tx interval 300 ms"));
         assert!(on.contains("multiplier 5;"));
         assert!(on.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
-        assert!(on.contains("interface 10.99.0.0/24 { type ptp; bfd on; };"));
+        assert!(on.contains("interface 198.51.100.192/26 { type ptp; bfd on; };"));
         assert!(on.contains("interface \"router-lo\" { stub yes; };"));
         // No neighbour on a dummy interface, so no session to ask for.
         assert!(on.contains("interface \"router-lo\" { type ptp; };"));
@@ -539,7 +539,7 @@ learn: [10.61.0.0/16]
             .next()
             .unwrap();
         assert!(bfd_block.contains("interface \"mesh-*\""));
-        assert!(bfd_block.contains("interface 10.99.0.0/24"));
+        assert!(bfd_block.contains("interface 198.51.100.192/26"));
         assert!(!bfd_block.contains("router-lo"));
 
         let off = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
@@ -549,11 +549,11 @@ learn: [10.61.0.0/16]
     #[test]
     fn render_kernel_export_filter_installs_announce_locally_but_not_bypass() {
         let bypass = vec![BypassRoute {
-            net: "203.0.113.0/24".to_string(),
+            net: "192.0.2.0/24".to_string(),
             label: "some vendor".to_string(),
         }];
         let announce = vec![AnnounceRoute {
-            net: "10.60.0.0/16".to_string(),
+            net: "203.0.113.192/26".to_string(),
             label: "k8s-services".to_string(),
         }];
         let out = render(
@@ -577,7 +577,7 @@ learn: [10.61.0.0/16]
             .split('}')
             .next()
             .unwrap();
-        assert!(announce_clause.contains("krt_prefsrc = 10.62.0.1;"));
+        assert!(announce_clause.contains("krt_prefsrc = 198.51.100.1;"));
         assert!(announce_clause.contains("accept;"));
         // Nothing in the kernel export filter references BYPASS or the generic RTS_STATIC that
         // would also catch it - only ANNOUNCE gets singled out by name.
@@ -587,10 +587,10 @@ learn: [10.61.0.0/16]
 
     #[test]
     fn render_includes_ospf_interfaces_as_names_and_cidrs() {
-        let ifaces = ["mesh-*".to_string(), "10.99.0.0/24".to_string()];
+        let ifaces = ["mesh-*".to_string(), "198.51.100.192/26".to_string()];
         let out = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
         assert!(out.contains("interface \"mesh-*\" { type ptp;"));
-        assert!(out.contains("interface 10.99.0.0/24 { type ptp;"));
+        assert!(out.contains("interface 198.51.100.192/26 { type ptp;"));
         assert!(out.contains("interface \"router-lo\" { stub yes; };"));
     }
 
@@ -646,23 +646,23 @@ learn: [10.61.0.0/16]
     #[test]
     fn render_includes_bgp_peer_with_sanitized_protocol_id() {
         let peers = vec![BgpPeer {
-            name: "fra-1".to_string(),
-            address: "fd00::2".parse().unwrap(),
+            name: "east-1".to_string(),
+            address: "3fff::2".parse().unwrap(),
         }];
         let out = render(identity(), 64512, &inputs(&[], &peers, &[], &[], &[])).unwrap();
-        assert!(out.contains("protocol bgp ibgp6_fra_1 {"));
-        assert!(out.contains("neighbor fd00::2 as 64512;"));
-        assert!(out.contains("local fd00::1 as 64512;"));
+        assert!(out.contains("protocol bgp ibgp6_east_1 {"));
+        assert!(out.contains("neighbor 3fff::2 as 64512;"));
+        assert!(out.contains("local 3fff::1 as 64512;"));
     }
 
     #[test]
     fn bypass_and_announce_diverge_on_route_kind() {
         let bypass = vec![BypassRoute {
-            net: "203.0.113.0/24".to_string(),
+            net: "192.0.2.0/24".to_string(),
             label: "some vendor".to_string(),
         }];
         let announce = vec![AnnounceRoute {
-            net: "10.96.0.0/12".to_string(),
+            net: "203.0.113.192/26".to_string(),
             label: "k8s-services".to_string(),
         }];
         let out = render(
@@ -697,7 +697,7 @@ learn: [10.61.0.0/16]
     fn empty_learn_still_learns_and_announces_the_routes_awg_installs() {
         let peers = vec![BgpPeer {
             name: "peer1".to_string(),
-            address: "fd00::2".parse().unwrap(),
+            address: "3fff::2".parse().unwrap(),
         }];
         let conf = render(identity(), 64512, &inputs(&[], &peers, &[], &[], &[])).unwrap();
         // A bare `learn` takes only routes other daemons installed - awg's are exactly that.
@@ -715,15 +715,15 @@ learn: [10.61.0.0/16]
     fn nonempty_learn_scopes_kernel_import_with_plus_modifier_and_exports_rts_inherit() {
         let peers = vec![BgpPeer {
             name: "peer1".to_string(),
-            address: "fd00::2".parse().unwrap(),
+            address: "3fff::2".parse().unwrap(),
         }];
-        let learn = vec!["10.99.0.0/24".to_string()];
+        let learn = vec!["203.0.113.128/26".to_string()];
         let conf = render(identity(), 64512, &inputs(&[], &peers, &[], &[], &learn)).unwrap();
         // `all`, not a bare `learn` - see `RenderInputs`'s doc comment: without it BIRD skips
         // KRT_SRC_KERNEL routes, which is the only kind a node's own podCIDR route ever is.
         assert!(conf.contains("    learn all;\n"));
         assert!(!conf.contains("    learn;\n"));
-        assert!(conf.contains("if net ~ [ 10.99.0.0/24+ ] then accept;"));
+        assert!(conf.contains("if net ~ [ 203.0.113.128/26+ ] then accept;"));
         assert!(conf.contains("if krt_source = 200 then accept;"));
         assert!(conf.contains("if source = RTS_INHERIT then accept;"));
         assert!(!conf.contains("learn no;"));
@@ -741,16 +741,16 @@ learn: [10.61.0.0/16]
     #[test]
     fn sanitize_quoted_strips_quotes_and_newlines() {
         assert_eq!(
-            sanitize_quoted("mesh-lon\"; protocol static evil { route 0.0.0.0/0 blackhole; } \""),
-            "mesh-lon; protocol static evil { route 0.0.0.0/0 blackhole; } "
+            sanitize_quoted("mesh-west\"; protocol static evil { route 0.0.0.0/0 blackhole; } \""),
+            "mesh-west; protocol static evil { route 0.0.0.0/0 blackhole; } "
         );
-        assert_eq!(sanitize_quoted("mesh-lon"), "mesh-lon");
+        assert_eq!(sanitize_quoted("mesh-west"), "mesh-west");
     }
 
     #[test]
     fn sanitize_protocol_id_replaces_invalid_characters() {
-        assert_eq!(sanitize_protocol_id("fra-1"), "fra_1");
-        assert_eq!(sanitize_protocol_id("fra.eu"), "fra_eu");
+        assert_eq!(sanitize_protocol_id("east-1"), "east_1");
+        assert_eq!(sanitize_protocol_id("east.example"), "east_example");
     }
 
     #[test]

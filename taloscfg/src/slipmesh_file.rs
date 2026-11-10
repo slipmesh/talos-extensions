@@ -369,11 +369,11 @@ mod tests {
   kind: network
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
 nodes:
-  - {name: node-a, node_id: "10.62.0.1"}
-  - {name: node-b, node_id: "10.62.0.2"}
-  - {name: node-c, node_id: "10.62.0.3"}
+  - {name: node-a, node_id: "198.51.100.1"}
+  - {name: node-b, node_id: "198.51.100.2"}
+  - {name: node-c, node_id: "198.51.100.3"}
 "#;
 
     const KUBELET: &str = r#"slipmesh:
@@ -390,7 +390,7 @@ extraArgs:
 
     fn pool(name: &str, port: u16) -> String {
         format!(
-            "slipmesh:\n  kind: roadwarriors\nname: {name}\nnode_hostnames: [node-a]\naddress: \"10.99.0.1/24\"\nlisten_port: {port}\nclients: []\n"
+            "slipmesh:\n  kind: roadwarriors\nname: {name}\nnode_hostnames: [node-a]\naddress: \"203.0.113.1/27\"\nlisten_port: {port}\nclients: []\n"
         )
     }
 

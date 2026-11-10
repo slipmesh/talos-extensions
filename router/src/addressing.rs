@@ -3,7 +3,7 @@
 use std::net::Ipv6Addr;
 
 /// This node's deterministic IPv6 link-local address for `router-lo`, derived from the low 32
-/// bits of its own configured `ipv6_loopback` (`fe80::<hex>`, e.g. `fd00::a1b2c3d4` ->
+/// bits of its own configured `ipv6_loopback` (`fe80::<hex>`, e.g. `3fff::a1b2c3d4` ->
 /// `fe80::a1b2:c3d4`) - not a separately-configured `node_id` the way the k8s original derived it
 /// (that concept doesn't exist here; `router.yaml` gives each node's loopbacks directly, see
 /// `RouterIdentity`'s doc comment), just reusing the same digits already unique to this node by
@@ -31,7 +31,7 @@ mod tests {
     #[test]
     fn link_local_from_loopback_derives_fe80_from_low_32_bits() {
         assert_eq!(
-            link_local_from_loopback("fd00::a1b2:c3d4".parse().unwrap()).to_string(),
+            link_local_from_loopback("3fff::a1b2:c3d4".parse().unwrap()).to_string(),
             "fe80::a1b2:c3d4"
         );
     }

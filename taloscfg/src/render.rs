@@ -404,12 +404,12 @@ mod tests {
         r#"
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
   bypass_refresh_interval_secs: 3600
 nodes:
-  - {name: a, node_id: "10.62.0.1"}
-  - {name: b, node_id: "10.62.0.2"}
-  - {name: c, node_id: "10.62.0.3"}
+  - {name: a, node_id: "198.51.100.1"}
+  - {name: b, node_id: "198.51.100.2"}
+  - {name: c, node_id: "198.51.100.3"}
 mesh:
   links:
     - {pair: [a, b], port: 51820}
@@ -417,7 +417,7 @@ bypass:
   - node: a
     include:
       - kind: literal
-        prefixes: [{net: "10.0.0.0/8"}]
+        prefixes: [{net: "192.0.2.0/24"}]
 "#
     }
 
@@ -425,10 +425,10 @@ bypass:
     fn node_loopbacks_ors_node_id_onto_cluster_networks() {
         let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let (v4, v6) = node_loopbacks(&mesh, "a").unwrap();
-        assert_eq!(v4.to_string(), "10.62.0.1");
-        // node_id "10.62.0.1" is the full 32-bit value (0x0a3e0001), not just its last octet, so
-        // it ORs into the v6 host bits as "a3e:1" - matches `ipv6_loopback`'s ported formula.
-        assert_eq!(v6.to_string(), "fd00:62::a3e:1");
+        assert_eq!(v4.to_string(), "198.51.100.1");
+        // node_id "198.51.100.1" is the full 32-bit value (0xc6336401), not just its last octet, so
+        // it ORs into the v6 host bits as "c633:6401" - matches `ipv6_loopback`'s ported formula.
+        assert_eq!(v6.to_string(), "3fff::c633:6401");
     }
 
     #[test]
@@ -453,7 +453,7 @@ bypass:
         let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let peers = bgp_peers_for(&mesh, "a").unwrap();
         let b = peers.iter().find(|p| p.name == "b").unwrap();
-        assert_eq!(b.address, "fd00:62::a3e:2");
+        assert_eq!(b.address, "3fff::c633:6402");
     }
 
     #[test]
@@ -471,7 +471,7 @@ bypass:
         assert_eq!(bypass.include[0].kind, "literal");
         assert_eq!(
             bypass.include[0].prefixes.as_ref().unwrap()[0].net,
-            "10.0.0.0/8"
+            "192.0.2.0/24"
         );
         assert_eq!(bypass.refresh_interval_secs, 3600);
     }
@@ -551,12 +551,12 @@ bypass:
     #[test]
     fn render_router_config_announces_the_configured_service_subnet_on_every_node() {
         let mut mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
-        mesh.cluster.service_subnet = Some("10.60.0.0/16".to_string());
+        mesh.cluster.service_subnet = Some("203.0.113.192/26".to_string());
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
         for cfg in [&cfg_a, &cfg_b] {
             assert_eq!(cfg.announce.len(), 1);
-            assert_eq!(cfg.announce[0].net, "10.60.0.0/16");
+            assert_eq!(cfg.announce[0].net, "203.0.113.192/26");
             assert_eq!(cfg.announce[0].label.as_deref(), Some("k8s-services"));
         }
     }
@@ -571,11 +571,11 @@ bypass:
     #[test]
     fn render_router_config_learns_the_configured_pod_subnet_on_every_node() {
         let mut mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
-        mesh.cluster.pod_subnet = Some("10.61.0.0/16".to_string());
+        mesh.cluster.pod_subnet = Some("203.0.113.128/26".to_string());
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
         for cfg in [&cfg_a, &cfg_b] {
-            assert_eq!(cfg.learn, vec!["10.61.0.0/16".to_string()]);
+            assert_eq!(cfg.learn, vec!["203.0.113.128/26".to_string()]);
         }
     }
 
@@ -585,10 +585,10 @@ bypass:
     #[test]
     fn render_router_config_learns_pod_subnet_with_direct_interfaces_emptied() {
         let mut mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
-        mesh.cluster.pod_subnet = Some("10.61.0.0/16".to_string());
+        mesh.cluster.pod_subnet = Some("203.0.113.128/26".to_string());
         mesh.cluster.direct_interfaces = vec![];
         let cfg = render_router_config(&mesh, "a").unwrap();
-        assert_eq!(cfg.learn, vec!["10.61.0.0/16".to_string()]);
+        assert_eq!(cfg.learn, vec!["203.0.113.128/26".to_string()]);
         assert!(!cfg.direct_interfaces.iter().any(|s| s == "cni*"));
     }
 
@@ -603,23 +603,23 @@ bypass:
         r#"
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
 nodes:
-  - {name: a, node_id: "10.62.0.1"}
-  - {name: b, node_id: "10.62.0.2", endpoint: "b.example.com"}
-  - {name: c, node_id: "10.62.0.3"}
+  - {name: a, node_id: "198.51.100.1"}
+  - {name: b, node_id: "198.51.100.2", endpoint: "b.example.com"}
+  - {name: c, node_id: "198.51.100.3"}
 mesh:
   links:
     - {pair: [a, b], port: 51820}
 roadwarriors:
-  - name: eu
+  - name: north
     node_hostnames: [a]
-    address: "10.99.0.1/24"
+    address: "203.0.113.1/27"
     listen_port: 51900
     clients:
       - name: alice
         public_key: "client-pubkey"
-        allowed_ips: ["10.99.0.5/32"]
+        allowed_ips: ["203.0.113.5/32"]
 "#
     }
 
@@ -635,7 +635,7 @@ roadwarriors:
         let mtu = |name: &str| cfg.interfaces.iter().find(|i| i.name == name).unwrap().mtu;
         // a-b is dialed at b's hostname, IPv6 when unsaid: 1500 - 32 - 8 - 40.
         assert_eq!(mtu("mesh-b"), Some(1420));
-        assert_eq!(mtu("rw-eu"), None);
+        assert_eq!(mtu("rw-north"), None);
     }
 
     #[test]
@@ -695,11 +695,11 @@ roadwarriors:
         r#"
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
-  tunnel_networks: {ipv4: "10.62.1.0/24", ipv6: "fd00:63::/120"}
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
+  tunnel_networks: {ipv4: "198.51.100.192/26", ipv6: "3fff:1::/120"}
 nodes:
-  - {name: a, node_id: "10.62.0.1"}
-  - {name: b, node_id: "10.62.0.2", endpoint: "b.example.com"}
+  - {name: a, node_id: "198.51.100.1"}
+  - {name: b, node_id: "198.51.100.2", endpoint: "b.example.com"}
 mesh:
   links:
     - {pair: [a, b], port: 51820}
@@ -717,8 +717,8 @@ mesh:
         let mesh: MeshConfig =
             sliplib_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
         let (v4, v6) = node_tunnel_addresses(&mesh, "a").unwrap().unwrap();
-        assert_eq!(v4.to_string(), "10.62.1.1");
-        assert_eq!(v6.to_string(), "fd00:63::1");
+        assert_eq!(v4.to_string(), "198.51.100.193");
+        assert_eq!(v6.to_string(), "3fff:1::1");
     }
 
     #[test]
@@ -731,7 +731,7 @@ mesh:
         // entirely - never both at once on the same interface.
         assert_eq!(
             ifaces[0].addresses,
-            vec!["fd00:63::1/64".to_string(), "10.62.1.1/32".to_string()]
+            vec!["3fff:1::1/64".to_string(), "198.51.100.193/32".to_string()]
         );
     }
 
@@ -740,7 +740,7 @@ mesh:
         let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
-        assert_eq!(ifaces[0].addresses, vec!["fe80::a3e:1/64".to_string()]);
+        assert_eq!(ifaces[0].addresses, vec!["fe80::c633:6401/64".to_string()]);
     }
 
     #[test]
@@ -789,12 +789,12 @@ mesh:
         let resolved = resolved_for(&mesh);
         let ifaces = roadwarrior_interfaces_for(&mesh, "a", &resolved).unwrap();
         assert_eq!(ifaces.len(), 1);
-        assert_eq!(ifaces[0].name, "rw-eu");
+        assert_eq!(ifaces[0].name, "rw-north");
         assert_eq!(ifaces[0].listen_port, 51900);
         assert_eq!(ifaces[0].peers[0].public_key, "client-pubkey");
         assert_eq!(
             ifaces[0].peers[0].allowed_ips,
-            Some(vec!["10.99.0.5/32".to_string()])
+            Some(vec!["203.0.113.5/32".to_string()])
         );
     }
 
@@ -804,7 +804,7 @@ mesh:
         let mut resolved = resolved_for(&mesh);
         resolved.roadwarrior_private_keys.clear();
         let err = roadwarrior_interfaces_for(&mesh, "a", &resolved).unwrap_err();
-        assert!(err.to_string().contains("eu"), "{err}");
+        assert!(err.to_string().contains("north"), "{err}");
     }
 
     #[test]
@@ -838,7 +838,11 @@ mesh:
         let mesh_iface = cfg.interfaces.iter().find(|i| i.name == "mesh-b").unwrap();
         assert_eq!(mesh_iface.peers[0].name.as_deref(), Some("b"));
 
-        let rw_iface = cfg.interfaces.iter().find(|i| i.name == "rw-eu").unwrap();
+        let rw_iface = cfg
+            .interfaces
+            .iter()
+            .find(|i| i.name == "rw-north")
+            .unwrap();
         assert_eq!(rw_iface.peers[0].name.as_deref(), Some("alice"));
     }
 
@@ -908,7 +912,7 @@ mesh:
         let cfg = render_awg_config(&mesh, "b", &resolved).unwrap();
         assert_eq!(
             cfg.metrics.as_ref().map(|m| m.listen.as_str()),
-            Some("10.62.0.2:9586")
+            Some("198.51.100.2:9586")
         );
         sliplib_config::awg::validate(&cfg).unwrap();
     }

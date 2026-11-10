@@ -387,52 +387,58 @@ mod tests {
     #[test]
     fn identical_sets_produce_no_ops() {
         let a = vec![
-            peer("k1", &["10.0.0.1/32"], None),
-            peer("k2", &["10.0.0.2/32"], None),
+            peer("k1", &["203.0.113.1/32"], None),
+            peer("k2", &["203.0.113.2/32"], None),
         ];
         assert!(diff_peers(&a, &a).is_empty());
     }
 
     #[test]
     fn added_peer_yields_replace_op() {
-        let previous = vec![peer("k1", &["10.0.0.1/32"], None)];
+        let previous = vec![peer("k1", &["203.0.113.1/32"], None)];
         let desired = vec![
-            peer("k1", &["10.0.0.1/32"], None),
-            peer("k2", &["10.0.0.2/32"], None),
+            peer("k1", &["203.0.113.1/32"], None),
+            peer("k2", &["203.0.113.2/32"], None),
         ];
         let ops = diff_peers(&previous, &desired);
         assert_eq!(
             ops,
-            vec![("k2".to_string(), Some(peer("k2", &["10.0.0.2/32"], None)))]
+            vec![(
+                "k2".to_string(),
+                Some(peer("k2", &["203.0.113.2/32"], None))
+            )]
         );
     }
 
     #[test]
     fn removed_peer_yields_remove_op() {
         let previous = vec![
-            peer("k1", &["10.0.0.1/32"], None),
-            peer("k2", &["10.0.0.2/32"], None),
+            peer("k1", &["203.0.113.1/32"], None),
+            peer("k2", &["203.0.113.2/32"], None),
         ];
-        let desired = vec![peer("k1", &["10.0.0.1/32"], None)];
+        let desired = vec![peer("k1", &["203.0.113.1/32"], None)];
         let ops = diff_peers(&previous, &desired);
         assert_eq!(ops, vec![("k2".to_string(), None)]);
     }
 
     #[test]
     fn reordered_allowed_ips_produce_no_ops() {
-        let previous = vec![peer("k1", &["10.0.0.1/32", "10.0.0.2/32"], None)];
-        let desired = vec![peer("k1", &["10.0.0.2/32", "10.0.0.1/32"], None)];
+        let previous = vec![peer("k1", &["203.0.113.1/32", "203.0.113.2/32"], None)];
+        let desired = vec![peer("k1", &["203.0.113.2/32", "203.0.113.1/32"], None)];
         assert!(diff_peers(&previous, &desired).is_empty());
     }
 
     #[test]
     fn changed_allowed_ips_yields_replace_op_not_remove_and_add() {
-        let previous = vec![peer("k1", &["10.0.0.1/32"], None)];
-        let desired = vec![peer("k1", &["10.0.0.99/32"], None)];
+        let previous = vec![peer("k1", &["203.0.113.1/32"], None)];
+        let desired = vec![peer("k1", &["203.0.113.29/32"], None)];
         let ops = diff_peers(&previous, &desired);
         assert_eq!(
             ops,
-            vec![("k1".to_string(), Some(peer("k1", &["10.0.0.99/32"], None)))]
+            vec![(
+                "k1".to_string(),
+                Some(peer("k1", &["203.0.113.29/32"], None))
+            )]
         );
     }
 
@@ -441,26 +447,14 @@ mod tests {
         // Real fork from the k8s-daemon original (roadwarriors' diff_peers never had endpoints to
         // compare): a peer whose reachable address changed must get its Endpoint attribute
         // re-applied, not be treated as unchanged because allowed_ips alone didn't move.
-        let previous = vec![peer(
-            "k1",
-            &["0.0.0.0/0", "::/0"],
-            Some("203.0.113.1:51820"),
-        )];
-        let desired = vec![peer(
-            "k1",
-            &["0.0.0.0/0", "::/0"],
-            Some("203.0.113.2:51820"),
-        )];
+        let previous = vec![peer("k1", &["0.0.0.0/0", "::/0"], Some("192.0.2.1:51820"))];
+        let desired = vec![peer("k1", &["0.0.0.0/0", "::/0"], Some("192.0.2.2:51820"))];
         let ops = diff_peers(&previous, &desired);
         assert_eq!(
             ops,
             vec![(
                 "k1".to_string(),
-                Some(peer(
-                    "k1",
-                    &["0.0.0.0/0", "::/0"],
-                    Some("203.0.113.2:51820")
-                ))
+                Some(peer("k1", &["0.0.0.0/0", "::/0"], Some("192.0.2.2:51820")))
             )]
         );
     }
@@ -470,8 +464,8 @@ mod tests {
         // The kernel never reports this back (see `Peer::advanced_security`'s doc comment), so
         // `previous` always carries `false` here regardless of the real state - a peer configured
         // `true` must still show up as changed, every single time, not just once.
-        let previous = vec![peer("k1", &["10.0.0.1/32"], None)];
-        let mut desired = peer("k1", &["10.0.0.1/32"], None);
+        let previous = vec![peer("k1", &["203.0.113.1/32"], None)];
+        let mut desired = peer("k1", &["203.0.113.1/32"], None);
         desired.advanced_security = true;
         let ops = diff_peers(&previous, &[desired.clone()]);
         assert_eq!(ops, vec![("k1".to_string(), Some(desired))]);
@@ -480,20 +474,23 @@ mod tests {
     #[test]
     fn unrelated_peers_are_never_mentioned() {
         let previous = vec![
-            peer("k1", &["10.0.0.1/32"], None),
-            peer("k2", &["10.0.0.2/32"], None),
+            peer("k1", &["203.0.113.1/32"], None),
+            peer("k2", &["203.0.113.2/32"], None),
         ];
         let desired = vec![
-            peer("k1", &["10.0.0.1/32"], None),
-            peer("k2", &["10.0.0.2/32"], None),
-            peer("k3", &["10.0.0.3/32"], None),
+            peer("k1", &["203.0.113.1/32"], None),
+            peer("k2", &["203.0.113.2/32"], None),
+            peer("k3", &["203.0.113.3/32"], None),
         ];
         let ops = diff_peers(&previous, &desired);
         assert!(!ops.iter().any(|(k, _)| k == "k1"));
         assert!(!ops.iter().any(|(k, _)| k == "k2"));
         assert_eq!(
             ops,
-            vec![("k3".to_string(), Some(peer("k3", &["10.0.0.3/32"], None)))]
+            vec![(
+                "k3".to_string(),
+                Some(peer("k3", &["203.0.113.3/32"], None))
+            )]
         );
     }
 
