@@ -134,10 +134,10 @@ mod tests {
     /// Two nodes `a` and `b` and one link between them, plain unless `obfuscation` gives it some.
     fn mesh(a: &str, b: &str, link: &str, cluster: &str) -> MeshConfig {
         let yaml = format!(
-            "cluster:\n  bgp_as: 64512\n  loopback_networks: {{ipv4: \"10.62.0.0/16\", ipv6: \
-             \"fd00:62::/32\"}}\n{cluster}nodes:\n  - {{name: a, node_id: \"10.62.0.1\"{a}}}\n  - \
-             {{name: b, node_id: \"10.62.0.2\"{b}}}\nmesh:\n  links:\n    - {{pair: [a, b], port: \
-             51820{link}}}\n"
+            "cluster:\n  bgp_as: 64512\n  loopback_networks: {{ipv4: \"198.51.100.0/25\", \
+             ipv6: \"3fff::/32\"}}\n{cluster}nodes:\n  - {{name: a, node_id: \
+             \"198.51.100.1\"{a}}}\n  - {{name: b, node_id: \"198.51.100.2\"{b}}}\nmesh:\n  \
+             links:\n    - {{pair: [a, b], port: 51820{link}}}\n"
         );
         sliplib_yaml::from_str(&yaml).unwrap()
     }
@@ -235,12 +235,12 @@ mod tests {
     #[test]
     fn the_mesh_takes_the_least_of_its_links() {
         // a-b dials a over IPv4 at 1500: 1440. b-c dials c over IPv6 at 1490: 1410.
-        let yaml = "cluster:\n  bgp_as: 64512\n  loopback_networks: {ipv4: \"10.62.0.0/16\", ipv6: \
-                    \"fd00:62::/32\"}\nnodes:\n  - {name: a, node_id: \"10.62.0.1\", endpoint: \
-                    \"192.0.2.10\"}\n  - {name: b, node_id: \"10.62.0.2\"}\n  - {name: c, node_id: \
-                    \"10.62.0.3\", endpoint: \"2001:db8::12\", uplink_mtu: 1490}\nmesh:\n  links:\n    - \
-                    {pair: [a, b], port: 51820, plain: true}\n    - {pair: [b, c], port: 51821, plain: \
-                    true}\n";
+        let yaml = "cluster:\n  bgp_as: 64512\n  loopback_networks: {ipv4: \"198.51.100.0/25\", \
+                    ipv6: \"3fff::/32\"}\nnodes:\n  - {name: a, node_id: \"198.51.100.1\", \
+                    endpoint: \"192.0.2.10\"}\n  - {name: b, node_id: \"198.51.100.2\"}\n  - \
+                    {name: c, node_id: \"198.51.100.3\", endpoint: \"2001:db8::12\", uplink_mtu: \
+                    1490}\nmesh:\n  links:\n    - {pair: [a, b], port: 51820, plain: true}\n    - \
+                    {pair: [b, c], port: 51821, plain: true}\n";
         let topology: MeshConfig = sliplib_yaml::from_str(yaml).unwrap();
         assert_eq!(computed(&topology).unwrap(), Some(1410));
     }

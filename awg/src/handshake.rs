@@ -330,8 +330,11 @@ mod tests {
     #[test]
     fn a_peer_with_every_route_installed_is_connected() {
         let snap = snapshot_from(
-            &[tracked(4, &[("peer-a", &["10.0.0.1/32", "10.0.0.2/32"])])],
-            &installed(4, &["10.0.0.1/32", "10.0.0.2/32"]),
+            &[tracked(
+                4,
+                &[("peer-a", &["203.0.113.1/32", "203.0.113.2/32"])],
+            )],
+            &installed(4, &["203.0.113.1/32", "203.0.113.2/32"]),
             1_700_000_000,
         );
         assert_eq!(snap.taken_unix, 1_700_000_000);
@@ -346,8 +349,11 @@ mod tests {
         // What a failed `route_add` looks like: the pass logged it and carried on, so the verdict
         // must not claim a route that isn't in the kernel.
         let snap = snapshot_from(
-            &[tracked(4, &[("peer-a", &["10.0.0.1/32", "10.0.0.2/32"])])],
-            &installed(4, &["10.0.0.1/32"]),
+            &[tracked(
+                4,
+                &[("peer-a", &["203.0.113.1/32", "203.0.113.2/32"])],
+            )],
+            &installed(4, &["203.0.113.1/32"]),
             1_700_000_000,
         );
         assert!(snap.connected.is_empty());
@@ -356,7 +362,7 @@ mod tests {
     #[test]
     fn an_interface_with_no_installed_routes_at_all_yields_nothing() {
         let snap = snapshot_from(
-            &[tracked(4, &[("peer-a", &["10.0.0.1/32"])])],
+            &[tracked(4, &[("peer-a", &["203.0.113.1/32"])])],
             &HashMap::new(),
             1_700_000_000,
         );
@@ -369,7 +375,7 @@ mod tests {
         // read as connected on the strength of that.
         let snap = snapshot_from(
             &[tracked(4, &[("peer-a", &[])])],
-            &installed(4, &["10.0.0.1/32"]),
+            &installed(4, &["203.0.113.1/32"]),
             1_700_000_000,
         );
         assert!(snap.connected.is_empty());

@@ -54,7 +54,7 @@ mod tests {
     /// arrangement and report nothing.
     #[test]
     fn the_exporter_is_pointed_at_our_socket_and_our_address() {
-        let a = args("/run/bird.ctl", "10.62.0.1:9324");
+        let a = args("/run/bird.ctl", "198.51.100.1:9324");
         assert_eq!(
             a,
             [
@@ -62,7 +62,7 @@ mod tests {
                 "-bird.socket",
                 "/run/bird.ctl",
                 "-web.listen-address",
-                "10.62.0.1:9324"
+                "198.51.100.1:9324"
             ]
         );
     }

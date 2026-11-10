@@ -271,22 +271,22 @@ mod tests {
             r#"
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
 nodes:
-  - {name: a, node_id: "10.62.0.1"}
-  - {name: b, node_id: "10.62.0.2"}
+  - {name: a, node_id: "198.51.100.1"}
+  - {name: b, node_id: "198.51.100.2"}
 mesh:
   links:
     - {pair: [b, a], port: 51820}
 roadwarriors:
   - name: obfuscated
     node_hostnames: [a]
-    address: "10.99.0.1/24"
+    address: "203.0.113.1/27"
     listen_port: 51900
     obfuscation: {jc: 4, jmin: 10, jmax: 50, s1: 1, s2: 2, h1: 5, h2: 6, h3: 7, h4: 8}
   - name: plain
     node_hostnames: [b]
-    address: "10.98.0.1/24"
+    address: "203.0.113.33/27"
     listen_port: 51901
     plain: true
 "#,

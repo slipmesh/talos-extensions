@@ -50,36 +50,36 @@ mod tests {
 
     #[test]
     fn ipv4_loopback_ors_node_id_into_the_host_bits() {
-        let network = Ipv4Addr::new(10, 0, 0, 0);
+        let network = Ipv4Addr::new(198, 51, 100, 0);
         let node_id = Ipv4Addr::new(0, 0, 0, 5);
         assert_eq!(
-            ipv4_loopback(network, 24, node_id),
-            Ipv4Addr::new(10, 0, 0, 5)
+            ipv4_loopback(network, 25, node_id),
+            Ipv4Addr::new(198, 51, 100, 5)
         );
     }
 
     #[test]
     fn different_node_ids_never_collide_for_the_same_network() {
-        let network = Ipv4Addr::new(10, 0, 0, 0);
-        let a = ipv4_loopback(network, 24, Ipv4Addr::new(0, 0, 0, 1));
-        let b = ipv4_loopback(network, 24, Ipv4Addr::new(0, 0, 0, 2));
+        let network = Ipv4Addr::new(198, 51, 100, 0);
+        let a = ipv4_loopback(network, 25, Ipv4Addr::new(0, 0, 0, 1));
+        let b = ipv4_loopback(network, 25, Ipv4Addr::new(0, 0, 0, 2));
         assert_ne!(a, b);
     }
 
     #[test]
     fn ipv6_loopback_ors_node_id_into_the_low_32_host_bits() {
-        let network: Ipv6Addr = "fd00::".parse().unwrap();
+        let network: Ipv6Addr = "3fff::".parse().unwrap();
         let node_id = Ipv4Addr::new(0, 0, 0, 5);
-        assert_eq!(ipv6_loopback(network, 16, node_id).to_string(), "fd00::5");
+        assert_eq!(ipv6_loopback(network, 32, node_id).to_string(), "3fff::5");
     }
 
     #[test]
     fn ipv6_loopback_leaves_middle_bits_zero() {
-        let network: Ipv6Addr = "fd00::".parse().unwrap();
-        let node_id = Ipv4Addr::new(10, 0, 0, 1);
+        let network: Ipv6Addr = "3fff::".parse().unwrap();
+        let node_id = Ipv4Addr::new(198, 51, 100, 1);
         assert_eq!(
-            ipv6_loopback(network, 16, node_id).to_string(),
-            "fd00::a00:1"
+            ipv6_loopback(network, 32, node_id).to_string(),
+            "3fff::c633:6401"
         );
     }
 }

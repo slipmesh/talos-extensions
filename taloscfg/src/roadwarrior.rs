@@ -372,23 +372,23 @@ mod tests {
     fn fixture() -> &'static str {
         r#"cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "192.0.2.0/24", ipv6: "2001:db8::/32"}
-  service_subnet: "100.64.0.0/16"
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "2001:db8::/32"}
+  service_subnet: "203.0.113.192/26"
 nodes:
   - {name: a, node_id: "0.0.0.1", endpoint: "192.0.2.10"}
   - {name: b, node_id: "0.0.0.2", endpoint: "192.0.2.11"}
 roadwarriors:
   - name: plain
     node_hostnames: ["a", "b"]
-    address: "198.51.100.1/24"
+    address: "203.0.113.1/27"
     listen_port: 51820
     plain: true
     clients:
-      - {name: alice, public_key: "AAA=", allowed_ips: ["198.51.100.41/32"]}
-      - {name: bob, public_key: "BBB=", allowed_ips: ["198.51.100.32/32"]}
+      - {name: alice, public_key: "AAA=", allowed_ips: ["203.0.113.21/32"]}
+      - {name: bob, public_key: "BBB=", allowed_ips: ["203.0.113.12/32"]}
   - name: obfuscation
     node_hostnames: ["a"]
-    address: "203.0.113.1/24"
+    address: "203.0.113.33/27"
     listen_port: 51821
     obfuscation:
       jc: 4
@@ -401,7 +401,7 @@ roadwarriors:
       h3: 891489045
       h4: 2070706730
     clients:
-      - {name: carol, public_key: "CCC=", allowed_ips: ["203.0.113.22/32"]}
+      - {name: carol, public_key: "CCC=", allowed_ips: ["203.0.113.42/32"]}
 "#
     }
 
@@ -431,7 +431,7 @@ roadwarriors:
         for (given, live) in [
             ("rw.example.com", "rw.example.com:51820"),
             ("rw.example.com:443", "rw.example.com:443"),
-            ("198.51.100.7", "198.51.100.7:51820"),
+            ("192.0.2.7", "192.0.2.7:51820"),
             ("2001:db8::7", "[2001:db8::7]:51820"),
             ("[2001:db8::7]", "[2001:db8::7]:51820"),
             ("[2001:db8::7]:443", "[2001:db8::7]:443"),
@@ -454,7 +454,7 @@ roadwarriors:
 
         let cfg = inspect_carol(None).unwrap();
         assert!(cfg.contains("<enter your private key here>"), "{cfg}");
-        assert!(cfg.contains("Address = 203.0.113.22/32"), "{cfg}");
+        assert!(cfg.contains("Address = 203.0.113.42/32"), "{cfg}");
         assert!(cfg.contains("Jc = 4"), "{cfg}");
 
         let cfg = inspect_carol(Some(&carol_priv)).unwrap();
@@ -475,12 +475,12 @@ roadwarriors:
         let mut m = mesh();
         assert_eq!(
             resolve_dns(&m, &m.roadwarriors[0]),
-            Some("100.64.0.10".to_string())
+            Some("203.0.113.202".to_string())
         );
-        m.roadwarriors[0].dns = Some("9.9.9.9".to_string());
+        m.roadwarriors[0].dns = Some("192.0.2.53".to_string());
         assert_eq!(
             resolve_dns(&m, &m.roadwarriors[0]),
-            Some("9.9.9.9".to_string())
+            Some("192.0.2.53".to_string())
         );
         m.roadwarriors[0].dns = None;
         m.cluster.service_subnet = None;
@@ -490,7 +490,7 @@ roadwarriors:
     #[test]
     fn parse_allowed_ip_adds_a_host_prefix_only_where_none_is_given() {
         for (given, parsed) in [
-            ("198.51.100.99", "198.51.100.99/32"),
+            ("203.0.113.29", "203.0.113.29/32"),
             ("2001:db8::1", "2001:db8::1/128"),
             ("203.0.113.0/28", "203.0.113.0/28"),
             ("2001:db8::/120", "2001:db8::/120"),
@@ -498,7 +498,7 @@ roadwarriors:
             assert_eq!(parse_allowed_ip(given).unwrap(), parsed);
         }
         assert!(parse_allowed_ip("not-an-ip").is_err());
-        assert!(parse_allowed_ip("198.51.100.99/99").is_err());
+        assert!(parse_allowed_ip("203.0.113.29/99").is_err());
     }
 
     #[test]
@@ -528,7 +528,7 @@ roadwarriors:
         let endpoint = pool_endpoint(&m, pool, None).unwrap();
         let cfg = render_client_config(
             &ClientPrivateKey::Unknown,
-            &["203.0.113.22/32".to_string()],
+            &["203.0.113.42/32".to_string()],
             resolve_dns(&m, pool).as_deref(),
             &server_pub,
             &endpoint,
@@ -539,7 +539,7 @@ roadwarriors:
         assert!(cfg.contains("<enter your private key here>"));
         assert!(cfg.contains("Endpoint = 192.0.2.10:51821"));
         assert!(!cfg.contains("# Name"));
-        assert!(cfg.contains("DNS = 100.64.0.10"));
+        assert!(cfg.contains("DNS = 203.0.113.202"));
         assert!(cfg.contains("PersistentKeepalive = 25"));
     }
 
@@ -553,7 +553,7 @@ roadwarriors:
         let endpoint = pool_endpoint(&m, pool, None).unwrap();
         let cfg = render_client_config(
             &ClientPrivateKey::Known("client-priv-key".into()),
-            &["198.51.100.41/32".to_string()],
+            &["203.0.113.21/32".to_string()],
             resolve_dns(&m, pool).as_deref(),
             &server_pub,
             &endpoint,
@@ -573,7 +573,7 @@ roadwarriors:
             &secrets(&m),
             "plain",
             "dave",
-            "198.51.100.99",
+            "203.0.113.29",
             public_key,
             None,
             export,
@@ -595,7 +595,7 @@ roadwarriors:
         let added = add_to_plain(Some("DDD="), false, false).unwrap();
         assert_eq!(added.client.name, "dave");
         assert_eq!(added.client.public_key, "DDD=");
-        assert_eq!(added.client.allowed_ips, ["198.51.100.99/32"]);
+        assert_eq!(added.client.allowed_ips, ["203.0.113.29/32"]);
         assert!(added.config.is_none());
     }
 

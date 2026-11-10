@@ -67,10 +67,10 @@ mod tests {
   kind: network
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
 nodes:
-  - {name: node-a, node_id: "10.62.0.1"}
-  - {name: node-b, node_id: "10.62.0.2"}
+  - {name: node-a, node_id: "198.51.100.1"}
+  - {name: node-b, node_id: "198.51.100.2"}
 "#;
 
     fn file_content(document: &sliplib_yaml::Value, mount_path: &str) -> Option<String> {

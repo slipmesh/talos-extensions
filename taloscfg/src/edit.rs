@@ -188,15 +188,15 @@ slipmesh:
 cluster:
     bgp_as: 64512
     loopback_networks:
-        ipv4: 10.62.0.0/16
-        ipv6: fd00:62::/32
+        ipv4: 198.51.100.0/25
+        ipv6: 3fff::/32
 nodes:
     - name: node-a
-      node_id: 10.62.0.1
+      node_id: 198.51.100.1
     - name: node-b
-      node_id: 10.62.0.2
+      node_id: 198.51.100.2
     - name: node-c
-      node_id: 10.62.0.3
+      node_id: 198.51.100.3
 mesh:
     links:
         - pair:
@@ -217,7 +217,7 @@ slipmesh:
 name: obfuscated
 node_hostnames:
     - node-a
-address: 10.99.0.1/24
+address: 203.0.113.1/27
 listen_port: 51900
 obfuscation:
     jc: 4
@@ -235,7 +235,7 @@ slipmesh:
 name: plain
 node_hostnames:
     - node-b
-address: 10.98.0.1/24
+address: 203.0.113.33/27
 listen_port: 51901
 plain: true
 ";
@@ -368,12 +368,12 @@ plain: true
   kind: roadwarriors
 name: plain
 node_hostnames: ["a", "b"]
-address: "198.51.100.1/24"
+address: "203.0.113.1/27"
 listen_port: 51820
 plain: true
 clients:
-  - {name: alice, public_key: "AAA=", allowed_ips: ["198.51.100.41/32"]}
-  - {name: bob, public_key: "BBB=", allowed_ips: ["198.51.100.32/32"]}
+  - {name: alice, public_key: "AAA=", allowed_ips: ["203.0.113.21/32"]}
+  - {name: bob, public_key: "BBB=", allowed_ips: ["203.0.113.12/32"]}
 "#;
 
     fn client(name: &str) -> RoadwarriorClient {
@@ -381,7 +381,7 @@ clients:
             name: name.to_owned(),
             public_key: format!("{name}="),
             private_key: None,
-            allowed_ips: vec!["198.51.100.99/32".to_owned()],
+            allowed_ips: vec!["203.0.113.29/32".to_owned()],
             advanced_security: false,
         }
     }

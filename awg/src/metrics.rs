@@ -419,7 +419,7 @@ mod tests {
         PeerEntry {
             public_key: public_key.to_string(),
             name: name.map(str::to_string),
-            endpoint: Some("203.0.113.7:51820".to_string()),
+            endpoint: Some("192.0.2.7:51820".to_string()),
             allowed_ips: allowed_ips.map(|cidrs| cidrs.iter().map(|c| (*c).to_string()).collect()),
             advanced_security: false,
         }
@@ -445,12 +445,12 @@ mod tests {
             interfaces: vec![
                 iface("mesh-node-a", vec![peer(MESH_PEER, Some("node-a"), None)]),
                 iface(
-                    "rw-eu",
-                    vec![peer(RW_PEER, Some("client-one"), Some(&["10.99.0.5/32"]))],
+                    "rw-north",
+                    vec![peer(RW_PEER, Some("client-one"), Some(&["203.0.113.5/32"]))],
                 ),
             ],
             metrics: Some(MetricsConfig {
-                listen: "10.62.0.1:9586".to_string(),
+                listen: "198.51.100.1:9586".to_string(),
             }),
         }
     }
@@ -470,7 +470,7 @@ mod tests {
                 Some(HashMap::from_iter(mesh.map(|s| (MESH_PEER.to_string(), s)))),
             ),
             (
-                "rw-eu".to_string(),
+                "rw-north".to_string(),
                 Some(HashMap::from_iter(rw.map(|s| (RW_PEER.to_string(), s)))),
             ),
         ])
@@ -498,7 +498,7 @@ mod tests {
         let out = render(
             &config(),
             &dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4))),
-            &snapshot(&[("rw-eu", RW_PEER)], NOW),
+            &snapshot(&[("rw-north", RW_PEER)], NOW),
             NOW,
         );
         let handshakes = series(&out, "slipmesh_awg_peer_last_handshake_seconds{");
@@ -511,7 +511,7 @@ mod tests {
         assert!(
             handshakes
                 .iter()
-                .any(|l| l.contains("interface=\"rw-eu\"") && l.contains("kind=\"roadwarrior\"")),
+                .any(|l| l.contains("interface=\"rw-north\"") && l.contains("kind=\"roadwarrior\"")),
             "{out}"
         );
     }
@@ -523,7 +523,7 @@ mod tests {
         let out = render(
             &config(),
             &dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4))),
-            &snapshot(&[("rw-eu", RW_PEER)], NOW),
+            &snapshot(&[("rw-north", RW_PEER)], NOW),
             NOW,
         );
         assert!(out.contains("peer_name=\"node-a\""), "{out}");
@@ -535,15 +535,15 @@ mod tests {
     fn an_unnamed_peer_still_gets_every_series() {
         let cfg = AwgConfig {
             interfaces: vec![iface(
-                "rw-eu",
-                vec![peer(RW_PEER, None, Some(&["10.9.0.1/32"]))],
+                "rw-north",
+                vec![peer(RW_PEER, None, Some(&["203.0.113.9/32"]))],
             )],
             metrics: None,
         };
         let out = render(
             &cfg,
             &Dumps::from([(
-                "rw-eu".to_string(),
+                "rw-north".to_string(),
                 Some(HashMap::from([(RW_PEER.to_string(), stats(NOW - 5, 1, 1))])),
             )]),
             &snapshot(&[], NOW),
@@ -581,7 +581,7 @@ mod tests {
         let out = render(
             &config(),
             &dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4))),
-            &snapshot(&[("rw-eu", RW_PEER)], NOW),
+            &snapshot(&[("rw-north", RW_PEER)], NOW),
             NOW,
         );
         let connected = series(&out, "slipmesh_awg_peer_connected{");
@@ -610,7 +610,7 @@ mod tests {
         let out = render(
             &config(),
             &dumps(None, Some(stats(NOW - 10, 3, 4))),
-            &snapshot(&[("rw-eu", RW_PEER)], NOW - 600),
+            &snapshot(&[("rw-north", RW_PEER)], NOW - 600),
             NOW,
         );
         assert!(
@@ -638,7 +638,7 @@ mod tests {
     #[test]
     fn a_peer_in_the_kernel_but_not_in_the_config_is_not_emitted() {
         let mut d = dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4)));
-        d.get_mut("rw-eu")
+        d.get_mut("rw-north")
             .unwrap()
             .as_mut()
             .unwrap()
@@ -659,13 +659,14 @@ mod tests {
             "{out}"
         );
         assert!(
-            ok.iter().any(|l| l.contains("rw-eu") && l.ends_with(" 1")),
+            ok.iter()
+                .any(|l| l.contains("rw-north") && l.ends_with(" 1")),
             "{out}"
         );
         assert!(
             series(&out, "slipmesh_awg_peer_rx_bytes_total{")
                 .iter()
-                .any(|l| l.contains("rw-eu")),
+                .any(|l| l.contains("rw-north")),
             "{out}"
         );
     }
@@ -681,7 +682,7 @@ mod tests {
             "{out}"
         );
         assert!(
-            counts.iter().any(|l| l.contains("rw-eu")
+            counts.iter().any(|l| l.contains("rw-north")
                 && l.contains("kind=\"roadwarrior\"")
                 && l.ends_with(" 1")),
             "{out}"
@@ -792,7 +793,7 @@ mod tests {
         // The whole reason the socket is built through socket2: ext-router has not created
         // router-lo yet, so this address is on no interface, and a plain bind would get
         // EADDRNOTAVAIL. Port 0 keeps the test from colliding with anything real.
-        let listen: SocketAddr = "10.62.255.254:0".parse().unwrap();
+        let listen: SocketAddr = "198.51.100.126:0".parse().unwrap();
         let listener = bind(listen).expect("IP_FREEBIND should permit binding an absent address");
         assert_eq!(listener.local_addr().unwrap().ip(), listen.ip());
     }
@@ -802,10 +803,10 @@ mod tests {
         let out = render(
             &config(),
             &dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4))),
-            &snapshot(&[("rw-eu", RW_PEER)], NOW),
+            &snapshot(&[("rw-north", RW_PEER)], NOW),
             NOW,
         );
         assert!(!out.contains(PRIVATE_KEY), "{out}");
-        assert!(!out.contains("203.0.113.7"), "{out}");
+        assert!(!out.contains("192.0.2.7"), "{out}");
     }
 }
