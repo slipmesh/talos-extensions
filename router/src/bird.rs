@@ -171,11 +171,11 @@ mod tests {
     #[test]
     fn exact_iface_names_excludes_globs_and_cidrs() {
         let entries = vec![
-            "mesh-fra".to_string(),
+            "mesh-east".to_string(),
             "mesh-*".to_string(),
-            "10.99.0.0/24".to_string(),
+            "198.51.100.192/26".to_string(),
         ];
-        assert_eq!(exact_iface_names(&entries), vec!["mesh-fra".to_string()]);
+        assert_eq!(exact_iface_names(&entries), vec!["mesh-east".to_string()]);
     }
 
     // Fixtures below are real `birdc` output, captured against BIRD 2.19.1 running in a container
@@ -208,15 +208,15 @@ ibgp_test  BGP        ---        start  22:31:14.133  Connect
     const SHOW_OSPF_INTERFACE_TWO_CONFIGURED: &str = "\
 BIRD 2.19.1 ready.
 mesh:
-Interface lo (10.0.0.1/32)
+Interface lo (198.51.100.1/32)
 \tType: nbma
 \tArea: 0.0.0.0 (0)
 \tState: Waiting (stub)
-Interface mesh-a (10.99.0.0/31)
+Interface mesh-a (198.51.100.192/31)
 \tType: ptp
 \tArea: 0.0.0.0 (0)
 \tState: PtP (stub)
-Interface mesh-b (10.99.0.2/31)
+Interface mesh-b (198.51.100.194/31)
 \tType: ptp
 \tArea: 0.0.0.0 (0)
 \tState: PtP (stub)

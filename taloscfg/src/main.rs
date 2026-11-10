@@ -537,12 +537,12 @@ mod tests {
   kind: network
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
 nodes:
-  - {name: a, node_id: "10.62.0.1", endpoint: "192.0.2.10"}
-  - {name: b, node_id: "10.62.0.2", endpoint: "192.0.2.11"}
-  - {name: c, node_id: "10.62.0.3"}
-  - {name: d, node_id: "10.62.0.4"}
+  - {name: a, node_id: "198.51.100.1", endpoint: "192.0.2.10"}
+  - {name: b, node_id: "198.51.100.2", endpoint: "192.0.2.11"}
+  - {name: c, node_id: "198.51.100.3"}
+  - {name: d, node_id: "198.51.100.4"}
 mesh:
   links:
     - {pair: [a, b], port: 51820}
@@ -774,7 +774,7 @@ slipmesh:
   kind: roadwarriors
 name: first
 node_hostnames: [a]
-address: "198.51.100.1/24"
+address: "203.0.113.1/27"
 listen_port: 51900
 clients: []
 ---
@@ -782,10 +782,10 @@ slipmesh:
   kind: roadwarriors
 name: second
 node_hostnames: [b]
-address: "203.0.113.1/24"
+address: "203.0.113.33/27"
 listen_port: 51901
 clients:
-  - {name: carol, public_key: "CCC=", allowed_ips: ["203.0.113.22/32"]}
+  - {name: carol, public_key: "CCC=", allowed_ips: ["203.0.113.42/32"]}
 "#;
 
     /// The bytes of pool `name`'s document in `raw`, from its `---` to the next one.
@@ -843,7 +843,7 @@ clients:
         rw_add(
             "first",
             "dave",
-            "198.51.100.99",
+            "203.0.113.29",
             Some("DDD="),
             None,
             false,
@@ -877,7 +877,7 @@ clients:
         let err = rw_add(
             "third",
             "dave",
-            "198.51.100.99",
+            "203.0.113.29",
             Some("DDD="),
             None,
             false,
@@ -899,7 +899,7 @@ clients:
         rw_add(
             "first",
             "dave",
-            "198.51.100.99",
+            "203.0.113.29",
             None,
             None,
             true,
@@ -923,7 +923,7 @@ clients:
         rw_add(
             "first",
             "dave",
-            "198.51.100.99",
+            "203.0.113.29",
             None,
             None,
             false,
@@ -984,7 +984,7 @@ clients:
         unkeyed.document_mut(0).unwrap()["nodes"]
             .as_sequence_mut()
             .unwrap()
-            .push(sliplib_yaml::from_str("{name: e, node_id: \"10.62.0.5\"}").unwrap());
+            .push(sliplib_yaml::from_str("{name: e, node_id: \"198.51.100.5\"}").unwrap());
         std::fs::write(&paths.config, unkeyed.text().unwrap()).unwrap();
         rw_inspect(
             "second",
