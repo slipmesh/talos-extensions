@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-alpha.2+sm.5] - 2026-11-10
+
+### Added ✨
+
+- Give every mesh interface the mtu that fits its links (#105)
+
 ## [1.15.0-alpha.2+sm.4] - 2026-11-10
 
 ### Changed 🔧
