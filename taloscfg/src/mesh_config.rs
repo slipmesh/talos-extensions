@@ -25,6 +25,44 @@ pub struct BfdConfig {
     pub settings: BfdSettings,
 }
 
+/// The mesh interface prefix when `cluster.interface_prefix.mesh` does not say. `awg` and the
+/// RouterOS side take interfaces of this prefix for their own, so it stays until they read the key.
+pub const DEFAULT_MESH_INTERFACE_PREFIX: &str = "mesh-";
+
+/// The egress route protocol number when `cluster.route_proto_id.egress` does not say.
+pub const DEFAULT_EGRESS_ROUTE_PROTO_ID: u8 = 152;
+
+/// Strict for the same reason `ClusterConfig` is.
+#[derive(Deserialize, Debug, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct InterfacePrefix {
+    #[serde(default)]
+    pub mesh: Option<String>,
+}
+
+/// Strict for the same reason `ClusterConfig` is.
+#[derive(Deserialize, Debug, Default, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RouteProtoId {
+    #[serde(default)]
+    pub egress: Option<u8>,
+}
+
+impl ClusterConfig {
+    pub fn mesh_interface_prefix(&self) -> &str {
+        self.interface_prefix
+            .mesh
+            .as_deref()
+            .unwrap_or(DEFAULT_MESH_INTERFACE_PREFIX)
+    }
+
+    pub fn egress_route_proto_id(&self) -> u8 {
+        self.route_proto_id
+            .egress
+            .unwrap_or(DEFAULT_EGRESS_ROUTE_PROTO_ID)
+    }
+}
+
 /// Strict for the same reason `ClusterConfig` is.
 #[derive(Deserialize, Debug, Default, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +99,14 @@ pub struct ClusterConfig {
     /// limit when unset. See `mtu.rs`.
     #[serde(default)]
     pub mesh_mtu: Option<u32>,
+    /// What the names of this generator's interfaces start with, by kind; see
+    /// `InterfacePrefix`. Published to every node as an annotation.
+    #[serde(default)]
+    pub interface_prefix: InterfacePrefix,
+    /// The protocol number the kernel routes of each kind carry, `proto` in `ip route`; see
+    /// `RouteProtoId`. Published to every node as an annotation.
+    #[serde(default)]
+    pub route_proto_id: RouteProtoId,
     #[serde(default)]
     pub loopback_networks: LoopbackNetworks,
     #[serde(default)]
@@ -342,6 +388,16 @@ pub struct BypassEntry {
 /// it.
 pub fn validate(cfg: &MeshConfig) -> anyhow::Result<()> {
     anyhow::ensure!(!cfg.nodes.is_empty(), "nodes must not be empty");
+    anyhow::ensure!(
+        !cfg.cluster.mesh_interface_prefix().is_empty(),
+        "cluster.interface_prefix.mesh must not be empty: it is what tells a mesh interface"
+    );
+    // 0..=4 are the kernel's own: unspec, redirect, kernel, boot and static (`RTPROT_*`).
+    let egress = cfg.cluster.egress_route_proto_id();
+    anyhow::ensure!(
+        egress > 4,
+        "cluster.route_proto_id.egress {egress} is one the kernel keeps for its own routes (0-4)"
+    );
 
     let mut seen_node_names = HashSet::new();
     let mut seen_node_ids = HashSet::new();
@@ -450,6 +506,43 @@ pub fn validate(cfg: &MeshConfig) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_prefix_and_protocol_keys_take_their_defaults_when_left_out() {
+        let cfg: MeshConfig = sliplib_yaml::from_str(minimal_yaml()).unwrap();
+        assert_eq!(cfg.cluster.mesh_interface_prefix(), "mesh-");
+        assert_eq!(cfg.cluster.egress_route_proto_id(), 152);
+    }
+
+    #[test]
+    fn the_prefix_and_protocol_keys_are_read_when_given() {
+        let yaml = minimal_yaml().replace(
+            "  bgp_as: 64512\n",
+            "  bgp_as: 64512\n  interface_prefix: {mesh: wg-}\n  route_proto_id: {egress: 160}\n",
+        );
+        let cfg: MeshConfig = sliplib_yaml::from_str(&yaml).unwrap();
+        assert_eq!(cfg.cluster.mesh_interface_prefix(), "wg-");
+        assert_eq!(cfg.cluster.egress_route_proto_id(), 160);
+        validate(&cfg).unwrap();
+    }
+
+    #[test]
+    fn an_empty_mesh_prefix_is_refused() {
+        let mut cfg: MeshConfig = sliplib_yaml::from_str(minimal_yaml()).unwrap();
+        cfg.cluster.interface_prefix.mesh = Some(String::new());
+        let err = validate(&cfg).unwrap_err().to_string();
+        assert!(err.contains("cluster.interface_prefix.mesh"), "{err}");
+    }
+
+    #[test]
+    fn a_route_protocol_the_kernel_keeps_for_itself_is_refused() {
+        let mut cfg: MeshConfig = sliplib_yaml::from_str(minimal_yaml()).unwrap();
+        cfg.cluster.route_proto_id.egress = Some(4);
+        let err = validate(&cfg).unwrap_err().to_string();
+        assert!(err.contains("cluster.route_proto_id.egress"), "{err}");
+        cfg.cluster.route_proto_id.egress = Some(5);
+        validate(&cfg).unwrap();
+    }
 
     fn minimal_yaml() -> &'static str {
         r#"

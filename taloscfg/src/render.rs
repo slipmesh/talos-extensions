@@ -117,9 +117,15 @@ pub fn bypass_for(mesh: &MeshConfig, node_name: &str) -> Option<BypassConfig> {
     })
 }
 
-/// Fixed generator-side convention, not a `slipmesh.yaml` field: every rendered node gets the same
-/// two OSPF interface patterns.
-pub const OSPF_INTERFACES: [&str; 2] = ["mesh-*", "router-lo"];
+/// Every rendered node runs OSPF on the same two interface patterns: the mesh's and `router-lo`.
+fn ospf_interfaces(mesh: &MeshConfig) -> Vec<String> {
+    vec![mesh_glob(mesh), "router-lo".to_owned()]
+}
+
+/// Every mesh interface, as BIRD's `interface` clause and `direct_interfaces` match it.
+fn mesh_glob(mesh: &MeshConfig) -> String {
+    format!("{}*", mesh.cluster.mesh_interface_prefix())
+}
 
 /// This node's `direct_interfaces`: its own override if set, else `cluster.direct_interfaces` - an
 /// override *replaces* the global value rather than extending it.
@@ -193,12 +199,11 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
     // This used to append `mesh-*` itself when it was missing. That silently produced a config
     // `slipmesh.yaml` didn't ask for, which is how the whole `direct_interfaces` mechanism came to hide
     // what a node actually announces - so the pairing is now enforced by refusing to render instead.
-    if node_tunnel_addresses(mesh, node_name)?.is_some()
-        && !direct_interfaces.iter().any(|s| s == "mesh-*")
-    {
+    let glob = mesh_glob(mesh);
+    if node_tunnel_addresses(mesh, node_name)?.is_some() && !direct_interfaces.contains(&glob) {
         anyhow::bail!(
             "node {node_name:?}: cluster.tunnel_networks is configured, so direct_interfaces must \
-             include \"mesh-*\" - the tunnel IPv4 address is otherwise announced by nothing \
+             include {glob:?} - the tunnel IPv4 address is otherwise announced by nothing \
              (OSPFv3 is IPv6-only) and is reachable on no other node"
         );
     }
@@ -209,7 +214,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
         bgp_as: mesh.cluster.bgp_as,
         bgp_peers: bgp_peers_for(mesh, node_name)?,
         bfd: mesh.bfd.enable.then(|| mesh.bfd.settings.clone()),
-        ospf_interfaces: OSPF_INTERFACES.iter().map(|s| s.to_string()).collect(),
+        ospf_interfaces: ospf_interfaces(mesh),
         direct_interfaces,
         learn: learn_for(mesh),
         announce: announce_for(mesh),
@@ -284,7 +289,7 @@ fn mesh_interfaces_for(
         }
 
         out.push(InterfaceEntry {
-            name: format!("mesh-{peer_name}"),
+            name: format!("{}{peer_name}", mesh.cluster.mesh_interface_prefix()),
             listen_port: link.port,
             addresses,
             private_key: own_private_key.clone(),
@@ -770,6 +775,20 @@ mesh:
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn the_mesh_interface_prefix_names_the_interfaces_ospf_and_the_tunnel_check() {
+        let mut mesh: MeshConfig =
+            sliplib_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+        mesh.cluster.interface_prefix.mesh = Some("wg-".to_owned());
+        let ifaces = mesh_interfaces_for(&mesh, "a", &resolved_for(&mesh)).unwrap();
+        assert_eq!(ifaces[0].name, "wg-b");
+        let err = render_router_config(&mesh, "a").unwrap_err().to_string();
+        assert!(err.contains("\"wg-*\""), "{err}");
+        mesh.cluster.direct_interfaces = vec!["wg-*".to_owned()];
+        let cfg = render_router_config(&mesh, "a").unwrap();
+        assert_eq!(cfg.ospf_interfaces, ["wg-*", "router-lo"]);
     }
 
     #[test]

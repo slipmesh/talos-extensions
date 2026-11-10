@@ -7,6 +7,8 @@ use crate::secrets::ResolvedSecrets;
 use crate::slipmesh_file::{GENERATED, HostDocument, SlipmeshFile};
 use anyhow::{Context, Result, bail};
 use sliplib_config::talos::{ConfigFile, ExtensionServiceConfig};
+use sliplib_yaml::{Mapping, Value};
+use std::collections::BTreeMap;
 
 /// What opens every patch file this tool writes.
 pub const HEADER: &str =
@@ -131,6 +133,60 @@ fn validate_router_template(
     Ok(())
 }
 
+/// What Talos keys the document of node labels, annotations and the like by; it takes one.
+const KUBE_NODE_CONFIG: &str = "KubeNodeConfig";
+
+/// Puts `annotations` into the `KubeNodeConfig` among `patches`, or into a new one when they have
+/// none. A `patch` document may set annotations of its own, but none in this generator's
+/// namespace: those come from `slipmesh.yaml`, and a second source would be overwritten silently.
+fn publish_annotations(
+    patches: &mut Vec<HostDocument>,
+    annotations: BTreeMap<String, String>,
+) -> Result<()> {
+    let position = patches.iter().position(|p| p.identity == KUBE_NODE_CONFIG);
+    let mut document = match position {
+        Some(index) => patches[index].value.clone(),
+        None => sliplib_yaml::from_str("apiVersion: v1alpha1\nkind: KubeNodeConfig\n")?,
+    };
+    let mapping = document
+        .as_mapping_mut()
+        .context("a KubeNodeConfig document is not a mapping")?;
+    if !mapping.contains_key("annotations") {
+        mapping.insert("annotations".into(), Value::Mapping(Mapping::new()));
+    }
+    let given = mapping
+        .get_mut("annotations")
+        .and_then(Value::as_mapping_mut)
+        .context("KubeNodeConfig annotations is not a mapping")?;
+    if let Some(ours) = given
+        .keys()
+        .filter_map(Value::as_str)
+        .find(|key| key.starts_with(crate::annotations::NAMESPACE))
+    {
+        bail!(
+            "a `patch` document sets the annotation {ours}, and annotations in {} are written from \
+             slipmesh.yaml",
+            crate::annotations::NAMESPACE
+        );
+    }
+    for (name, value) in annotations {
+        given.insert(name.into(), value.into());
+    }
+    let text = sliplib_yaml::to_string(&document).context("serializing the KubeNodeConfig")?;
+    match position {
+        Some(index) => {
+            patches[index].value = document;
+            patches[index].text = text;
+        }
+        None => patches.push(HostDocument {
+            identity: KUBE_NODE_CONFIG.to_owned(),
+            text,
+            value: document,
+        }),
+    }
+    Ok(())
+}
+
 /// The patch file of `host`, as the text written to disk.
 pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Result<String> {
     let model = file.effective_for(host)?;
@@ -161,6 +217,7 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
     validate_nftables_template(&patches)
         .with_context(|| format!("the nftables ruleset for node {host:?} is invalid"))?;
     add_legacy_nftables_file(&mut patches)?;
+    publish_annotations(&mut patches, crate::annotations::for_node(&model, host)?)?;
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
 
     let generated = vec![
@@ -251,6 +308,58 @@ configFiles:
         assert!(generated_document(&a, "router").is_some());
         assert!(generated_document(&a, "nftables").is_some());
         assert!(!a.contains("\n\n---\n") && !a.ends_with("\n\n"), "{a}");
+    }
+
+    fn kube_node_configs(file: &str) -> Vec<sliplib_yaml::Value> {
+        documents(file)
+            .into_iter()
+            .filter(|value| value["kind"] == "KubeNodeConfig")
+            .collect()
+    }
+
+    #[test]
+    fn a_host_publishes_its_annotations_in_one_kube_node_config() {
+        let configs = kube_node_configs(&rendered("a"));
+        assert_eq!(configs.len(), 1, "{configs:?}");
+        assert_eq!(configs[0]["apiVersion"], "v1alpha1");
+        let annotations = &configs[0]["annotations"];
+        assert_eq!(annotations["slipmesh.net/node.endpoint"], "192.0.2.10");
+        assert_eq!(
+            annotations["slipmesh.net/cluster.interface_prefix.mesh"],
+            "mesh-"
+        );
+        assert_eq!(
+            annotations["slipmesh.net/cluster.route_proto_id.egress"],
+            "152"
+        );
+    }
+
+    #[test]
+    fn a_kube_node_config_a_patch_gives_takes_the_annotations_in() {
+        let raw = format!(
+            "{}---\nslipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: KubeNodeConfig\nnodeIP:\n  \
+             validSubnets: [10.62.0.0/16]\nannotations:\n  example.com/rack: r1\n",
+            with_router_files(&[("", TEMPLATE)])
+        );
+        let configs = kube_node_configs(&render_raw(&raw, "a").unwrap());
+        assert_eq!(configs.len(), 1, "{configs:?}");
+        assert_eq!(configs[0]["nodeIP"]["validSubnets"][0], "10.62.0.0/16");
+        assert_eq!(configs[0]["annotations"]["example.com/rack"], "r1");
+        assert_eq!(
+            configs[0]["annotations"]["slipmesh.net/node.endpoint"],
+            "192.0.2.10"
+        );
+    }
+
+    #[test]
+    fn a_patch_that_sets_a_generated_annotation_is_refused() {
+        let raw = format!(
+            "{}---\nslipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: KubeNodeConfig\n\
+             annotations:\n  slipmesh.net/node.endpoint: 198.51.100.1\n",
+            with_router_files(&[("", TEMPLATE)])
+        );
+        let err = format!("{:#}", render_raw(&raw, "a").unwrap_err());
+        assert!(err.contains("slipmesh.net/node.endpoint"), "{err}");
     }
 
     #[test]

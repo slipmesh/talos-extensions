@@ -9,7 +9,9 @@
 //! An edit changes one document's values. The file is written back from the values, so its
 //! comments are not kept.
 
-use crate::mesh_config::RoadwarriorClient;
+use crate::mesh_config::{
+    DEFAULT_EGRESS_ROUTE_PROTO_ID, DEFAULT_MESH_INTERFACE_PREFIX, MeshConfig, RoadwarriorClient,
+};
 use crate::secrets::Minted;
 use crate::slipmesh_file::SlipmeshFile;
 use anyhow::{Context, Result};
@@ -48,6 +50,54 @@ pub fn record(yaml: &mut MultiDoc, file: &SlipmeshFile, minted: &Minted) -> Resu
         if let Some(generated) = &pool_minted.obfuscation {
             write_obfuscation(pool, generated)?;
         }
+    }
+    Ok(())
+}
+
+/// The keys of the network document that `topology` leaves out and `generate` writes down with
+/// their default, so that every value published to the nodes stands in `slipmesh.yaml`.
+pub fn missing_defaults(topology: &MeshConfig) -> Vec<(&'static str, Value)> {
+    let cluster = &topology.cluster;
+    let mut missing = Vec::new();
+    if cluster.interface_prefix.mesh.is_none() {
+        missing.push((
+            "cluster.interface_prefix.mesh",
+            DEFAULT_MESH_INTERFACE_PREFIX.into(),
+        ));
+    }
+    if cluster.route_proto_id.egress.is_none() {
+        missing.push((
+            "cluster.route_proto_id.egress",
+            u64::from(DEFAULT_EGRESS_ROUTE_PROTO_ID).into(),
+        ));
+    }
+    missing
+}
+
+/// Writes each of `defaults` at its path in the network document of `yaml`, the `slipmesh.yaml`
+/// `file` was read from, making the mappings on the way.
+pub fn write_defaults(
+    yaml: &mut MultiDoc,
+    file: &SlipmeshFile,
+    defaults: &[(&str, Value)],
+) -> Result<()> {
+    let network = document(yaml, file.network_document())?;
+    for (path, value) in defaults {
+        let steps: Vec<&str> = path.split('.').collect();
+        let (key, parents) = steps.split_last().context("an empty path")?;
+        let mut at = &mut *network;
+        for step in parents {
+            let mapping = at
+                .as_mapping_mut()
+                .with_context(|| format!("{path}: the network document is no mapping there"))?;
+            if !mapping.contains_key(*step) {
+                mapping.insert((*step).into(), Value::Mapping(Mapping::new()));
+            }
+            at = mapping
+                .get_mut(*step)
+                .expect("present: inserted just above");
+        }
+        set(at, key, value.clone())?;
     }
     Ok(())
 }
