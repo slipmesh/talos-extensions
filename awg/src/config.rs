@@ -189,7 +189,7 @@ interfaces:
 
     #[test]
     fn debug_output_never_carries_a_secret() {
-        let cfg: AwgConfig = yaml_serde::from_str(FULL_CONFIG).unwrap();
+        let cfg: AwgConfig = sliplib_yaml::from_str(FULL_CONFIG).unwrap();
         let printed = format!("{cfg:?}");
         for secret in [
             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
@@ -203,7 +203,7 @@ interfaces:
     #[test]
     fn parses_a_full_config_from_yaml() {
         let yaml = FULL_CONFIG;
-        let cfg: AwgConfig = yaml_serde::from_str(yaml).unwrap();
+        let cfg: AwgConfig = sliplib_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.interfaces.len(), 2);
         assert_eq!(cfg.interfaces[0].peers[0].allowed_ips, None);
         assert_eq!(
@@ -378,7 +378,7 @@ interfaces:
 
     #[test]
     fn a_config_without_a_metrics_section_parses_and_validates() {
-        let cfg: AwgConfig = yaml_serde::from_str("interfaces: []").unwrap();
+        let cfg: AwgConfig = sliplib_yaml::from_str("interfaces: []").unwrap();
         assert_eq!(cfg.metrics, None);
         validate(&cfg).unwrap();
     }
@@ -386,8 +386,8 @@ interfaces:
     #[test]
     fn a_metrics_section_round_trips_through_yaml() {
         let cfg = with_metrics("10.0.0.1:9586");
-        let yaml = yaml_serde::to_string(&cfg).unwrap();
-        assert_eq!(yaml_serde::from_str::<AwgConfig>(&yaml).unwrap(), cfg);
+        let yaml = sliplib_yaml::to_string(&cfg).unwrap();
+        assert_eq!(sliplib_yaml::from_str::<AwgConfig>(&yaml).unwrap(), cfg);
     }
 
     #[test]

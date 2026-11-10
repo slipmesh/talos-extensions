@@ -112,11 +112,8 @@ async fn run(shutdown: Shutdown) -> Result<()> {
 
 /// Everything before `bird` is spawned: config, template, `router-lo`, and a `bird.conf` on disk.
 async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
-    let raw = tokio::fs::read_to_string(CONFIG_PATH)
-        .await
-        .with_context(|| format!("failed to read config file {CONFIG_PATH}"))?;
     let cfg: RouterConfig =
-        yaml_serde::from_str(&raw).context("failed to parse config file as YAML")?;
+        sliplib_yaml::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
     config::validate(&cfg).context("config validation failed")?;
     // Read before anything on the node is touched: without a template there is no bird.conf to
     // write, and nothing to fall back on - the template is the node's config, not this binary's.

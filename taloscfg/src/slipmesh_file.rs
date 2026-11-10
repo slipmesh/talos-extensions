@@ -135,7 +135,7 @@ impl SlipmeshFile {
         let mut networks = Vec::new();
         let mut pools = Vec::new();
         let mut patches = Vec::new();
-        for document in yaml.documents()? {
+        for document in yaml.documents().iter().cloned() {
             let document = Document::read(document)?;
             match document.meta.kind {
                 Kind::Network => networks.push(document),
@@ -485,7 +485,7 @@ extraArgs:
     #[test]
     fn a_document_without_a_slipmesh_block_is_refused_by_its_line() {
         let raw = file(&[NETWORK, "stray: 1\n"]);
-        let line = raw[..raw.find("---\nstray").unwrap()].matches('\n').count() + 1;
+        let line = raw[..raw.find("stray").unwrap()].matches('\n').count() + 1;
         let err = error(&raw);
         assert!(err.contains(&format!("line {line}")), "{err}");
         assert!(err.contains("slipmesh"), "{err}");

@@ -213,9 +213,8 @@ mod tests {
         sliplib_yaml::MultiDoc::parse(file)
             .unwrap()
             .documents()
-            .unwrap()
-            .into_iter()
-            .map(|document| document.value)
+            .iter()
+            .map(|document| document.value.clone())
             .collect()
     }
 

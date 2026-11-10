@@ -6,41 +6,34 @@
 //! it. Only what the run generated is written - a field set on the entry or in the global
 //! `obfuscation` is never copied down, and neither are the switches that are never generated.
 //!
-//! An edit is a list of operations on one document's values; `sliplib-yaml` applies them as the
-//! smallest change to the text, so everything else in the file stays as the operator wrote it.
+//! An edit changes one document's values. The file is written back from the values, so its
+//! comments are not kept.
 
 use crate::mesh_config::RoadwarriorClient;
 use crate::secrets::Minted;
 use crate::slipmesh_file::SlipmeshFile;
 use anyhow::{Context, Result};
 use common::Obfuscation;
-use sliplib_yaml::{Mapping, MultiDoc, Operation, Value};
+use sliplib_yaml::{Mapping, MultiDoc, Value};
 
 /// Writes every value of `minted` into its field of `yaml`, the `slipmesh.yaml` `file` was read
 /// from.
 pub fn record(yaml: &mut MultiDoc, file: &SlipmeshFile, minted: &Minted) -> Result<()> {
-    if !minted.node_keys.is_empty() || !minted.link_obfuscation.is_empty() {
-        let index = file.network_document();
-        let network = document_value(yaml, index)?;
-        let mut operations = Vec::new();
-        for (node, key) in &minted.node_keys {
-            anyhow::ensure!(
-                network["nodes"].get(*node).is_some(),
-                "a node the network document does not have"
-            );
-            operations.push(add(
-                &["nodes", &node.to_string(), "mesh_private_key"],
-                key.expose().into(),
-            ));
-        }
-        for (link, generated) in &minted.link_obfuscation {
-            let entry = network["mesh"]["links"]
-                .get(*link)
-                .context("a link the network document does not have")?;
-            let at = ["mesh", "links", &link.to_string()];
-            operations.extend(obfuscation(&at, entry, generated)?);
-        }
-        yaml.patch(index, &operations)?;
+    let network = document(yaml, file.network_document())?;
+    for (node, key) in &minted.node_keys {
+        let entry = network
+            .get_mut("nodes")
+            .and_then(|nodes| nodes.get_mut(*node))
+            .context("a node the network document does not have")?;
+        set(entry, "mesh_private_key", key.expose().into())?;
+    }
+    for (link, generated) in &minted.link_obfuscation {
+        let entry = network
+            .get_mut("mesh")
+            .and_then(|mesh| mesh.get_mut("links"))
+            .and_then(|links| links.get_mut(*link))
+            .context("a link the network document does not have")?;
+        write_obfuscation(entry, generated)?;
     }
 
     for pool_minted in &minted.pools {
@@ -48,44 +41,44 @@ pub fn record(yaml: &mut MultiDoc, file: &SlipmeshFile, minted: &Minted) -> Resu
         let index = file
             .pool_document(name)
             .with_context(|| format!("pool {name:?} is in no document"))?;
-        let pool = document_value(yaml, index)?;
-        let mut operations = Vec::new();
+        let pool = document(yaml, index)?;
         if let Some(key) = &pool_minted.private_key {
-            operations.push(add(&["private_key"], key.expose().into()));
+            set(pool, "private_key", key.expose().into())?;
         }
         if let Some(generated) = &pool_minted.obfuscation {
-            operations.extend(obfuscation(&[], &pool, generated)?);
+            write_obfuscation(pool, generated)?;
         }
-        yaml.patch(index, &operations)?;
     }
     Ok(())
 }
 
-/// Adds `client` to the `clients` of the pool at `document` in `yaml`. Everything outside that one
-/// sequence - comments, the rest of the pool, formatting - is untouched.
+/// Adds `client` to the end of the `clients` of the pool at `document` in `yaml`, starting the
+/// list when the pool has none.
 pub fn add_client(yaml: &mut MultiDoc, document: usize, client: &RoadwarriorClient) -> Result<()> {
+    let pool = self::document(yaml, document)?;
     let entry = client_entry(client);
-    let operation = if document_value(yaml, document)?.get("clients").is_some() {
-        add(&["clients", "-"], entry)
-    } else {
-        add(&["clients"], Value::Sequence(vec![entry]))
-    };
-    yaml.patch(document, &[operation])
+    match pool.get_mut("clients") {
+        Some(clients) => clients
+            .as_sequence_mut()
+            .context("the pool's `clients` is not a list")?
+            .push(entry),
+        None => set(pool, "clients", Value::Sequence(vec![entry]))?,
+    }
+    Ok(())
 }
 
-/// Removes `clients[client_index]` from the pool at `document` in `yaml`, line and all - same
-/// "everything else untouched" guarantee as `add_client`.
+/// Removes `clients[client_index]` from the pool at `document` in `yaml`.
 pub fn remove_client(yaml: &mut MultiDoc, document: usize, client_index: usize) -> Result<()> {
+    let clients = self::document(yaml, document)?
+        .get_mut("clients")
+        .and_then(Value::as_sequence_mut)
+        .context("pool has no clients list")?;
     anyhow::ensure!(
-        document_value(yaml, document)?.get("clients").is_some(),
-        "pool has no clients list"
+        client_index < clients.len(),
+        "pool has no client at position {client_index}"
     );
-    yaml.patch(
-        document,
-        &[Operation::Remove {
-            path: vec!["clients".into(), client_index.to_string()],
-        }],
-    )
+    clients.remove(client_index);
+    Ok(())
 }
 
 /// One client entry as `rw-add` writes it: by its private key when that was kept, else by its
@@ -110,48 +103,35 @@ fn client_entry(client: &RoadwarriorClient) -> Value {
     Value::Mapping(entry)
 }
 
-/// The operations that write the fields of `generated` under `at`, whose current value is `owner`:
-/// into its `obfuscation` mapping when it has one, else as a new one.
-fn obfuscation(at: &[&str], owner: &Value, generated: &Obfuscation) -> Result<Vec<Operation>> {
+/// Writes the fields of `generated` into the `obfuscation` mapping of `owner`, starting one when
+/// it has none.
+fn write_obfuscation(owner: &mut Value, generated: &Obfuscation) -> Result<()> {
     let fields = sliplib_yaml::to_value(generated).context("serializing generated obfuscation")?;
-    let fields: Mapping = fields
+    let fields = fields
         .as_mapping()
         .into_iter()
         .flatten()
         .filter(|(_, value)| !value.is_null())
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    let path =
-        |rest: &[&str]| -> Vec<String> { at.iter().chain(rest).map(|s| s.to_string()).collect() };
-    if owner.get("obfuscation").is_some_and(Value::is_mapping) {
-        Ok(fields
-            .into_iter()
-            .map(|(key, value)| Operation::Add {
-                path: path(&["obfuscation", key.as_str().unwrap_or_default()]),
-                value,
-            })
-            .collect())
-    } else {
-        Ok(vec![Operation::Add {
-            path: path(&["obfuscation"]),
-            value: Value::Mapping(fields),
-        }])
+        .map(|(key, value)| (key.clone(), value.clone()));
+    match owner.get_mut("obfuscation").and_then(Value::as_mapping_mut) {
+        Some(obfuscation) => obfuscation.extend(fields),
+        None => set(owner, "obfuscation", Value::Mapping(fields.collect()))?,
     }
+    Ok(())
 }
 
-fn add(path: &[&str], value: Value) -> Operation {
-    Operation::Add {
-        path: path.iter().map(|s| s.to_string()).collect(),
-        value,
-    }
+/// Sets `key` of the mapping `entry` to `value`.
+fn set(entry: &mut Value, key: &str, value: Value) -> Result<()> {
+    entry
+        .as_mapping_mut()
+        .with_context(|| format!("an entry to set `{key}` on is not a mapping"))?
+        .insert(key.into(), value);
+    Ok(())
 }
 
-/// Document `index` of `yaml` as it reads now, edits so far included.
-fn document_value(yaml: &MultiDoc, index: usize) -> Result<Value> {
-    yaml.documents()?
-        .into_iter()
-        .find(|document| document.index == index)
-        .map(|document| document.value)
+/// Document `index` of `yaml`, to edit.
+fn document(yaml: &mut MultiDoc, index: usize) -> Result<&mut Value> {
+    yaml.document_mut(index)
         .with_context(|| format!("no document at position {index}"))
 }
 
@@ -231,7 +211,30 @@ plain: true
         let file = SlipmeshFile::read(&yaml).unwrap();
         let (_, minted) = secrets::resolve(file.topology());
         record(&mut yaml, &file, &minted).unwrap();
-        yaml.text()
+        yaml.text().unwrap()
+    }
+
+    fn values(raw: &str) -> Vec<Value> {
+        MultiDoc::parse(raw)
+            .unwrap()
+            .documents()
+            .iter()
+            .map(|d| d.value.clone())
+            .collect()
+    }
+
+    /// Whether everything `part` holds is in `whole` as well: its keys with their values, its
+    /// items in their places.
+    fn within(part: &Value, whole: &Value) -> bool {
+        match (part, whole) {
+            (Value::Mapping(part), Value::Mapping(whole)) => part
+                .iter()
+                .all(|(key, value)| whole.get(key).is_some_and(|w| within(value, w))),
+            (Value::Sequence(part), Value::Sequence(whole)) => {
+                part.len() == whole.len() && part.iter().zip(whole).all(|(p, w)| within(p, w))
+            }
+            _ => part == whole,
+        }
     }
 
     fn topology(raw: &str) -> MeshConfig {
@@ -250,28 +253,14 @@ plain: true
 
     #[test]
     fn every_node_gets_its_key_written_into_its_entry() {
-        let recorded = run(&slipmesh());
-        for node in topology(&recorded).nodes {
-            let key = node.mesh_private_key.expect(&node.name);
-            assert!(
-                recorded.contains(&format!(
-                    "      node_id: {}\n      mesh_private_key: {}\n",
-                    node.node_id,
-                    key.expose()
-                )),
-                "{recorded}"
-            );
+        for node in topology(&run(&slipmesh())).nodes {
+            assert!(node.mesh_private_key.is_some(), "{}", node.name);
         }
     }
 
     #[test]
     fn a_link_gets_the_nine_generated_fields_nested_under_it() {
-        let recorded = run(&slipmesh());
-        assert!(
-            recorded.contains("          port: 51820\n          obfuscation:\n            jc: "),
-            "{recorded}"
-        );
-        let links = topology(&recorded).mesh.links;
+        let links = topology(&run(&slipmesh())).mesh.links;
         assert_eq!(keys_of(&links[0].obfuscation), NINE);
     }
 
@@ -323,21 +312,16 @@ plain: true
         let obfuscation = &topology(&recorded).mesh.links[0].obfuscation;
         assert_eq!(obfuscation.jc, Some(9));
         assert_eq!(keys_of(obfuscation).len(), 9);
-        assert!(
-            recorded.contains("          obfuscation:\n            jc: 9\n            jmin: "),
-            "{recorded}"
-        );
     }
 
     #[test]
-    fn nothing_but_the_new_lines_changes() {
+    fn every_value_written_before_stays() {
         let raw = slipmesh();
-        let recorded = run(&raw);
-        let deleted = similar::TextDiff::from_lines(&raw, &recorded)
-            .iter_all_changes()
-            .filter(|c| c.tag() == similar::ChangeTag::Delete)
-            .count();
-        assert_eq!(deleted, 0, "{recorded}");
+        let (before, after) = (values(&raw), values(&run(&raw)));
+        assert_eq!(before.len(), after.len());
+        for (before, after) in before.iter().zip(&after) {
+            assert!(within(before, after), "{before:?}\n{after:?}");
+        }
     }
 
     /// A pool as its own `slipmesh.yaml` document.
@@ -367,7 +351,14 @@ clients:
     fn edited(source: &str, edit: impl FnOnce(&mut MultiDoc)) -> String {
         let mut yaml = MultiDoc::parse(source).unwrap();
         edit(&mut yaml);
-        yaml.text()
+        yaml.text().unwrap()
+    }
+
+    /// The pool in `source` without its clients.
+    fn without_clients(source: &str) -> Value {
+        let mut pool = values(source).remove(0);
+        pool.as_mapping_mut().unwrap().shift_remove("clients");
+        pool
     }
 
     fn client_names(source: &str) -> Vec<String> {
@@ -385,7 +376,11 @@ clients:
         let out = edited(PLAIN_POOL, |yaml| {
             add_client(yaml, 0, &client("dave")).unwrap()
         });
-        assert!(out.starts_with(PLAIN_POOL), "{out}");
+        assert_eq!(without_clients(&out), without_clients(PLAIN_POOL));
+        let (before, after) = (&values(PLAIN_POOL)[0], &values(&out)[0]);
+        for kept in 0..2 {
+            assert_eq!(after["clients"][kept], before["clients"][kept]);
+        }
         assert_eq!(client_names(&out), ["alice", "bob", "dave"]);
     }
 
@@ -393,7 +388,7 @@ clients:
     fn add_client_starts_the_list_a_pool_lacks() {
         let pool = PLAIN_POOL.split("clients:").next().unwrap();
         let out = edited(pool, |yaml| add_client(yaml, 0, &client("dave")).unwrap());
-        assert!(out.starts_with(pool), "{out}");
+        assert_eq!(without_clients(&out), without_clients(pool));
         assert_eq!(client_names(&out), ["dave"]);
     }
 
@@ -402,12 +397,11 @@ clients:
         let out = edited(PLAIN_POOL, |yaml| {
             remove_client(yaml, 0, 0).unwrap() // alice
         });
+        assert_eq!(without_clients(&out), without_clients(PLAIN_POOL));
         assert_eq!(
-            out,
-            PLAIN_POOL.replace(
-                "  - {name: alice, public_key: \"AAA=\", allowed_ips: [\"198.51.100.41/32\"]}\n",
-                ""
-            )
+            values(&out)[0]["clients"][0],
+            values(PLAIN_POOL)[0]["clients"][1]
         );
+        assert_eq!(client_names(&out), ["bob"]);
     }
 }

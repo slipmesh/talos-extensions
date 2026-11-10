@@ -23,7 +23,7 @@ fn a_start_without_rust_log_logs_the_version_then_fails_on_a_missing_config_file
     assert!(log.contains(version_line), "{log}");
     assert!(
         log.contains(&format!(
-            "failed to read config file {CONFIG_FILE}: No such file or directory"
+            "failed to read the config file: reading {CONFIG_FILE}: No such file or directory"
         )),
         "{log}"
     );

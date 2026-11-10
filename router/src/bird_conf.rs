@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn static_inputs_render_what_router_yaml_declares() {
-        let cfg: crate::config::RouterConfig = yaml_serde::from_str(
+        let cfg: crate::config::RouterConfig = sliplib_yaml::from_str(
             r#"
 node:
   loopback_addresses: ["10.62.0.1/32", "fd00::1/128"]

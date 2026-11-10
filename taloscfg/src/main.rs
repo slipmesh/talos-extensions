@@ -307,7 +307,7 @@ fn pool_document(
 /// Writes `yaml` with its edits to `config_path` - once the result still reads as a valid
 /// `slipmesh.yaml`, so a bad edit is refused instead of written.
 fn write_edits(config_path: &Path, yaml: &MultiDoc) -> Result<()> {
-    write_text(config_path, &yaml.text())
+    write_text(config_path, &yaml.text()?)
 }
 
 fn write_text(config_path: &Path, updated: &str) -> Result<()> {
@@ -345,7 +345,7 @@ fn generate(
          write them",
         config_path.display()
     );
-    let updated = defaults::append(&yaml.text(), &added);
+    let updated = defaults::append(&yaml.text()?, &added);
     let file = if added.is_empty() {
         file
     } else {
@@ -800,13 +800,46 @@ clients:
         start..end
     }
 
+    /// The values of `raw`'s documents, and the position among them of pool `name`.
+    fn documents_and_pool(raw: &str, name: &str) -> (Vec<sliplib_yaml::Value>, usize) {
+        let documents: Vec<_> = MultiDoc::parse(raw)
+            .unwrap()
+            .documents()
+            .iter()
+            .map(|d| d.value.clone())
+            .collect();
+        let pool = documents
+            .iter()
+            .position(|d| d["slipmesh"]["kind"] == "roadwarriors" && d["name"] == name)
+            .unwrap();
+        (documents, pool)
+    }
+
+    /// Asserts that every document but `edited` holds the same values in `after` as in `before`.
+    fn only_edited(before: &[sliplib_yaml::Value], after: &[sliplib_yaml::Value], edited: usize) {
+        assert_eq!(after.len(), before.len());
+        for (index, (before, after)) in before.iter().zip(after).enumerate() {
+            if index != edited {
+                assert_eq!(after, before, "document {index}");
+            }
+        }
+    }
+
+    fn client_names(pool: &sliplib_yaml::Value) -> Vec<&str> {
+        pool["clients"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap())
+            .collect()
+    }
+
     #[test]
     fn rw_add_edits_only_the_pools_own_document() {
         let paths = setup(POOLS);
         // Minted first, so that the only change the client makes is its own.
         paths.generate(None, false, false).unwrap();
-        let before = paths.config();
-        let bounds = pool_bounds(&before, "first");
+        let (before, first) = documents_and_pool(&paths.config(), "first");
         rw_add(
             "first",
             "dave",
@@ -821,26 +854,21 @@ clients:
         )
         .unwrap();
 
-        let after = paths.config();
-        assert!(after.starts_with(&before[..bounds.start]), "{after}");
-        assert!(after.ends_with(&before[bounds.end..]), "{after}");
-        assert!(
-            after[pool_bounds(&after, "first")].contains("name: dave"),
-            "{after}"
-        );
+        let (after, _) = documents_and_pool(&paths.config(), "first");
+        only_edited(&before, &after, first);
+        assert_eq!(client_names(&after[first]), ["dave"]);
     }
 
     #[test]
     fn rw_del_edits_only_the_pools_own_document() {
         let paths = setup(POOLS);
-        let before = paths.config();
-        let bounds = pool_bounds(&before, "second");
+        let (before, second) = documents_and_pool(&paths.config(), "second");
 
         rw_del("second", "carol", &paths.config).unwrap();
 
-        let after = paths.config();
-        assert!(after.starts_with(&before[..bounds.start]), "{after}");
-        assert!(!after.contains("carol"), "{after}");
+        let (after, _) = documents_and_pool(&paths.config(), "second");
+        only_edited(&before, &after, second);
+        assert!(client_names(&after[second]).is_empty());
     }
 
     #[test]
@@ -952,12 +980,12 @@ clients:
     fn rw_inspect_needs_no_secret_but_its_pools() {
         let paths = setup(POOLS);
         paths.generate(None, false, false).unwrap();
-        let unkeyed = paths.config().replacen(
-            "nodes:\n",
-            "nodes:\n  - {name: e, node_id: \"10.62.0.5\"}\n",
-            1,
-        );
-        std::fs::write(&paths.config, &unkeyed).unwrap();
+        let mut unkeyed = MultiDoc::parse(&paths.config()).unwrap();
+        unkeyed.document_mut(0).unwrap()["nodes"]
+            .as_sequence_mut()
+            .unwrap()
+            .push(sliplib_yaml::from_str("{name: e, node_id: \"10.62.0.5\"}").unwrap());
+        std::fs::write(&paths.config, unkeyed.text().unwrap()).unwrap();
         rw_inspect(
             "second",
             "carol",

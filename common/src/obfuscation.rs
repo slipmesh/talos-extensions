@@ -175,7 +175,7 @@ mod tests {
             jc: Some(4),
             ..Obfuscation::default()
         };
-        let yaml = yaml_serde::to_string(&cfg).unwrap();
+        let yaml = sliplib_yaml::to_string(&cfg).unwrap();
         assert!(yaml.contains("jc: 4"), "yaml was:\n{yaml}");
         assert!(!yaml.contains("null"), "yaml was:\n{yaml}");
     }
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn a_fully_unset_obfuscation_serializes_to_an_empty_mapping() {
-        let yaml = yaml_serde::to_string(&Obfuscation::default()).unwrap();
+        let yaml = sliplib_yaml::to_string(&Obfuscation::default()).unwrap();
         assert_eq!(yaml.trim(), "{}");
     }
 }
