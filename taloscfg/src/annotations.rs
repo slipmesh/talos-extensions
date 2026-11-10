@@ -1,10 +1,9 @@
 //! What every node publishes about the mesh as annotations on its Node object, for whatever runs in
 //! the cluster and needs the same facts: one source, `slipmesh.yaml`, and nothing entered twice.
 //!
-//! An annotation is named after the path of its value in `slipmesh.yaml`: `slipmesh.net/` and the
-//! path, with `nodes[]` read as `node`, since the value sits on that node's own Node object. Talos
-//! keeps the annotations it sets in step with the config: a changed value is rewritten, a value no
-//! longer given is taken off the Node.
+//! An annotation is named after the key of its value in `slipmesh.yaml`. Talos keeps the annotations
+//! it sets in step with the config: a changed value is rewritten, a value no longer given is taken
+//! off the Node.
 
 use crate::mesh_config::MeshConfig;
 use anyhow::{Context, Result};
@@ -22,16 +21,16 @@ pub fn for_node(mesh: &MeshConfig, node: &str) -> Result<BTreeMap<&'static str, 
         .with_context(|| format!("unknown node {node:?}"))?;
     let mut annotations = BTreeMap::from([
         (
-            "slipmesh.net/cluster.interface_prefix.mesh",
+            "slipmesh.net/interface_prefix.mesh",
             mesh.cluster.mesh_interface_prefix().to_owned(),
         ),
         (
-            "slipmesh.net/cluster.route_proto_id.egress",
+            "slipmesh.net/route_proto_id.egress",
             mesh.cluster.egress_route_proto_id().to_string(),
         ),
     ]);
     if let Some(endpoint) = &entry.endpoint {
-        annotations.insert("slipmesh.net/node.endpoint", endpoint.clone());
+        annotations.insert("slipmesh.net/endpoint", endpoint.clone());
     }
     Ok(annotations)
 }
@@ -76,15 +75,9 @@ mod tests {
         assert_eq!(
             for_node(&mesh("", ENDPOINT), "a").unwrap(),
             BTreeMap::from([
-                (
-                    "slipmesh.net/cluster.interface_prefix.mesh",
-                    "mesh-".to_owned()
-                ),
-                (
-                    "slipmesh.net/cluster.route_proto_id.egress",
-                    "152".to_owned()
-                ),
-                ("slipmesh.net/node.endpoint", "192.0.2.10".to_owned()),
+                ("slipmesh.net/interface_prefix.mesh", "mesh-".to_owned()),
+                ("slipmesh.net/route_proto_id.egress", "152".to_owned()),
+                ("slipmesh.net/endpoint", "192.0.2.10".to_owned()),
             ])
         );
     }
@@ -93,20 +86,14 @@ mod tests {
     fn a_value_given_in_slipmesh_yaml_is_the_one_published() {
         let cluster = "  interface_prefix: {mesh: wg-}\n  route_proto_id: {egress: 160}\n";
         let annotations = for_node(&mesh(cluster, ""), "a").unwrap();
-        assert_eq!(
-            annotations["slipmesh.net/cluster.interface_prefix.mesh"],
-            "wg-"
-        );
-        assert_eq!(
-            annotations["slipmesh.net/cluster.route_proto_id.egress"],
-            "160"
-        );
+        assert_eq!(annotations["slipmesh.net/interface_prefix.mesh"], "wg-");
+        assert_eq!(annotations["slipmesh.net/route_proto_id.egress"], "160");
     }
 
     #[test]
     fn a_node_without_an_endpoint_publishes_none() {
         let annotations = for_node(&mesh("", ""), "a").unwrap();
-        assert!(!annotations.contains_key("slipmesh.net/node.endpoint"));
+        assert!(!annotations.contains_key("slipmesh.net/endpoint"));
     }
 
     #[test]

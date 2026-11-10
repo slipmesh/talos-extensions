@@ -490,14 +490,14 @@ for that pass.
 
 Every node publishes what the cluster needs to know about the mesh as annotations on its Node
 object: `generate` puts them into the node's `KubeNodeConfig`, merged with the one a `patch`
-document gives, since Talos takes one document of that kind. An annotation is named after the path
-of its value in `slipmesh.yaml`, with `nodes[]` read as `node`:
+document gives, since Talos takes one document of that kind. An annotation is named after the key
+of its value in `slipmesh.yaml`:
 
 | path | annotation | default |
 | --- | --- | --- |
-| `cluster.interface_prefix.mesh` | `slipmesh.net/cluster.interface_prefix.mesh` | `mesh-` |
-| `cluster.route_proto_id.egress` | `slipmesh.net/cluster.route_proto_id.egress` | `152` |
-| `nodes[].endpoint` | `slipmesh.net/node.endpoint` | none: a node without an endpoint has no annotation |
+| `cluster.interface_prefix.mesh` | `slipmesh.net/interface_prefix.mesh` | `mesh-` |
+| `cluster.route_proto_id.egress` | `slipmesh.net/route_proto_id.egress` | `152` |
+| `nodes[].endpoint` | `slipmesh.net/endpoint` | none: a node without an endpoint has no annotation |
 
 `cluster.interface_prefix.mesh` is what every mesh interface's name starts with, and the pattern
 OSPF and `direct_interfaces` match them by. `cluster.route_proto_id.egress` is the protocol number,

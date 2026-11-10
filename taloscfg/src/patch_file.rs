@@ -323,15 +323,9 @@ configFiles:
         assert_eq!(configs.len(), 1, "{configs:?}");
         assert_eq!(configs[0]["apiVersion"], "v1alpha1");
         let annotations = &configs[0]["annotations"];
-        assert_eq!(annotations["slipmesh.net/node.endpoint"], "192.0.2.10");
-        assert_eq!(
-            annotations["slipmesh.net/cluster.interface_prefix.mesh"],
-            "mesh-"
-        );
-        assert_eq!(
-            annotations["slipmesh.net/cluster.route_proto_id.egress"],
-            "152"
-        );
+        assert_eq!(annotations["slipmesh.net/endpoint"], "192.0.2.10");
+        assert_eq!(annotations["slipmesh.net/interface_prefix.mesh"], "mesh-");
+        assert_eq!(annotations["slipmesh.net/route_proto_id.egress"], "152");
     }
 
     #[test]
@@ -346,7 +340,7 @@ configFiles:
         assert_eq!(configs[0]["nodeIP"]["validSubnets"][0], "10.62.0.0/16");
         assert_eq!(configs[0]["annotations"]["example.com/rack"], "r1");
         assert_eq!(
-            configs[0]["annotations"]["slipmesh.net/node.endpoint"],
+            configs[0]["annotations"]["slipmesh.net/endpoint"],
             "192.0.2.10"
         );
     }
@@ -355,11 +349,11 @@ configFiles:
     fn a_patch_that_sets_a_generated_annotation_is_refused() {
         let raw = format!(
             "{}---\nslipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: KubeNodeConfig\n\
-             annotations:\n  slipmesh.net/node.endpoint: 198.51.100.1\n",
+             annotations:\n  slipmesh.net/endpoint: 198.51.100.1\n",
             with_router_files(&[("", TEMPLATE)])
         );
         let err = format!("{:#}", render_raw(&raw, "a").unwrap_err());
-        assert!(err.contains("slipmesh.net/node.endpoint"), "{err}");
+        assert!(err.contains("slipmesh.net/endpoint"), "{err}");
     }
 
     #[test]
