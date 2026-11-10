@@ -4,7 +4,7 @@
 //! the legacy Kubernetes-based crate, since the whole point of this tool is the migration away
 //! from it. Same formulas, same test vectors, reimplemented standalone.
 
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 fn node_id_bits(node_id: Ipv4Addr) -> u32 {
     u32::from(node_id)
@@ -30,6 +30,18 @@ pub fn ipv6_loopback(network: Ipv6Addr, prefix_len: u8, node_id: Ipv4Addr) -> Ip
     };
     let host = u128::from(node_id_bits(node_id));
     Ipv6Addr::from((u128::from(network) & mask) | (host & !mask))
+}
+
+/// `host`, `host:port`, an IP address, or a bracketed IPv6 with or without a port, as an
+/// endpoint to dial - `port` filling in a missing one.
+pub fn endpoint(endpoint: &str, port: u16) -> String {
+    if let Ok(IpAddr::V6(v6)) = endpoint.parse() {
+        return format!("[{v6}]:{port}");
+    }
+    match endpoint.rsplit_once(':') {
+        Some((_, given)) if given.parse::<u16>().is_ok() => endpoint.to_owned(),
+        _ => format!("{endpoint}:{port}"),
+    }
 }
 
 #[cfg(test)]

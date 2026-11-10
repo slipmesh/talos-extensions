@@ -57,6 +57,10 @@ pub struct MeshConfig {
 pub struct ClusterConfig {
     #[serde(default)]
     pub bgp_as: u32,
+    /// The MTU every mesh interface gets, at most the least limit of the mesh's links; that least
+    /// limit when unset. See `mtu.rs`.
+    #[serde(default)]
+    pub mesh_mtu: Option<u32>,
     #[serde(default)]
     pub loopback_networks: LoopbackNetworks,
     #[serde(default)]
@@ -181,6 +185,23 @@ pub struct NodeEntry {
     /// interface name). `None` means "use the global default", not "announce nothing".
     #[serde(default)]
     pub direct_interfaces: Option<Vec<String>>,
+    /// The MTU of this node's uplink, which bounds the mesh MTU of every link it is on; 1500 when
+    /// unset. Set it on a node whose uplink is narrower, such as one behind a tunnel of its
+    /// provider's.
+    #[serde(default)]
+    pub uplink_mtu: Option<u32>,
+    /// The family a peer dials `endpoint` over, when `endpoint` is a hostname; IPv6 when unset. An
+    /// IP literal says its family itself, and an `address_family` that contradicts it is an
+    /// error.
+    #[serde(default)]
+    pub address_family: Option<AddressFamily>,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AddressFamily {
+    Ipv4,
+    Ipv6,
 }
 
 #[derive(Deserialize, Debug, Default, PartialEq)]
@@ -570,6 +591,8 @@ listen-port: 1
             endpoint: None,
             mesh_private_key: None,
             direct_interfaces: None,
+            uplink_mtu: None,
+            address_family: None,
         });
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "b".to_string()],
@@ -595,6 +618,8 @@ listen-port: 1
             endpoint: None,
             mesh_private_key: None,
             direct_interfaces: None,
+            uplink_mtu: None,
+            address_family: None,
         });
         cfg.mesh.links.push(MeshLink {
             pair: ["a".to_string(), "b".to_string()],

@@ -68,6 +68,7 @@ interfaces:
     addresses: ["fe80::a1b2:c3d4/64"]
     private_key: "...base64, this node's own..."
     obfuscation: {jc: 4, jmin: 40, jmax: 70, h1: 1, h2: 2, h3: 3, h4: 4}
+    mtu: 1420                          # unset leaves the kernel's default
     peers:
       - public_key: "...peer's base64 public key..."
         endpoint: "203.0.113.7:51820"
@@ -91,7 +92,7 @@ interfaces:
       h3: 3
       h4: 4
       s3: 60                           # junk size, cookie-reply packets
-      s4: 90                           # junk size, transport (data) packets
+      s4: 20                           # junk size, transport (data) packets; lowers the MTU that fits
       i1: "5-10"                       # decoy/cover packet header spec
       header_protection_key: "...base64, same wire format as private_key..."
       content_padding_addition: 128
@@ -113,7 +114,7 @@ to). This is a config-authoring concern, not something `awg` decides. The same a
 **Every AmneziaWG obfuscation parameter is exposed**, through 3.1, not just the original nine
 (jc/jmin/jmax/s1/s2/h1-h4) - confirmed field-by-field against the current kernel module's
 `src/netlink.c` and amneziawg-tools' own config parser (`src/config.c`), since the kernel module's
-own README only documents the original set. See `common::Obfuscation`'s doc comment for the full
+own README only documents the original set. See `sliplib_config::Obfuscation`'s doc comment for the full
 field list and what each one does. `header_protection_key` + a peer's `advanced_security: true` are
 a matched pair - the key alone does nothing without the flag, and both ends of a peering need the
 same key. The kernel module also accepts the key only when every junk size `s1`..`s4` is at least
@@ -121,7 +122,7 @@ same key. The kernel module also accepts the key only when every junk size `s1`.
 `h1`..`h4` that are not all different (an unset one counts as 1..4); both come back as a bare
 `Invalid argument` for that interface. It never checks that `jmin` does not exceed `jmax` before
 drawing junk packet sizes between them. `awg` applies whatever config it is given; `taloscfg`
-refuses to render one that breaks any of these, see `common::Obfuscation::validate`.
+refuses to render one that breaks any of these, see `sliplib_config::Obfuscation::validate`.
 
 The two 3.1 switches are the exception to that pairing: each end decides for itself.
 `random_trailers` appends a random-length trailer to outgoing packets and relaxes the receive-side
@@ -456,6 +457,27 @@ instead, and `--diff` shows the patches as they would be with it. From then on t
 `slipmesh.yaml` is the one in force, and a newer reference does not replace it. A document aimed at
 some nodes only counts as setting the file: the nodes it leaves out go without, as whoever aimed it
 decided - which `generate` refuses for `router`, since it does not run without its template.
+
+### Mesh MTU
+
+Every mesh interface gets one MTU, the largest at which a full-size packet still crosses every
+link unfragmented. A fragmented outer packet takes TCP in the tunnel down to a few Mbit/s. A
+link's limit is `U - 32 - 8 - IP - S4`:
+
+- `U` is the smaller uplink MTU of its two nodes, `nodes[].uplink_mtu`, 1500 when unset;
+- 32 is WireGuard's header and tag, 8 the UDP header;
+- `IP` is 20 or 40, for the family of the endpoint the link is dialed at;
+- `S4` is the junk AmneziaWG adds to every data packet, the link's `obfuscation.s4`.
+
+The family is that of the endpoint of whichever side has one, and the same when both do. Endpoints
+of two families on one link are an error: which one carries the link would depend on who starts
+the handshake. A link with no endpoint on either side is an error too, since neither end can dial
+the other. An IP literal says its family itself. For a hostname, `nodes[].address_family`
+(`ipv4` or `ipv6`) says it, and it is IPv6 when unset.
+
+`cluster.mesh_mtu` sets the MTU instead, and `generate` refuses one above the least link limit,
+naming that link. An MTU below 1280 is an error, since the mesh runs OSPFv3 over IPv6. A
+`mesh_mtu` with no links in the mesh is an error as well. Pool interfaces keep the kernel's default.
 
 ### Secrets
 

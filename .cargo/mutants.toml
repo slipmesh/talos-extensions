@@ -1,0 +1,4 @@
+# Netlink I/O is a thin shim that only a node exercises (see the README's Development section): no
+# unit test can tell a call to the kernel from none, so its mutants would only ever be missed.
+exclude_globs = ["common/src/netlink/**"]
+exclude_re = ["ensure_interface"]

@@ -322,6 +322,9 @@ pub async fn ensure_interface(
 ) -> Result<()> {
     let (index, _created) = rt.ensure_link(&iface.name, "amneziawg").await?;
     rt.ensure_addresses(index, &iface.addresses).await?;
+    if let Some(mtu) = iface.mtu {
+        rt.set_mtu(index, mtu).await?;
+    }
 
     // A statically assigned address (in particular an IPv6 link-local used for an OSPFv3-style
     // underlay) would otherwise be dropped every time the interface cycles down/up (e.g. a brief

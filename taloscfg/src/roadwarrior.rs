@@ -109,7 +109,7 @@ fn pool_endpoint(
 ) -> Result<String> {
     let host = match chosen {
         Some(chosen) if !pool.node_hostnames.iter().any(|h| h == chosen) => {
-            return Ok(literal_endpoint(chosen, pool.listen_port));
+            return Ok(addressing::endpoint(chosen, pool.listen_port));
         }
         Some(chosen) => chosen,
         None => pool
@@ -125,19 +125,7 @@ fn pool_endpoint(
     let endpoint = node.endpoint.as_deref().with_context(|| {
         format!("node {host:?} has no endpoint - can't terminate a roadwarrior pool")
     })?;
-    Ok(format!("{endpoint}:{}", pool.listen_port))
-}
-
-/// `host`, `host:port`, an IP address, or a bracketed IPv6 with or without a port, as an
-/// `Endpoint =` value - `port` filling in a missing one.
-fn literal_endpoint(endpoint: &str, port: u16) -> String {
-    if let Ok(IpAddr::V6(v6)) = endpoint.parse() {
-        return format!("[{v6}]:{port}");
-    }
-    match endpoint.rsplit_once(':') {
-        Some((_, given)) if given.parse::<u16>().is_ok() => endpoint.to_owned(),
-        _ => format!("{endpoint}:{port}"),
-    }
+    Ok(addressing::endpoint(endpoint, pool.listen_port))
 }
 
 /// The client-side `DNS =` value for this pool: `pool.dns` if set, else the cluster's own CoreDNS
