@@ -1778,8 +1778,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-runtime"
-version = "0.6.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.6.0#b1874b04a0a09b5d1714f7242a2041d95b188000"
+version = "0.8.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.8.0#ac589f4d677ad9e956a39168afa46a772f8a3f92"
 dependencies = [
  "anyhow",
  "tokio-graceful-shutdown",
