@@ -479,7 +479,7 @@ the other. An IP literal says its family itself. For a hostname, `nodes[].addres
 naming that link. An MTU below 1280 is an error, since the mesh runs OSPFv3 over IPv6. A
 `mesh_mtu` with no links in the mesh is an error as well. Pool interfaces keep the kernel's default.
 
-A change of the mesh MTU has to reach both ends of every link at once, the RouterOS side included.
+A change of the mesh MTU has to reach both ends of every link at once.
 OSPF compares MTUs in its database description packets and refuses a neighbor whose MTU is larger
 than its own, so an adjacency across ends that differ does not form again; BIRD cannot skip the
 check. Keep `cluster.mesh_mtu` at the current value until every node runs an `awg` that sets the
