@@ -251,6 +251,11 @@ impl SlipmeshFile {
         })
     }
 
+    /// The `network` document, as written.
+    pub fn network(&self) -> &Value {
+        &self.network
+    }
+
     /// The position of the `network` document in the file - where an edit to the topology goes.
     pub fn network_document(&self) -> usize {
         self.network_index

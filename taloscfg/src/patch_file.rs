@@ -217,7 +217,10 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
     validate_nftables_template(&patches)
         .with_context(|| format!("the nftables ruleset for node {host:?} is invalid"))?;
     add_legacy_nftables_file(&mut patches)?;
-    publish_annotations(&mut patches, crate::annotations::for_node(&model, host)?)?;
+    publish_annotations(
+        &mut patches,
+        crate::annotations::for_node(file.network(), host)?,
+    )?;
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
 
     let generated = vec![
@@ -265,6 +268,8 @@ mod tests {
 cluster:
   bgp_as: 64512
   loopback_networks: {ipv4: "10.62.0.0/16", ipv6: "fd00:62::/32"}
+  interface_prefix: {mesh: mesh-}
+  route_proto_id: {egress: 152}
 nodes:
   - {name: a, node_id: "10.62.0.1", endpoint: "192.0.2.10"}
   - {name: b, node_id: "10.62.0.2", endpoint: "192.0.2.11"}
