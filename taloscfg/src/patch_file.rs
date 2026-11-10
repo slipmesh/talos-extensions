@@ -48,7 +48,7 @@ fn render_extension_service_document(
         name,
         config_files: std::iter::once(generated).chain(added).collect(),
     };
-    yaml_serde::to_string(&document).context("serializing an ExtensionServiceConfig document")
+    sliplib_yaml::to_string(&document).context("serializing an ExtensionServiceConfig document")
 }
 
 /// The files the `patch` documents in `patches` add to the generated document `name` - taken out
@@ -59,7 +59,7 @@ fn take_added_files(patches: &mut Vec<HostDocument>, name: &str) -> Result<Vec<C
         return Ok(Vec::new());
     };
     match patches.remove(index).value.get("configFiles") {
-        Some(files) => yaml_serde::from_value(files.clone())
+        Some(files) => sliplib_yaml::from_value(files.clone())
             .with_context(|| format!("the `configFiles` slipmesh.yaml adds to {name:?}")),
         None => Ok(Vec::new()),
     }
@@ -71,13 +71,13 @@ const NFTABLES_IDENTITY: &str = "ExtensionServiceConfig/nftables";
 const LEGACY_NFTABLES_PATH: &str = "/etc/talos-extensions/nftables.yaml";
 
 /// The ruleset template an `nftables` document sets, if it sets one.
-fn nftables_template(document: &yaml_serde::Value) -> Option<String> {
+fn nftables_template(document: &sliplib_yaml::Value) -> Option<String> {
     document
         .get("configFiles")?
         .as_sequence()?
         .iter()
         .find(|f| {
-            f.get("mountPath").and_then(yaml_serde::Value::as_str)
+            f.get("mountPath").and_then(sliplib_yaml::Value::as_str)
                 == Some(nftables::template::TEMPLATE_PATH)
         })?
         .get("content")?
@@ -112,18 +112,18 @@ fn add_legacy_nftables_file(patches: &mut [HostDocument]) -> Result<()> {
         let Some(ruleset) = nftables_template(&document.value) else {
             continue;
         };
-        let legacy = yaml_serde::to_value(ConfigFile {
+        let legacy = sliplib_yaml::to_value(ConfigFile {
             mount_path: LEGACY_NFTABLES_PATH.to_string(),
-            content: yaml_serde::to_string(&LegacyConfig { ruleset })?,
+            content: sliplib_yaml::to_string(&LegacyConfig { ruleset })?,
         })?;
         document
             .value
             .get_mut("configFiles")
-            .and_then(yaml_serde::Value::as_sequence_mut)
+            .and_then(sliplib_yaml::Value::as_sequence_mut)
             .context("an nftables document with a template has configFiles")?
             .push(legacy);
-        document.text =
-            yaml_serde::to_string(&document.value).context("serializing the nftables document")?;
+        document.text = sliplib_yaml::to_string(&document.value)
+            .context("serializing the nftables document")?;
     }
     Ok(())
 }
@@ -183,17 +183,17 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
 
     let generated = vec![
-        render_extension_service_document("awg", &yaml_serde::to_string(&awg_cfg)?, awg_files)?,
+        render_extension_service_document("awg", &sliplib_yaml::to_string(&awg_cfg)?, awg_files)?,
         render_extension_service_document(
             "router",
-            &yaml_serde::to_string(&router_cfg)?,
+            &sliplib_yaml::to_string(&router_cfg)?,
             router_files,
         )?,
     ];
 
     Ok(format!(
         "{HEADER}{}",
-        [patches, generated].concat().join("---\n")
+        sliplib_yaml::join(&[patches, generated].concat())
     ))
 }
 
@@ -203,14 +203,22 @@ mod tests {
     use crate::secrets;
 
     /// The `ExtensionServiceConfig` named `name` among the documents of `file`, if there is one.
-    fn generated_document(file: &str, name: &str) -> Option<yaml_serde::Value> {
-        use serde::Deserialize;
-        yaml_serde::Deserializer::from_str(file)
-            .map(|document| yaml_serde::Value::deserialize(document).unwrap())
+    fn generated_document(file: &str, name: &str) -> Option<sliplib_yaml::Value> {
+        documents(file)
+            .into_iter()
             .find(|value| value["kind"] == "ExtensionServiceConfig" && value["name"] == name)
     }
 
-    fn content(document: &yaml_serde::Value) -> &str {
+    fn documents(file: &str) -> Vec<sliplib_yaml::Value> {
+        sliplib_yaml::MultiDoc::parse(file)
+            .unwrap()
+            .documents()
+            .iter()
+            .map(|document| document.value.clone())
+            .collect()
+    }
+
+    fn content(document: &sliplib_yaml::Value) -> &str {
         document["configFiles"][0]["content"].as_str().unwrap()
     }
 
@@ -291,15 +299,10 @@ configFiles:
     }
 
     fn router_files(patch: &str) -> Vec<(String, String)> {
-        let documents: Vec<yaml_serde::Value> = {
-            use serde::Deserialize;
-            yaml_serde::Deserializer::from_str(patch)
-                .map(|document| yaml_serde::Value::deserialize(document).unwrap())
-                .filter(|value| {
-                    value["kind"] == "ExtensionServiceConfig" && value["name"] == "router"
-                })
-                .collect()
-        };
+        let documents: Vec<sliplib_yaml::Value> = documents(patch)
+            .into_iter()
+            .filter(|value| value["kind"] == "ExtensionServiceConfig" && value["name"] == "router")
+            .collect();
         assert_eq!(documents.len(), 1, "one router document: {patch}");
         documents[0]["configFiles"]
             .as_sequence()
@@ -407,7 +410,7 @@ configFiles:
                 "/etc/talos-extensions/nftables.yaml"
             ]
         );
-        let legacy: yaml_serde::Value = yaml_serde::from_str(files[1].1).unwrap();
+        let legacy: sliplib_yaml::Value = sliplib_yaml::from_str(files[1].1).unwrap();
         assert_eq!(legacy["ruleset"].as_str(), Some(files[0].1));
     }
 }

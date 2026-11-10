@@ -422,7 +422,7 @@ roadwarriors:
     }
 
     fn mesh() -> MeshConfig {
-        yaml_serde::from_str(fixture()).unwrap()
+        sliplib_yaml::from_str(fixture()).unwrap()
     }
 
     fn secrets(mesh: &MeshConfig) -> ResolvedSecrets {

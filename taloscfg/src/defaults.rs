@@ -38,15 +38,8 @@ pub fn missing(file: &SlipmeshFile) -> Vec<&'static DefaultFile> {
 
 /// `text` with a document for each of `defaults` added at its end.
 pub fn append(text: &str, defaults: &[&DefaultFile]) -> String {
-    let mut out = text.to_owned();
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    for default in defaults {
-        out.push_str("---\n");
-        out.push_str(&document(default));
-    }
-    out
+    let documents: Vec<String> = defaults.iter().map(|default| document(default)).collect();
+    sliplib_yaml::append(text, &documents)
 }
 
 /// A `patch` document for every host, the content written as a literal block so that it reads in
@@ -80,7 +73,7 @@ nodes:
   - {name: node-b, node_id: "10.62.0.2"}
 "#;
 
-    fn file_content(document: &yaml_serde::Value, mount_path: &str) -> Option<String> {
+    fn file_content(document: &sliplib_yaml::Value, mount_path: &str) -> Option<String> {
         document["configFiles"]
             .as_sequence()?
             .iter()

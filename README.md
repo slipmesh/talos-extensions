@@ -473,10 +473,9 @@ down, and neither are `random_trailers` and `disable_cookies`, which are never g
 node out of the `network` document takes its key with it, so putting it back mints a new one.
 
 So `slipmesh.yaml` holds private keys in the clear, as the patch files it renders do - keep it
-where those are kept. What the tool adds goes in through [yaml-rt](https://crates.io/crates/yaml-rt),
-which changes only the lines it adds: comments and layout stay as written, and an entry written in
-flow style, `{...}`, takes an addition in flow style. It refuses a file with a line of just `---`
-inside an indented block scalar, which YAML allows; a ruleset should not carry one.
+where those are kept. Writing anything into it rewrites the whole file from its values: comments,
+and documents of only comments, are not kept, and the layout becomes that of the YAML serializer.
+A run that mints nothing leaves the file as it is.
 
 Each rendered config is validated through the real daemon's own `validate()` - the daemons are
 depended on as libraries here, so there is no second implementation to drift.
@@ -497,8 +496,8 @@ line, at any depth, shows as `<redacted>` when it is the same on both sides and 
 
 ### Road warriors
 
-`rw-add`/`rw-del` add or remove one client in the pool's own document the same way, so the rest of
-`slipmesh.yaml` stays exactly as written:
+`rw-add`/`rw-del` add or remove one client in the pool's own document, and write `slipmesh.yaml`
+back the same way:
 
 ```sh
 slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 10.62.253.5/32 --export --qr

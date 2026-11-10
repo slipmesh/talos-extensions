@@ -6,6 +6,7 @@ use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -35,10 +36,8 @@ async fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    let raw = std::fs::read_to_string(CONFIG_PATH)
-        .with_context(|| format!("failed to read config file {CONFIG_PATH}"))?;
     let cfg: config::AwgConfig =
-        yaml_serde::from_str(&raw).context("failed to parse config file as YAML")?;
+        sliplib_yaml::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
     config::validate(&cfg).context("config validation failed")?;
     let cfg = Arc::new(cfg);
 

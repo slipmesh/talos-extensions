@@ -437,7 +437,7 @@ bypass:
 
     #[test]
     fn node_loopbacks_ors_node_id_onto_cluster_networks() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let (v4, v6) = node_loopbacks(&mesh, "a").unwrap();
         assert_eq!(v4.to_string(), "10.62.0.1");
         // node_id "10.62.0.1" is the full 32-bit value (0x0a3e0001), not just its last octet, so
@@ -447,13 +447,13 @@ bypass:
 
     #[test]
     fn node_loopbacks_rejects_unknown_node() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         assert!(node_loopbacks(&mesh, "nonexistent").is_err());
     }
 
     #[test]
     fn bgp_peers_for_excludes_self_and_covers_full_mesh() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let peers = bgp_peers_for(&mesh, "a").unwrap();
         let names: Vec<&str> = peers.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names.len(), 2);
@@ -464,7 +464,7 @@ bypass:
 
     #[test]
     fn bgp_peers_for_addresses_are_ipv6_loopbacks() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let peers = bgp_peers_for(&mesh, "a").unwrap();
         let b = peers.iter().find(|p| p.name == "b").unwrap();
         assert_eq!(b.address, "fd00:62::a3e:2");
@@ -472,14 +472,14 @@ bypass:
 
     #[test]
     fn bypass_for_filters_by_node() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         assert!(bypass_for(&mesh, "a").is_some());
         assert!(bypass_for(&mesh, "b").is_none());
     }
 
     #[test]
     fn bypass_for_converts_literal_prefixes() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let bypass = bypass_for(&mesh, "a").unwrap();
         assert_eq!(bypass.include.len(), 1);
         assert_eq!(bypass.include[0].kind, "literal");
@@ -492,7 +492,7 @@ bypass:
 
     #[test]
     fn render_router_config_is_valid() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "a").unwrap();
         router::config::validate(&cfg).unwrap();
         assert_eq!(cfg.bgp_as, 64512);
@@ -506,7 +506,7 @@ bypass:
     #[test]
     fn render_router_config_direct_interfaces_has_no_default() {
         // An omitted list announces nothing - it does not resurrect the old `cni*` default.
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
         assert!(cfg_a.direct_interfaces.is_empty());
@@ -516,14 +516,14 @@ bypass:
     #[test]
     fn render_router_config_omits_mesh_glob_from_direct_interfaces_when_tunnel_networks_not_configured()
      {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert!(!cfg.direct_interfaces.iter().any(|s| s == "mesh-*"));
     }
 
     #[test]
     fn render_router_config_uses_explicit_cluster_direct_interfaces() {
-        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.direct_interfaces = vec!["cni0".to_string(), "extra0".to_string()];
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert_eq!(
@@ -534,7 +534,7 @@ bypass:
 
     #[test]
     fn render_router_config_per_node_direct_interfaces_overrides_not_merges_the_global_default() {
-        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         mesh.nodes[0].direct_interfaces = Some(vec!["home".to_string()]);
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
@@ -546,7 +546,7 @@ bypass:
 
     #[test]
     fn render_router_config_per_node_override_replaces_a_nonempty_global() {
-        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.direct_interfaces = vec!["mesh-*".to_string()];
         mesh.nodes[0].direct_interfaces = Some(vec!["home".to_string()]);
         let cfg_a = render_router_config(&mesh, "a").unwrap();
@@ -557,14 +557,14 @@ bypass:
 
     #[test]
     fn render_router_config_announce_is_empty_by_default() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert!(cfg.announce.is_empty());
     }
 
     #[test]
     fn render_router_config_announces_the_configured_service_subnet_on_every_node() {
-        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.service_subnet = Some("10.60.0.0/16".to_string());
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
@@ -577,14 +577,14 @@ bypass:
 
     #[test]
     fn render_router_config_learn_is_empty_by_default() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert!(cfg.learn.is_empty());
     }
 
     #[test]
     fn render_router_config_learns_the_configured_pod_subnet_on_every_node() {
-        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.pod_subnet = Some("10.61.0.0/16".to_string());
         let cfg_a = render_router_config(&mesh, "a").unwrap();
         let cfg_b = render_router_config(&mesh, "b").unwrap();
@@ -598,7 +598,7 @@ bypass:
     /// in `slipmesh.yaml` rather than having one imply the other.
     #[test]
     fn render_router_config_learns_pod_subnet_with_direct_interfaces_emptied() {
-        let mut mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mut mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         mesh.cluster.pod_subnet = Some("10.61.0.0/16".to_string());
         mesh.cluster.direct_interfaces = vec![];
         let cfg = render_router_config(&mesh, "a").unwrap();
@@ -608,7 +608,7 @@ bypass:
 
     #[test]
     fn render_router_config_omits_bypass_for_a_node_with_none() {
-        let mesh: MeshConfig = yaml_serde::from_str(three_node_mesh_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "b").unwrap();
         assert!(cfg.bypass.is_none());
     }
@@ -643,7 +643,7 @@ roadwarriors:
 
     #[test]
     fn mesh_interfaces_for_names_the_interface_after_the_peers_node_name() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         assert_eq!(ifaces.len(), 1);
@@ -653,7 +653,7 @@ roadwarriors:
 
     #[test]
     fn mesh_interfaces_for_is_full_tunnel_with_no_allowed_ips() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         assert_eq!(ifaces[0].peers[0].allowed_ips, None);
@@ -661,7 +661,7 @@ roadwarriors:
 
     #[test]
     fn mesh_interfaces_for_builds_endpoint_from_node_host_and_link_port() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         // a's interface peers toward b, which has an endpoint -> host:port using this link's port.
         let a_ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
@@ -676,7 +676,7 @@ roadwarriors:
 
     #[test]
     fn mesh_interfaces_for_peer_public_key_matches_the_peers_resolved_private_key() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         let expected_public = resolved.mesh_private_keys["b"].public_key().unwrap();
@@ -700,14 +700,14 @@ mesh:
 
     #[test]
     fn node_tunnel_addresses_is_none_when_not_configured() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         assert!(node_tunnel_addresses(&mesh, "a").unwrap().is_none());
     }
 
     #[test]
     fn node_tunnel_addresses_ors_node_id_onto_cluster_networks() {
         let mesh: MeshConfig =
-            yaml_serde::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+            sliplib_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
         let (v4, v6) = node_tunnel_addresses(&mesh, "a").unwrap().unwrap();
         assert_eq!(v4.to_string(), "10.62.1.1");
         assert_eq!(v6.to_string(), "fd00:63::1");
@@ -716,7 +716,7 @@ mesh:
     #[test]
     fn mesh_interfaces_for_uses_tunnel_ipv6_as_the_sole_link_local_when_configured() {
         let mesh: MeshConfig =
-            yaml_serde::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+            sliplib_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         // The tunnel IPv6 address (also link-local) replaces the loopback-derived link-local
@@ -729,7 +729,7 @@ mesh:
 
     #[test]
     fn mesh_interfaces_for_uses_the_loopback_derived_link_local_when_not_configured() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = mesh_interfaces_for(&mesh, "a", &resolved).unwrap();
         assert_eq!(ifaces[0].addresses, vec!["fe80::a3e:1/64".to_string()]);
@@ -743,7 +743,7 @@ mesh:
         // `direct1` already does for `router-lo`'s own IPv4 loopback. Previously appended
         // silently; now a hard error, so `slipmesh.yaml` states what a node announces.
         let mesh: MeshConfig =
-            yaml_serde::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+            sliplib_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
         let err = render_router_config(&mesh, "a").unwrap_err().to_string();
         assert!(err.contains("mesh-*"), "unexpected error: {err}");
         assert!(err.contains("tunnel_networks"), "unexpected error: {err}");
@@ -752,7 +752,7 @@ mesh:
     #[test]
     fn render_router_config_does_not_duplicate_mesh_glob_if_already_present() {
         let mut mesh: MeshConfig =
-            yaml_serde::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
+            sliplib_yaml::from_str(mesh_and_roadwarriors_with_tunnel_networks_yaml()).unwrap();
         mesh.cluster.direct_interfaces = vec!["mesh-*".to_string()];
         let cfg = render_router_config(&mesh, "a").unwrap();
         assert_eq!(
@@ -766,7 +766,7 @@ mesh:
 
     #[test]
     fn mesh_interfaces_for_a_node_with_no_links_is_empty() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         assert!(
             mesh_interfaces_for(&mesh, "c", &resolved)
@@ -777,7 +777,7 @@ mesh:
 
     #[test]
     fn roadwarrior_interfaces_for_builds_a_tracked_peer_per_client() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let ifaces = roadwarrior_interfaces_for(&mesh, "a", &resolved).unwrap();
         assert_eq!(ifaces.len(), 1);
@@ -792,7 +792,7 @@ mesh:
 
     #[test]
     fn roadwarrior_interfaces_for_a_pool_without_a_resolved_key_is_an_error() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let mut resolved = resolved_for(&mesh);
         resolved.roadwarrior_private_keys.clear();
         let err = roadwarrior_interfaces_for(&mesh, "a", &resolved).unwrap_err();
@@ -801,7 +801,7 @@ mesh:
 
     #[test]
     fn roadwarrior_interfaces_for_a_node_not_in_node_hostnames_is_empty() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         assert!(
             roadwarrior_interfaces_for(&mesh, "c", &resolved)
@@ -812,7 +812,7 @@ mesh:
 
     #[test]
     fn render_awg_config_combines_mesh_and_roadwarrior_interfaces_and_is_valid() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
         awg::config::validate(&cfg).unwrap();
@@ -823,7 +823,7 @@ mesh:
     fn every_rendered_peer_carries_the_name_it_has_in_mesh_yaml() {
         // Straight from slipmesh.yaml: the node on the far end of a link, the client's own name in a
         // pool. It only ever reaches the `peer_name` metric label - nothing decides on it.
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
 
@@ -840,7 +840,7 @@ mesh:
     #[test]
     fn render_router_config_runs_the_exporter_only_on_a_configured_port() {
         let base = mesh_and_roadwarriors_yaml();
-        let mesh: MeshConfig = yaml_serde::from_str(base).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(base).unwrap();
         assert_eq!(render_router_config(&mesh, "a").unwrap().metrics, None);
 
         let yaml = base.replace(
@@ -848,7 +848,7 @@ mesh:
             "  bgp_as: 64512
   router_metrics_port: 9324",
         );
-        let mesh: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(&yaml).unwrap();
         let listen = render_router_config(&mesh, "a")
             .unwrap()
             .metrics
@@ -865,7 +865,7 @@ mesh:
             "  bgp_as: 64512
   router_metrics_port: 0",
         );
-        let mesh: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(&yaml).unwrap();
         assert!(render_router_config(&mesh, "a").is_err());
     }
 
@@ -873,14 +873,14 @@ mesh:
     fn render_awg_config_refuses_a_metrics_port_of_zero() {
         let yaml = mesh_and_roadwarriors_yaml()
             .replace("  bgp_as: 64512", "  bgp_as: 64512\n  awg_metrics_port: 0");
-        let mesh: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(&yaml).unwrap();
         let resolved = resolved_for(&mesh);
         assert!(render_awg_config(&mesh, "a", &resolved).is_err());
     }
 
     #[test]
     fn render_awg_config_has_no_metrics_section_when_no_port_is_configured() {
-        let mesh: MeshConfig = yaml_serde::from_str(mesh_and_roadwarriors_yaml()).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
         assert_eq!(cfg.metrics, None);
@@ -892,7 +892,7 @@ mesh:
             "  bgp_as: 64512",
             "  bgp_as: 64512\n  awg_metrics_port: 9586",
         );
-        let mesh: MeshConfig = yaml_serde::from_str(&yaml).unwrap();
+        let mesh: MeshConfig = sliplib_yaml::from_str(&yaml).unwrap();
         let resolved = resolved_for(&mesh);
 
         // The same address `node_loopbacks` hands `ext-router` as node.loopback_addresses, so the

@@ -10,9 +10,7 @@ use crate::merge::merge_document;
 use crate::mesh_config::{self, MeshConfig, RoadwarriorPool};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
-use std::ops::Range;
-use yaml_rt::{NodeId, YamlDoc};
-use yaml_serde::Value;
+use sliplib_yaml::{MultiDoc, Value};
 
 /// The generator's own top-level block in every document: what the document is for and which
 /// hosts it reaches.
@@ -57,59 +55,37 @@ struct Meta {
     exclude: Option<Vec<String>>,
 }
 
+/// One document of `slipmesh.yaml` with its `slipmesh:` block read out of it.
 struct Document {
-    /// Its position among the documents of the file, those of only comments included - how
-    /// `yaml-rt` addresses it.
-    index: usize,
-    line: usize,
     meta: Meta,
-    /// The document parsed, without the `slipmesh:` block.
-    value: Value,
-    /// The document's text with the `slipmesh:` block blanked out, behind as many empty lines as
-    /// come before it in the file - deserialized from this, a document's error names the line of
-    /// the file it is on.
-    positioned: String,
+    /// The document without the block, its lines kept so that an error names the line of the file.
+    inner: sliplib_yaml::Document,
+}
+
+impl std::ops::Deref for Document {
+    type Target = sliplib_yaml::Document;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }
 
 impl Document {
-    /// The document at `index`, whose text is `raw[span]`. `None` for a document with nothing in
-    /// it but comments: it says nothing to route.
-    fn read(raw: &str, yaml: &YamlDoc, index: usize, span: Range<usize>) -> Result<Option<Self>> {
-        let Some(root) = yaml.document_root(index)? else {
-            return Ok(None);
-        };
-        let line = raw[..span.start].matches('\n').count() + 1;
-        let text = &raw[span.clone()];
-        let read = || -> Result<Self> {
-            let mut value: Value = yaml_serde::from_str(text).context("not valid YAML")?;
-            let meta = value
-                .as_mapping_mut()
-                .and_then(|mapping| mapping.shift_remove(META_KEY))
-                .context("no `slipmesh:` block saying what the document is for")?;
-            let meta: Meta = yaml_serde::from_value(meta).context("its `slipmesh:` block")?;
-            let mut blanked = text.to_owned();
-            if let Some(entry) = yaml.get_mapping_entry(root, META_KEY)? {
-                let entry = span_of(yaml, entry)?;
-                let entry = entry.start - span.start..entry.end - span.start;
-                let lines = "\n".repeat(blanked[entry.clone()].matches('\n').count());
-                blanked.replace_range(entry, &lines);
-            }
-            Ok(Self {
-                index,
-                line,
-                meta,
-                value,
-                positioned: "\n".repeat(line - 1) + &blanked,
+    fn read(mut inner: sliplib_yaml::Document) -> Result<Self> {
+        let line = inner.line;
+        let meta = inner
+            .take(META_KEY)
+            .context("no `slipmesh:` block saying what the document is for")
+            .and_then(|meta| {
+                sliplib_yaml::from_value::<Meta>(meta).context("its `slipmesh:` block")
             })
-        };
-        read()
-            .map(Some)
-            .with_context(|| format!("the document starting at line {line}"))
+            .with_context(|| format!("the document starting at line {line}"))?;
+        Ok(Self { meta, inner })
     }
 
     /// The document as `T`, with an error that names the field and the line of the file.
     fn deserialize<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
-        yaml_serde::from_str(&self.positioned).with_context(|| self.at())
+        self.inner.deserialize().with_context(|| self.at())
     }
 
     fn at(&self) -> String {
@@ -127,15 +103,6 @@ impl Document {
             .is_none_or(|hosts| hosts.iter().any(|h| h == host))
             && !self.meta.exclude.iter().flatten().any(|h| h == host)
     }
-}
-
-/// The byte range of `node` in the source.
-fn span_of(yaml: &YamlDoc, node: NodeId) -> Result<Range<usize>> {
-    let span = yaml
-        .node(node)
-        .context("a node the parser did not keep")?
-        .span();
-    Ok(span.start as usize..span.end as usize)
 }
 
 /// One Talos document as it goes into one host's patch file, serialized - its comments stay in
@@ -160,28 +127,16 @@ pub struct SlipmeshFile {
 
 impl SlipmeshFile {
     pub fn parse(raw: &str) -> Result<Self> {
-        Self::read(raw, &YamlDoc::parse(raw)?)
+        Self::read(&MultiDoc::parse(raw)?)
     }
 
-    /// `yaml` parsed from `raw` - for a caller that goes on to edit it.
-    pub fn read(raw: &str, yaml: &YamlDoc) -> Result<Self> {
+    /// `slipmesh.yaml` as `yaml` holds it - for a caller that goes on to edit it.
+    pub fn read(yaml: &MultiDoc) -> Result<Self> {
         let mut networks = Vec::new();
         let mut pools = Vec::new();
         let mut patches = Vec::new();
-        // Each document runs to where the next one starts. Its own span cannot say where it ends:
-        // `yaml-rt` ends the span of a block scalar at its `|`, before the text under it.
-        let mut starts: Vec<usize> = yaml
-            .documents()
-            .map(|document| span_of(yaml, document).map(|span| span.start))
-            .collect::<Result<_>>()?;
-        if let Some(first) = starts.first_mut() {
-            *first = 0;
-        }
-        for (index, &start) in starts.iter().enumerate() {
-            let end = starts.get(index + 1).copied().unwrap_or(raw.len());
-            let Some(document) = Document::read(raw, yaml, index, start..end)? else {
-                continue;
-            };
+        for document in yaml.documents().iter().cloned() {
+            let document = Document::read(document)?;
             match document.meta.kind {
                 Kind::Network => networks.push(document),
                 Kind::Roadwarriors => pools.push(document),
@@ -287,7 +242,7 @@ impl SlipmeshFile {
         let topology = model(&network.value, &pools)?;
         Ok(Self {
             network_index: network.index,
-            network: network.value,
+            network: network.inner.value,
             hosts,
             pools,
             patches,
@@ -365,7 +320,7 @@ impl SlipmeshFile {
                 });
                 contents_as_text(&mut document)?;
                 let text =
-                    yaml_serde::to_string(&document).context("serializing a patch document")?;
+                    sliplib_yaml::to_string(&document).context("serializing a patch document")?;
                 Ok(HostDocument {
                     identity: identity.to_string(),
                     text,
@@ -407,7 +362,7 @@ fn model(network: &Value, pools: &[Document]) -> Result<MeshConfig> {
         .context("the network document is not a mapping")?;
     let pools = pools.iter().map(|p| p.value.clone()).collect();
     mapping.insert("roadwarriors".into(), Value::Sequence(pools));
-    let model: MeshConfig = yaml_serde::from_value(value).context("assembling the topology")?;
+    let model: MeshConfig = sliplib_yaml::from_value(value).context("assembling the topology")?;
     mesh_config::validate(&model)?;
     Ok(model)
 }
@@ -426,7 +381,8 @@ fn contents_as_text(document: &mut Value) -> Result<()> {
     };
     for content in files.iter_mut().filter_map(|file| file.get_mut("content")) {
         if content.is_mapping() || content.is_sequence() {
-            let text = yaml_serde::to_string(&*content).context("serializing a file's contents")?;
+            let text =
+                sliplib_yaml::to_string(&*content).context("serializing a file's contents")?;
             *content = Value::String(text);
         }
     }
@@ -529,7 +485,7 @@ extraArgs:
     #[test]
     fn a_document_without_a_slipmesh_block_is_refused_by_its_line() {
         let raw = file(&[NETWORK, "stray: 1\n"]);
-        let line = raw[..raw.find("---\nstray").unwrap()].matches('\n').count() + 1;
+        let line = raw[..raw.find("stray").unwrap()].matches('\n').count() + 1;
         let err = error(&raw);
         assert!(err.contains(&format!("line {line}")), "{err}");
         assert!(err.contains("slipmesh"), "{err}");
@@ -650,8 +606,8 @@ extraArgs:
     const DEVICE: &str = "slipmesh:\n  kind: patch\n  include: [node-b]\n# the device the converger talks to\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nconfigFiles:\n  - mountPath: /etc/device.yaml\n    content:\n      host: router1.example.com\n      port: 8729\n      username: admin\n      password: hunter2   # the one secret here\n";
 
     /// A `configFiles[].content` in `text`.
-    fn content(text: &str, index: usize) -> yaml_serde::Value {
-        let value: yaml_serde::Value = yaml_serde::from_str(text).unwrap();
+    fn content(text: &str, index: usize) -> sliplib_yaml::Value {
+        let value: sliplib_yaml::Value = sliplib_yaml::from_str(text).unwrap();
         value["configFiles"][index]["content"].clone()
     }
 
@@ -697,7 +653,7 @@ extraArgs:
 
         let merged = parsed.patches_for("node-a").unwrap();
         assert_eq!(merged.len(), 1);
-        let value: yaml_serde::Value = yaml_serde::from_str(&merged[0].text).unwrap();
+        let value: sliplib_yaml::Value = sliplib_yaml::from_str(&merged[0].text).unwrap();
         assert_eq!(value["extraArgs"]["v"].as_str(), Some("4"));
         assert_eq!(
             value["extraArgs"]["rotate-server-certificates"].as_str(),

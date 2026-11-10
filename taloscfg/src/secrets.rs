@@ -267,7 +267,7 @@ mod tests {
     }
 
     fn topology() -> MeshConfig {
-        yaml_serde::from_str(
+        sliplib_yaml::from_str(
             r#"
 cluster:
   bgp_as: 64512
