@@ -13,7 +13,7 @@ use crate::mesh_config::RoadwarriorClient;
 use crate::secrets::Minted;
 use crate::slipmesh_file::SlipmeshFile;
 use anyhow::{Context, Result};
-use common::Obfuscation;
+use sliplib_config::Obfuscation;
 use sliplib_yaml::{Mapping, MultiDoc, Value};
 
 /// Writes every value of `minted` into its field of `yaml`, the `slipmesh.yaml` `file` was read

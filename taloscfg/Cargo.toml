@@ -16,12 +16,11 @@ path = "src/main.rs"
 # netlink-backed modules out, which is what lets this generator build off Linux.
 [dependencies]
 anyhow.workspace = true
-awg.workspace = true
 clap.workspace = true
-common.workspace = true
 nftables.workspace = true
 router.workspace = true
 serde.workspace = true
+sliplib-config.workspace = true
 sliplib-net.workspace = true
 sliplib-secrets.workspace = true
 sliplib-yaml.workspace = true

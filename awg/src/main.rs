@@ -1,5 +1,6 @@
 use awg::handshake::ReconcileSnapshot;
-use awg::{config, gc, handshake, interface, metrics};
+use awg::{gc, handshake, interface, metrics};
+use sliplib_config::awg as config;
 
 use anyhow::{Context, Result};
 use common::netlink::awg::AwgClient;

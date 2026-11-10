@@ -10,7 +10,6 @@
 //! a `Registry` is built fresh each time, so a peer removed from the config is simply never
 //! registered again.
 
-use crate::config::AwgConfig;
 use crate::handshake::{PeerStats, ReconcileSnapshot, dump_peers};
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -27,6 +26,7 @@ use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::registry::Registry;
+use sliplib_config::awg::AwgConfig;
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
@@ -95,7 +95,7 @@ struct BuildLabels {
 /// "tracked" and `kind="roadwarrior"` coincide by definition. Deliberately not `endpoint` (nothing
 /// forbids a peer carrying both) and deliberately not the interface name (which would work today
 /// and break the first time something is named differently).
-fn kind_of(peer: &crate::config::PeerEntry) -> &'static str {
+fn kind_of(peer: &sliplib_config::awg::PeerEntry) -> &'static str {
     if peer.allowed_ips.is_some() {
         "roadwarrior"
     } else {
@@ -404,8 +404,8 @@ async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{InterfaceEntry, MetricsConfig, PeerEntry};
-    use common::Obfuscation;
+    use sliplib_config::awg::{InterfaceEntry, PeerEntry};
+    use sliplib_config::{MetricsConfig, Obfuscation};
 
     // Public keys are opaque identifiers to everything in this module - nothing here decodes them,
     // they only join a config entry to its dump entry - so the fixtures say what they are instead

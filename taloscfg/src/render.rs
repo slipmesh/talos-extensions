@@ -5,12 +5,15 @@
 //! Every function here takes the topology's secrets already resolved - see `secrets`.
 
 use crate::addressing;
-use crate::mesh_config::{BypassSourceEntry, MeshConfig};
+use crate::mesh_config::MeshConfig;
 use crate::secrets::{ResolvedSecrets, link_key};
 use anyhow::{Context, Result};
-use awg::config::{AwgConfig, InterfaceEntry, PeerEntry};
-use common::MetricsConfig;
-use router::config::{AnnounceEntry, BgpPeerEntry, BypassConfig, NodeIdentity, RouterConfig};
+use sliplib_config::MetricsConfig;
+use sliplib_config::awg::{AwgConfig, InterfaceEntry, PeerEntry};
+use sliplib_config::router::{
+    AnnounceEntry, BgpPeerEntry, BypassConfig, DEFAULT_BYPASS_REFRESH_INTERVAL_SECS, NodeIdentity,
+    RouterConfig,
+};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 fn parse_loopback_networks(mesh: &MeshConfig) -> Result<(Ipv4Addr, u8, Ipv6Addr, u8)> {
@@ -90,28 +93,8 @@ pub fn bgp_peers_for(mesh: &MeshConfig, node_name: &str) -> Result<Vec<BgpPeerEn
         .collect()
 }
 
-fn convert_bypass_source(e: &BypassSourceEntry) -> router::resolver::BypassSourceEntry {
-    router::resolver::BypassSourceEntry {
-        kind: e.kind.clone(),
-        label: e.label.clone(),
-        asns: e.asns.clone(),
-        prefixes: e.prefixes.as_ref().map(|ps| {
-            ps.iter()
-                .map(|p| router::resolver::LabeledPrefix {
-                    net: p.net.clone(),
-                    label: p.label.clone(),
-                })
-                .collect()
-        }),
-        country: e.country.clone(),
-        hostnames: e.hostnames.clone(),
-    }
-}
-
-const DEFAULT_BYPASS_REFRESH_INTERVAL_SECS: u64 = 24 * 60 * 60;
-
 /// This node's bypass rules: every `slipmesh.yaml` `bypass[]` entry where `node == node_name`,
-/// converted to `router::config`'s shape. `None` if this node has no bypass entries at all (a
+/// gathered into one `BypassConfig`. `None` if this node has no bypass entries at all (a
 /// `router.yaml` with no `bypass` key is a normal, supported configuration).
 pub fn bypass_for(mesh: &MeshConfig, node_name: &str) -> Option<BypassConfig> {
     let entries: Vec<_> = mesh.bypass.iter().filter(|b| b.node == node_name).collect();
@@ -121,8 +104,8 @@ pub fn bypass_for(mesh: &MeshConfig, node_name: &str) -> Option<BypassConfig> {
     let mut include = Vec::new();
     let mut exclude = Vec::new();
     for entry in entries {
-        include.extend(entry.include.iter().map(convert_bypass_source));
-        exclude.extend(entry.exclude.iter().map(convert_bypass_source));
+        include.extend(entry.include.iter().cloned());
+        exclude.extend(entry.exclude.iter().cloned());
     }
     Some(BypassConfig {
         refresh_interval_secs: mesh
@@ -244,7 +227,7 @@ pub fn render_router_config(mesh: &MeshConfig, node_name: &str) -> Result<Router
 /// party to, named after the *peer's own node name* (`mesh-<peer_name>`) - purely a local, kernel-
 /// side label, never exchanged over the wire (AmneziaWG/WireGuard identify peers by public key, not
 /// interface name), so there's no interop reason to keep it opaque/hex like the old system's
-/// `short_id`-based naming did. `awg::config::validate`'s `IFNAMSIZ` check (name.len() <= 15) still
+/// `short_id`-based naming did. `sliplib_config::awg::validate`'s `IFNAMSIZ` check (name.len() <= 15) still
 /// applies - `mesh-` (5 bytes) plus a node name over 10 bytes fails generation loudly rather than
 /// silently truncating; every current `slipmesh.yaml` node name fits comfortably.
 fn mesh_interfaces_for(
@@ -494,7 +477,7 @@ bypass:
     fn render_router_config_is_valid() {
         let mesh: MeshConfig = sliplib_yaml::from_str(three_node_mesh_yaml()).unwrap();
         let cfg = render_router_config(&mesh, "a").unwrap();
-        router::config::validate(&cfg).unwrap();
+        sliplib_config::router::validate(&cfg).unwrap();
         assert_eq!(cfg.bgp_as, 64512);
         assert_eq!(
             cfg.ospf_interfaces,
@@ -815,7 +798,7 @@ mesh:
         let mesh: MeshConfig = sliplib_yaml::from_str(mesh_and_roadwarriors_yaml()).unwrap();
         let resolved = resolved_for(&mesh);
         let cfg = render_awg_config(&mesh, "a", &resolved).unwrap();
-        awg::config::validate(&cfg).unwrap();
+        sliplib_config::awg::validate(&cfg).unwrap();
         assert_eq!(cfg.interfaces.len(), 2);
     }
 
@@ -902,6 +885,6 @@ mesh:
             cfg.metrics.as_ref().map(|m| m.listen.as_str()),
             Some("10.62.0.2:9586")
         );
-        awg::config::validate(&cfg).unwrap();
+        sliplib_config::awg::validate(&cfg).unwrap();
     }
 }

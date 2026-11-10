@@ -7,11 +7,11 @@
 //! safe default exists for them, and `header_protection_key` specifically must match between both
 //! ends of a link, which a per-node independent random draw cannot guarantee on its own.
 
-use common::Obfuscation;
 use rand::{Rng, RngExt};
+use sliplib_config::Obfuscation;
 
 /// From 5 up, the floor the kernel module's README recommends: 1..4 are WireGuard's own message
-/// types, `common::obfuscation::DEFAULT_MAGIC_HEADERS`, which amneziawg-tools' generator avoids too.
+/// types, `sliplib_config::DEFAULT_MAGIC_HEADERS`, which amneziawg-tools' generator avoids too.
 fn random_magic_headers(rng: &mut impl Rng) -> [u32; 4] {
     let mut values = Vec::with_capacity(4);
     while values.len() < 4 {
@@ -67,7 +67,7 @@ mod tests {
         let o = generate();
         let headers = [o.h1.unwrap(), o.h2.unwrap(), o.h3.unwrap(), o.h4.unwrap()];
         for h in headers {
-            assert!(!common::obfuscation::DEFAULT_MAGIC_HEADERS.contains(&h));
+            assert!(!sliplib_config::DEFAULT_MAGIC_HEADERS.contains(&h));
         }
         let mut sorted = headers.to_vec();
         sorted.sort_unstable();
