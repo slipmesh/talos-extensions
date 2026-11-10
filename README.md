@@ -479,6 +479,14 @@ the other. An IP literal says its family itself. For a hostname, `nodes[].addres
 naming that link. An MTU below 1280 is an error, since the mesh runs OSPFv3 over IPv6. A
 `mesh_mtu` with no links in the mesh is an error as well. Pool interfaces keep the kernel's default.
 
+A change of the mesh MTU has to reach both ends of every link together, hq included. OSPF checks
+the MTU in its database description packets and refuses a neighbor whose MTU is larger than its
+own, so an adjacency that forms again across ends that differ stays in ExStart. BIRD has no
+option to skip that check. Apply every node's patch in one pass, and expect adjacencies on links
+whose ends still differ to drop for that window only. Holding `cluster.mesh_mtu` at the old value
+until every node runs a daemon that sets it keeps the MTU from changing on some nodes before
+others.
+
 ### Secrets
 
 Everything derivable is derived: interface names and link-local/loopback addressing fall out of
