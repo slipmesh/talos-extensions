@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-alpha.2+sm.6] - 2026-11-11
+
+### Added ✨
+
+- Publish the mesh facts as node annotations (#110)
+
+### Documentation 📚
+
+- Say that a mesh mtu change reaches every link end at once (#107)
+- Clarify the order of a mesh mtu change (#109)
+
+### Tests ✅
+
+- Tidy up fixtures (#111)
+
 ## [1.15.0-alpha.2+sm.5] - 2026-11-10
 
 ### Added ✨
