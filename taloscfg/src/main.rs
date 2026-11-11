@@ -337,6 +337,18 @@ fn generate(
     }
 
     let (resolved, minted) = settle_secrets(config_path, &mut yaml, &file, check || diff)?;
+    let unset = edit::missing_defaults(file.topology());
+    let unset_keys = unset
+        .iter()
+        .map(|(key, _)| *key)
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::ensure!(
+        !check || unset.is_empty(),
+        "{} lacks {unset_keys} - run `slipmesh-taloscfg generate` to write their defaults",
+        config_path.display()
+    );
+    edit::write_defaults(&mut yaml, &file, &unset)?;
     let added = defaults::missing(&file);
     let services: Vec<&str> = added.iter().map(|d| d.service).collect();
     anyhow::ensure!(
@@ -359,21 +371,11 @@ fn generate(
     // Every host is rendered and validated before anything is written, so a host that fails
     // leaves slipmesh.yaml and the patch files as they were rather than half of them new.
     let hosts = render_hosts(&file, &resolved, &targets, patches_dir)?;
-    if !added.is_empty() && diff {
-        println!(
-            "{}: the default templates of {services:?} would be added",
-            config_path.display()
-        );
-    } else if !minted.is_empty() || !added.is_empty() {
+    if !diff && (!minted.is_empty() || !added.is_empty() || !unset.is_empty()) {
         write_text(config_path, &updated)?;
         report_minted(&minted, config_path);
-        if !added.is_empty() {
-            println!(
-                "added the default templates of {services:?} to {}",
-                config_path.display()
-            );
-        }
     }
+    report_defaults(config_path, diff, &services, &unset_keys);
 
     for host in &hosts {
         if diff {
@@ -418,6 +420,25 @@ fn settle_secrets(
     );
     edit::record(yaml, file, &minted)?;
     Ok((resolved, routes))
+}
+
+/// The default templates and keys this run wrote into `slipmesh.yaml`, or with `diff` would write.
+fn report_defaults(config_path: &Path, diff: bool, services: &[&str], unset_keys: &str) {
+    let path = config_path.display();
+    if !services.is_empty() {
+        if diff {
+            println!("{path}: the default templates of {services:?} would be added");
+        } else {
+            println!("added the default templates of {services:?} to {path}");
+        }
+    }
+    if !unset_keys.is_empty() {
+        if diff {
+            println!("{path}: {unset_keys} would be written with their defaults");
+        } else {
+            println!("wrote the defaults of {unset_keys} into {path}");
+        }
+    }
 }
 
 fn report_minted(routes: &str, config_path: &Path) {
@@ -710,6 +731,55 @@ installer:
         let before = paths.snapshot();
         paths.generate(None, false, true).unwrap();
         assert_eq!(paths.snapshot(), before);
+    }
+
+    /// A full run with the prefix and protocol keys taken back out of `slipmesh.yaml`.
+    fn setup_without_default_keys() -> Paths {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
+        let mut yaml = MultiDoc::parse(&paths.config()).unwrap();
+        let cluster = yaml.document_mut(0).unwrap()["cluster"]
+            .as_mapping_mut()
+            .unwrap();
+        cluster.shift_remove("interface_prefix");
+        cluster.shift_remove("route_proto_id");
+        std::fs::write(&paths.config, yaml.text().unwrap()).unwrap();
+        paths
+    }
+
+    #[test]
+    fn a_check_without_the_prefix_and_protocol_keys_fails_naming_them_and_writes_nothing() {
+        let paths = setup_without_default_keys();
+        let before = paths.snapshot();
+        let err = format!("{:#}", paths.generate(None, true, false).unwrap_err());
+        assert!(err.contains("cluster.interface_prefix.mesh"), "{err}");
+        assert!(err.contains("cluster.route_proto_id.egress"), "{err}");
+        assert_eq!(paths.snapshot(), before);
+    }
+
+    #[test]
+    fn a_diff_without_the_prefix_and_protocol_keys_writes_nothing() {
+        let paths = setup_without_default_keys();
+        let before = paths.snapshot();
+        paths.generate(None, false, true).unwrap();
+        assert_eq!(paths.snapshot(), before);
+    }
+
+    #[test]
+    fn a_run_that_mints_nothing_still_writes_the_keys_it_lacks() {
+        let paths = setup_without_default_keys();
+        paths.generate(None, false, false).unwrap();
+        let cluster = paths.topology().cluster;
+        assert_eq!(cluster.interface_prefix.mesh.as_deref(), Some("mesh-"));
+        assert_eq!(cluster.route_proto_id.egress, Some(152));
+    }
+
+    #[test]
+    fn a_run_that_mints_nothing_still_writes_the_templates_it_lacks() {
+        let paths = setup_without_defaults();
+        paths.generate(None, false, false).unwrap();
+        let file = SlipmeshFile::parse(&paths.config()).unwrap();
+        assert!(defaults::missing(&file).is_empty());
     }
 
     #[test]

@@ -486,6 +486,29 @@ check. Keep `cluster.mesh_mtu` at the current value until every node runs an `aw
 MTU, then apply every node's patch in one pass. Adjacencies across ends that still differ are down
 for that pass.
 
+### Node annotations
+
+Every node publishes what the cluster needs to know about the mesh as annotations on its Node
+object: `generate` puts them into the node's `KubeNodeConfig`, merged with the one a `patch`
+document gives, since Talos takes one document of that kind. An annotation is named after the key
+of its value in `slipmesh.yaml`:
+
+| path | annotation | default |
+| --- | --- | --- |
+| `cluster.interface_prefix.mesh` | `slipmesh.net/interface_prefix.mesh` | `mesh-` |
+| `cluster.route_proto_id.egress` | `slipmesh.net/route_proto_id.egress` | `152` |
+| `nodes[].endpoint` | `slipmesh.net/endpoint` | none: a node without an endpoint has no annotation |
+
+`cluster.interface_prefix.mesh` is what every mesh interface's name starts with, and the pattern
+OSPF and `direct_interfaces` match them by; it takes ASCII letters, digits, `-`, `_` and `.`.
+`cluster.route_proto_id.egress` is the protocol number, `proto` in `ip route`, that egress routes
+carry; 0 to 4 are the kernel's own and refused. When `slipmesh.yaml` leaves either key out,
+`generate` writes its default into it, `--check` fails, and `--diff` names it.
+
+Talos keeps the annotations it sets in step with the config: a changed value is rewritten on the
+Node, and one no longer given is taken off it. A `patch` document may set annotations of its own,
+but none under `slipmesh.net/`.
+
 ### Secrets
 
 Everything derivable is derived: interface names and link-local/loopback addressing fall out of
@@ -567,7 +590,7 @@ hand before the first run:
   holding `ExtensionServiceConfig` `nftables`;
 - each document written by hand into a patch file becomes a `kind: patch` document with
   `include: [<node>]`;
-- the `private_key` of a node's `mesh-*` interfaces goes into that node's `mesh_private_key`, and
+- the `private_key` of a node's mesh interfaces goes into that node's `mesh_private_key`, and
   a link's `jc`...`h4` into the link's `obfuscation`;
 - the `private_key` of a pool's interface goes into the `private_key` of its `kind: roadwarriors`
   document, and the pool's `jc`...`h4` into its `obfuscation`, unless the pool is `plain`.

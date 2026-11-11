@@ -6,7 +6,6 @@
 //! at hosts by `include`/`exclude`. The block is addressed to this tool and never reaches a patch
 //! file.
 
-use crate::merge::merge_document;
 use crate::mesh_config::{self, MeshConfig, RoadwarriorPool};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
@@ -317,7 +316,7 @@ impl SlipmeshFile {
                     unreachable!("every identity comes from at least one document")
                 };
                 let mut document = rest.iter().fold(first.value.clone(), |base, patch| {
-                    merge_document(base, &patch.value)
+                    talos::merge(base, &patch.value)
                 });
                 talos::contents_as_text(&mut document)?;
                 let text =
