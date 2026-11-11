@@ -498,6 +498,7 @@ of its value in `slipmesh.yaml`:
 | `cluster.interface_prefix.mesh` | `slipmesh.net/interface_prefix.mesh` | `mesh-` |
 | `cluster.route_proto_id.egress` | `slipmesh.net/route_proto_id.egress` | `152` |
 | `nodes[].endpoint` | `slipmesh.net/endpoint` | none: a node without an endpoint has no annotation |
+| `cluster.mesh_mtu` | `slipmesh.net/mesh_mtu` | the least link limit, see [Mesh MTU](#mesh-mtu); none without links |
 
 `cluster.interface_prefix.mesh` is what every mesh interface's name starts with, and the pattern
 OSPF and `direct_interfaces` match them by; it takes ASCII letters, digits, `-`, `_` and `.`.

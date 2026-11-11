@@ -55,7 +55,8 @@ pub fn record(yaml: &mut MultiDoc, file: &SlipmeshFile, minted: &Minted) -> Resu
 }
 
 /// The keys of the network document that `topology` leaves out and `generate` writes down with
-/// their default, so that every value published to the nodes stands in `slipmesh.yaml`.
+/// their default, so that the values published to the nodes stand in `slipmesh.yaml`. The mesh MTU
+/// is not one of them: written down, it would no longer follow the links.
 pub fn missing_defaults(topology: &MeshConfig) -> Vec<(&'static str, Value)> {
     let cluster = &topology.cluster;
     let mut missing = Vec::new();
