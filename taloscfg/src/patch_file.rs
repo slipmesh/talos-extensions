@@ -194,7 +194,8 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
     publish_annotations(
         &mut patches,
         crate::annotations::for_node(&model.cluster, model.node(host)?),
-    )?;
+    )
+    .with_context(|| format!("the KubeNodeConfig of node {host:?}"))?;
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
 
     let generated = vec![

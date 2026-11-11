@@ -26,11 +26,11 @@ clap = { version = "4.6.7", features = ["derive"] }
 minijinja = { version = "3.1.0", default-features = false, features = ["builtins", "serde"] }
 base64 = "0.23.1"
 # Ours, from a release tag: sliplib is not published to crates.io.
-sliplib-config = { git = "https://github.com/slipmesh/sliplib", rev = "ef88364fbf27fbc156cd07522203f2d6ac1a6a5e" }
-sliplib-net = { git = "https://github.com/slipmesh/sliplib", rev = "ef88364fbf27fbc156cd07522203f2d6ac1a6a5e" }
-sliplib-runtime = { git = "https://github.com/slipmesh/sliplib", rev = "ef88364fbf27fbc156cd07522203f2d6ac1a6a5e" }
-sliplib-secrets = { git = "https://github.com/slipmesh/sliplib", rev = "ef88364fbf27fbc156cd07522203f2d6ac1a6a5e" }
-sliplib-yaml = { git = "https://github.com/slipmesh/sliplib", rev = "ef88364fbf27fbc156cd07522203f2d6ac1a6a5e" }
+sliplib-config = { git = "https://github.com/slipmesh/sliplib", rev = "d7f3bd6b83d2202036486c1faadba4fe76f646fe" }
+sliplib-net = { git = "https://github.com/slipmesh/sliplib", rev = "d7f3bd6b83d2202036486c1faadba4fe76f646fe" }
+sliplib-runtime = { git = "https://github.com/slipmesh/sliplib", rev = "d7f3bd6b83d2202036486c1faadba4fe76f646fe" }
+sliplib-secrets = { git = "https://github.com/slipmesh/sliplib", rev = "d7f3bd6b83d2202036486c1faadba4fe76f646fe" }
+sliplib-yaml = { git = "https://github.com/slipmesh/sliplib", rev = "d7f3bd6b83d2202036486c1faadba4fe76f646fe" }
 futures = "0.3.34"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }

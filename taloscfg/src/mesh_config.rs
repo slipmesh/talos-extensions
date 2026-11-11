@@ -397,9 +397,19 @@ pub struct BypassEntry {
 /// it.
 pub fn validate(cfg: &MeshConfig) -> anyhow::Result<()> {
     anyhow::ensure!(!cfg.nodes.is_empty(), "nodes must not be empty");
+    let prefix = cfg.cluster.mesh_interface_prefix();
     anyhow::ensure!(
-        !cfg.cluster.mesh_interface_prefix().is_empty(),
+        !prefix.is_empty(),
         "cluster.interface_prefix.mesh must not be empty: it is what tells a mesh interface"
+    );
+    // The kernel refuses `/`, `:` and whitespace in an interface name, and BIRD reads the prefix
+    // in a glob, where `*`, `?` and `[` would match interfaces that are not the mesh's.
+    anyhow::ensure!(
+        prefix
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')),
+        "cluster.interface_prefix.mesh {prefix:?} may hold only ASCII letters, digits, `-`, `_` and \
+         `.`, the characters an interface name and its glob both take as they are"
     );
     // 0..=4 are the kernel's own: unspec, redirect, kernel, boot and static (`RTPROT_*`).
     let egress = cfg.cluster.egress_route_proto_id();
@@ -534,6 +544,21 @@ mod tests {
         cfg.cluster.interface_prefix.mesh = Some(String::new());
         let err = validate(&cfg).unwrap_err().to_string();
         assert!(err.contains("cluster.interface_prefix.mesh"), "{err}");
+    }
+
+    #[test]
+    fn a_mesh_prefix_an_interface_name_or_its_glob_cannot_carry_is_refused() {
+        let mut cfg: MeshConfig = sliplib_yaml::from_str(minimal_yaml()).unwrap();
+        for prefix in ["mesh*", "me sh", "a/b", "a:b"] {
+            cfg.cluster.interface_prefix.mesh = Some(prefix.to_owned());
+            let err = validate(&cfg).unwrap_err().to_string();
+            assert!(
+                err.contains("cluster.interface_prefix.mesh"),
+                "{prefix}: {err}"
+            );
+        }
+        cfg.cluster.interface_prefix.mesh = Some("wg_1.x-".to_owned());
+        validate(&cfg).unwrap();
     }
 
     #[test]

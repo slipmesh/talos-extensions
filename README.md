@@ -500,10 +500,10 @@ of its value in `slipmesh.yaml`:
 | `nodes[].endpoint` | `slipmesh.net/endpoint` | none: a node without an endpoint has no annotation |
 
 `cluster.interface_prefix.mesh` is what every mesh interface's name starts with, and the pattern
-OSPF and `direct_interfaces` match them by. `cluster.route_proto_id.egress` is the protocol number,
-`proto` in `ip route`, that egress routes carry; 0 to 4 are the kernel's own and refused. When
-`slipmesh.yaml` leaves either key out, `generate` writes its default into it, `--check` fails, and
-`--diff` names it.
+OSPF and `direct_interfaces` match them by; it takes ASCII letters, digits, `-`, `_` and `.`.
+`cluster.route_proto_id.egress` is the protocol number, `proto` in `ip route`, that egress routes
+carry; 0 to 4 are the kernel's own and refused. When `slipmesh.yaml` leaves either key out,
+`generate` writes its default into it, `--check` fails, and `--diff` names it.
 
 Talos keeps the annotations it sets in step with the config: a changed value is rewritten on the
 Node, and one no longer given is taken off it. A `patch` document may set annotations of its own,
