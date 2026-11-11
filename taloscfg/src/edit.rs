@@ -75,7 +75,8 @@ pub fn missing_defaults(topology: &MeshConfig) -> Vec<(&'static str, Value)> {
 }
 
 /// Writes each of `defaults` at its key in the network document of `yaml`, the `slipmesh.yaml`
-/// `file` was read from.
+/// `file` was read from. Indexing inserts each missing step, and panics on none: every step that
+/// is there is a mapping, or the file would not have parsed.
 pub fn write_defaults(
     yaml: &mut MultiDoc,
     file: &SlipmeshFile,
@@ -83,10 +84,8 @@ pub fn write_defaults(
 ) -> Result<()> {
     let network = document(yaml, file.network_document())?;
     for (key, value) in defaults {
-        let overlay = key.rsplit('.').fold(value.clone(), |inner, step| {
-            Value::Mapping(Mapping::from_iter([(step.into(), inner)]))
-        });
-        *network = sliplib_yaml::merge(std::mem::take(network), &overlay);
+        *key.split('.')
+            .fold(&mut *network, |value, step| &mut value[step]) = value.clone();
     }
     Ok(())
 }
