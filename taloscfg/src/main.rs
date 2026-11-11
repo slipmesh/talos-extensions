@@ -371,35 +371,11 @@ fn generate(
     // Every host is rendered and validated before anything is written, so a host that fails
     // leaves slipmesh.yaml and the patch files as they were rather than half of them new.
     let hosts = render_hosts(&file, &resolved, &targets, patches_dir)?;
-    if diff {
-        if !added.is_empty() {
-            println!(
-                "{}: the default templates of {services:?} would be added",
-                config_path.display()
-            );
-        }
-        if !unset.is_empty() {
-            println!(
-                "{}: {unset_keys} would be written with their defaults",
-                config_path.display()
-            );
-        }
-    } else if !minted.is_empty() || !added.is_empty() || !unset.is_empty() {
+    if !diff && (!minted.is_empty() || !added.is_empty() || !unset.is_empty()) {
         write_text(config_path, &updated)?;
         report_minted(&minted, config_path);
-        if !added.is_empty() {
-            println!(
-                "added the default templates of {services:?} to {}",
-                config_path.display()
-            );
-        }
-        if !unset.is_empty() {
-            println!(
-                "wrote the defaults of {unset_keys} into {}",
-                config_path.display()
-            );
-        }
     }
+    report_defaults(config_path, diff, &services, &unset_keys);
 
     for host in &hosts {
         if diff {
@@ -444,6 +420,25 @@ fn settle_secrets(
     );
     edit::record(yaml, file, &minted)?;
     Ok((resolved, routes))
+}
+
+/// The default templates and keys this run wrote into `slipmesh.yaml`, or with `diff` would write.
+fn report_defaults(config_path: &Path, diff: bool, services: &[&str], unset_keys: &str) {
+    let path = config_path.display();
+    if !services.is_empty() {
+        if diff {
+            println!("{path}: the default templates of {services:?} would be added");
+        } else {
+            println!("added the default templates of {services:?} to {path}");
+        }
+    }
+    if !unset_keys.is_empty() {
+        if diff {
+            println!("{path}: {unset_keys} would be written with their defaults");
+        } else {
+            println!("wrote the defaults of {unset_keys} into {path}");
+        }
+    }
 }
 
 fn report_minted(routes: &str, config_path: &Path) {
