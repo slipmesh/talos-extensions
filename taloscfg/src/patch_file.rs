@@ -193,7 +193,11 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
     add_legacy_nftables_file(&mut patches)?;
     publish_annotations(
         &mut patches,
-        crate::annotations::for_node(&model.cluster, model.node(host)?),
+        crate::annotations::for_node(
+            &model.cluster,
+            model.node(host)?,
+            crate::mtu::mesh_mtu(&model, resolved)?,
+        ),
     )
     .with_context(|| format!("the KubeNodeConfig of node {host:?}"))?;
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
@@ -304,6 +308,7 @@ configFiles:
         assert_eq!(annotations["slipmesh.net/endpoint"], "192.0.2.10");
         assert_eq!(annotations["slipmesh.net/interface_prefix.mesh"], "mesh-");
         assert_eq!(annotations["slipmesh.net/route_proto_id.egress"], "152");
+        assert_eq!(annotations["slipmesh.net/mesh_mtu"], "1440");
     }
 
     #[test]
