@@ -56,7 +56,7 @@ bytes = "1.12.1"
 # values come from - a per-scrape registry also means a peer removed from the config is simply
 # never registered, with no state carried between scrapes. Brings escaping, HELP/TYPE, counter
 # `_total` handling and family grouping, which is precisely what a hand-written encoder gets wrong.
-prometheus-client = "0.25.2"
+prometheus-client = "0.26.0"
 # `IP_FREEBIND` has no tokio API (see `awg::metrics::bind`), so the listening socket is configured
 # through socket2 before `bind()`. Already in the lock graph at this version via tokio's own `net`
 # feature - a manifest line, not a new crate.
