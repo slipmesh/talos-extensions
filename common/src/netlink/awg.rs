@@ -249,7 +249,7 @@ mod tests {
     }
 
     /// The bug this whole function's doc comment describes: an all-`None` `Obfuscation` (a
-    /// `plain: true` mesh link, see `mesh_config::MeshLink`) must still emit real, explicit
+    /// `plain: true` mesh link) must still emit real, explicit
     /// attributes - never nothing - since AmneziaWG's `SetDevice` treats an omitted attribute as
     /// "leave the kernel's current value alone", not "reset to default".
     #[test]

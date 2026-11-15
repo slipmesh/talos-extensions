@@ -63,9 +63,8 @@ pub(crate) fn parse_allowed_ip(input: &str) -> Result<String> {
     }
 }
 
-/// Rejects a client `name` or `public_key` that already exists in the pool - today's
-/// `mesh_config::validate` only catches a duplicate `public_key` *within one pool*, not `name`;
-/// `rw-add` is what mints names now, so it enforces uniqueness of both up front.
+/// Rejects a client `name` or `public_key` that already exists in the pool: the topology's own
+/// checks refuse a duplicate `public_key` within one pool but not a duplicate `name`.
 fn check_not_duplicate(pool: &RoadwarriorPool, name: &str, public_key: &str) -> Result<()> {
     if pool.clients.iter().any(|c| c.name == name) {
         bail!("client {name:?} already exists in pool {:?}", pool.name);
