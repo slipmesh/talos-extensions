@@ -1481,6 +1481,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sliplib-config",
+ "sliplib-mesh",
  "sliplib-net",
  "sliplib-runtime",
  "sliplib-yaml",
@@ -1772,8 +1773,8 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "sliplib-config"
-version = "0.13.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.13.0#6958f8828a8174b380a3b16995aa7f9db688661f"
+version = "0.14.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
 dependencies = [
  "anyhow",
  "serde",
@@ -1783,17 +1784,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sliplib-mesh"
+version = "0.14.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
+dependencies = [
+ "anyhow",
+ "sliplib-config",
+ "sliplib-net",
+ "sliplib-secrets",
+]
+
+[[package]]
 name = "sliplib-net"
-version = "0.13.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.13.0#6958f8828a8174b380a3b16995aa7f9db688661f"
+version = "0.14.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
 dependencies = [
  "ipnet",
 ]
 
 [[package]]
 name = "sliplib-runtime"
-version = "0.13.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.13.0#6958f8828a8174b380a3b16995aa7f9db688661f"
+version = "0.14.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
 dependencies = [
  "anyhow",
  "tokio-graceful-shutdown",
@@ -1803,8 +1815,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-secrets"
-version = "0.13.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.13.0#6958f8828a8174b380a3b16995aa7f9db688661f"
+version = "0.14.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
 dependencies = [
  "base64",
  "curve25519-dalek",
@@ -1815,8 +1827,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-yaml"
-version = "0.13.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.13.0#6958f8828a8174b380a3b16995aa7f9db688661f"
+version = "0.14.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
 dependencies = [
  "anyhow",
  "atomic-write-file",
@@ -1916,6 +1928,7 @@ dependencies = [
  "sha2",
  "similar",
  "sliplib-config",
+ "sliplib-mesh",
  "sliplib-net",
  "sliplib-secrets",
  "sliplib-yaml",

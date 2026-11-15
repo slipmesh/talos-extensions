@@ -1,13 +1,10 @@
 //! The generator's modules, as a library the `slipmesh-taloscfg` binary is built on.
 
-pub mod addressing;
 pub mod annotations;
 pub mod defaults;
 pub mod edit;
-pub mod mtu;
 pub mod obfuscation_gen;
 pub mod patch_file;
 pub mod redact;
-pub mod render;
 pub mod roadwarrior;
 pub mod secrets;

@@ -108,4 +108,26 @@ mod tests {
         assert_eq!(o.header_protection_key, None);
         assert_eq!(o.content_padding_addition, None);
     }
+
+    /// A rendered link or pool is refused unless it carries every minted field, so what is
+    /// generated has to be that set: anything less is refused, anything more is a field no one
+    /// asked for.
+    #[test]
+    fn generates_exactly_the_fields_a_minted_obfuscation_carries() {
+        let o = generate();
+        assert!(sliplib_mesh::secrets::unminted(&o).is_empty(), "{o:?}");
+        let minted_only = Obfuscation {
+            jc: o.jc,
+            jmin: o.jmin,
+            jmax: o.jmax,
+            s1: o.s1,
+            s2: o.s2,
+            h1: o.h1,
+            h2: o.h2,
+            h3: o.h3,
+            h4: o.h4,
+            ..Obfuscation::default()
+        };
+        assert_eq!(o, minted_only);
+    }
 }

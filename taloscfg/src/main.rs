@@ -408,7 +408,7 @@ fn settle_secrets(
     yaml: &mut MultiDoc,
     file: &SlipmeshFile,
     dry_run: bool,
-) -> Result<(secrets::ResolvedSecrets, String)> {
+) -> Result<(sliplib_mesh::secrets::ResolvedSecrets, String)> {
     let (resolved, minted) = secrets::resolve(file.topology());
     let routes = minted.routes().join(", ");
     if minted.is_empty() {
@@ -451,7 +451,7 @@ fn report_minted(routes: &str, config_path: &Path) {
 /// Every target host's patch file, rendered and validated in memory.
 fn render_hosts(
     file: &SlipmeshFile,
-    resolved: &secrets::ResolvedSecrets,
+    resolved: &sliplib_mesh::secrets::ResolvedSecrets,
     targets: &[&str],
     patches_dir: &Path,
 ) -> Result<Vec<HostFile>> {
