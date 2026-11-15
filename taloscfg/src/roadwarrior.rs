@@ -2,11 +2,11 @@
 //! the client found by name, and the client-side config rendered as text or a QR code. Editing
 //! `slipmesh.yaml` is `edit`'s.
 
-use crate::addressing;
-use crate::secrets::ResolvedSecrets;
 use anyhow::{Context, Result, bail};
 use sliplib_config::Obfuscation;
 use sliplib_config::mesh_config::{MeshConfig, RoadwarriorClient, RoadwarriorPool};
+use sliplib_mesh::addressing;
+use sliplib_mesh::secrets::ResolvedSecrets;
 use sliplib_secrets::wireguard::PrivateKey;
 use std::net::{IpAddr, Ipv4Addr};
 

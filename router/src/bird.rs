@@ -150,7 +150,7 @@ pub async fn ensure_loopback(
     ipv6_loopback: Ipv6Addr,
 ) -> Result<()> {
     let (index, _created) = rt.ensure_link(ROUTER_LOOPBACK_IFACE, "dummy").await?;
-    let link_local = crate::addressing::link_local_from_loopback(ipv6_loopback);
+    let link_local = sliplib_mesh::addressing::link_local_from_loopback(ipv6_loopback);
     rt.ensure_addresses(
         index,
         &[

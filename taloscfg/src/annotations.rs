@@ -12,7 +12,7 @@ use sliplib_yaml::Mapping;
 pub const NAMESPACE: &str = "slipmesh.net/";
 
 /// The annotations of `node`, by name. `mesh_mtu` is the one MTU of every mesh interface, as
-/// [`crate::mtu::mesh_mtu`] works it out.
+/// [`sliplib_mesh::mtu::mesh_mtu`] works it out.
 pub fn for_node(cluster: &ClusterConfig, node: &NodeEntry, mesh_mtu: Option<u32>) -> Mapping {
     let values = [
         (

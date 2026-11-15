@@ -2,11 +2,11 @@
 //! document for each of `awg` and `router`, carrying that daemon's config once the daemon's own
 //! `validate()` accepts it, and any files the `patch` documents add to it.
 
-use crate::render;
-use crate::secrets::ResolvedSecrets;
 use anyhow::{Context, Result, bail};
 use sliplib_config::slipmesh_file::{GENERATED, HostDocument, SlipmeshFile};
 use sliplib_config::talos::{self, ConfigFile, ExtensionServiceConfig, Identity};
+use sliplib_mesh::render::{NodeConfigs, node_configs};
+use sliplib_mesh::secrets::ResolvedSecrets;
 use sliplib_yaml::Mapping;
 
 /// What opens every patch file this tool writes.
@@ -164,24 +164,10 @@ fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) ->
 /// The patch file of `host`, as the text written to disk.
 pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Result<String> {
     let model = file.effective_for(host)?;
-    let awg_cfg = render::render_awg_config(&model, host, resolved)
-        .with_context(|| format!("rendering awg config for node {host:?}"))?;
-    sliplib_config::awg::validate(&awg_cfg)
-        .with_context(|| format!("rendered awg config for node {host:?} is invalid"))?;
-    // Checked here rather than by awg: the daemon can only refuse a config it is already running
-    // on, and a refusal there would leave every interface of the node down.
-    for iface in &awg_cfg.interfaces {
-        iface.obfuscation.validate().with_context(|| {
-            format!(
-                "node {host:?}, interface {:?}: the kernel module refuses this obfuscation",
-                iface.name
-            )
-        })?;
-    }
-    let router_cfg = render::render_router_config(&model, host)
-        .with_context(|| format!("rendering router config for node {host:?}"))?;
-    sliplib_config::router::validate(&router_cfg)
-        .with_context(|| format!("rendered router config for node {host:?} is invalid"))?;
+    let NodeConfigs {
+        awg: awg_cfg,
+        router: router_cfg,
+    } = node_configs(&model, host, resolved)?;
 
     let mut patches = file.patches_for(host)?;
     let awg_files = take_added_files(&mut patches, "awg")?;
@@ -196,7 +182,7 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
         crate::annotations::for_node(
             &model.cluster,
             model.node(host)?,
-            crate::mtu::mesh_mtu(&model, resolved)?,
+            sliplib_mesh::mtu::mesh_mtu(&model, resolved)?,
         ),
     )
     .with_context(|| format!("the KubeNodeConfig of node {host:?}"))?;
