@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-beta.0+sm.2] - 2026-11-15
+
+### Build system 🛠️
+
+- Update rust crate prometheus-client to 0.26.0 (main) (#115)
+
+### Changed 🔧
+
+- Read slipmesh.yaml through sliplib-config (#119)
+- Compute node configs through sliplib-mesh (#121)
+
 ## [1.15.0-beta.0+sm.1] - 2026-11-11
 
 ### Added ✨
