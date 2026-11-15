@@ -5,11 +5,11 @@
 //! Every function here takes the topology's secrets already resolved - see `secrets`.
 
 use crate::addressing;
-use crate::mesh_config::MeshConfig;
 use crate::secrets::{ResolvedSecrets, link_key};
 use anyhow::{Context, Result};
 use sliplib_config::MetricsConfig;
 use sliplib_config::awg::{AwgConfig, InterfaceEntry, PeerEntry};
+use sliplib_config::mesh_config::MeshConfig;
 use sliplib_config::router::{
     AnnounceEntry, BgpPeerEntry, BypassConfig, DEFAULT_BYPASS_REFRESH_INTERVAL_SECS, NodeIdentity,
     RouterConfig,

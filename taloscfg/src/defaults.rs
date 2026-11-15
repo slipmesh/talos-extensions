@@ -2,7 +2,7 @@
 //! reference each one starts from. `generate` writes the reference into `slipmesh.yaml` where the
 //! file is missing; from then on the copy there is the one in force, edited like any other document.
 
-use crate::slipmesh_file::SlipmeshFile;
+use sliplib_config::slipmesh_file::SlipmeshFile;
 
 pub struct DefaultFile {
     /// The `ExtensionServiceConfig` the file belongs to.

@@ -4,8 +4,7 @@
 use anyhow::Result;
 use common::template::Template;
 
-/// Where the template reaches the daemon - the `configFiles` entry of its `ExtensionServiceConfig`.
-pub const TEMPLATE_PATH: &str = "/etc/talos-extensions/nftables.conf.j2";
+pub use sliplib_config::nftables::TEMPLATE_PATH;
 
 /// The ruleset a mesh starts from: `taloscfg` writes it into `slipmesh.yaml` when that file has
 /// none, and from then on the copy there is the one in force.

@@ -5,7 +5,7 @@
 //! it sets in step with the config: a changed value is rewritten, a value no longer given is taken
 //! off the Node.
 
-use crate::mesh_config::{ClusterConfig, NodeEntry};
+use sliplib_config::mesh_config::{ClusterConfig, NodeEntry};
 use sliplib_yaml::Mapping;
 
 /// The namespace of every annotation this generator sets.
@@ -35,7 +35,7 @@ pub fn for_node(cluster: &ClusterConfig, node: &NodeEntry, mesh_mtu: Option<u32>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh_config::MeshConfig;
+    use sliplib_config::mesh_config::MeshConfig;
 
     #[test]
     fn a_node_without_an_endpoint_publishes_none() {

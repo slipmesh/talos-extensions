@@ -9,13 +9,13 @@
 //! An edit changes one document's values. The file is written back from the values, so its
 //! comments are not kept.
 
-use crate::mesh_config::{
-    DEFAULT_EGRESS_ROUTE_PROTO_ID, DEFAULT_MESH_INTERFACE_PREFIX, MeshConfig, RoadwarriorClient,
-};
 use crate::secrets::Minted;
-use crate::slipmesh_file::SlipmeshFile;
 use anyhow::{Context, Result};
 use sliplib_config::Obfuscation;
+use sliplib_config::mesh_config::{
+    DEFAULT_EGRESS_ROUTE_PROTO_ID, DEFAULT_MESH_INTERFACE_PREFIX, MeshConfig, RoadwarriorClient,
+};
+use sliplib_config::slipmesh_file::SlipmeshFile;
 use sliplib_yaml::{Mapping, MultiDoc, Value};
 
 /// Writes every value of `minted` into its field of `yaml`, the `slipmesh.yaml` `file` was read
@@ -177,8 +177,8 @@ fn document(yaml: &mut MultiDoc, index: usize) -> Result<&mut Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mesh_config::MeshConfig;
     use crate::secrets;
+    use sliplib_config::mesh_config::MeshConfig;
 
     const NINE: [&str; 9] = ["jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4"];
 
