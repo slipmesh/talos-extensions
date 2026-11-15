@@ -7,9 +7,9 @@
 //! never past the MTU, so a full-size packet carries no padding. A fragmented outer packet takes
 //! TCP in the tunnel down to a few Mbit/s, which is what this guards against.
 
-use crate::mesh_config::{AddressFamily, MeshConfig, MeshLink, NodeEntry};
 use crate::secrets::{ResolvedSecrets, link_key};
 use anyhow::{Context, Result, bail, ensure};
+use sliplib_config::mesh_config::{AddressFamily, MeshConfig, MeshLink, NodeEntry};
 use std::net::IpAddr;
 
 /// An uplink's MTU when `nodes[].uplink_mtu` does not say.

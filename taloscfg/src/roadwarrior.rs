@@ -3,10 +3,10 @@
 //! `slipmesh.yaml` is `edit`'s.
 
 use crate::addressing;
-use crate::mesh_config::{MeshConfig, RoadwarriorClient, RoadwarriorPool};
 use crate::secrets::ResolvedSecrets;
 use anyhow::{Context, Result, bail};
 use sliplib_config::Obfuscation;
+use sliplib_config::mesh_config::{MeshConfig, RoadwarriorClient, RoadwarriorPool};
 use sliplib_secrets::wireguard::PrivateKey;
 use std::net::{IpAddr, Ipv4Addr};
 

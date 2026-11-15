@@ -12,9 +12,9 @@
 //!   rendering node A's config requires already knowing node B's resolved private key, not just
 //!   A's own.
 
-use crate::mesh_config::MeshConfig;
 use crate::obfuscation_gen;
 use sliplib_config::Obfuscation;
+use sliplib_config::mesh_config::MeshConfig;
 use sliplib_secrets::wireguard::PrivateKey;
 use std::collections::HashMap;
 

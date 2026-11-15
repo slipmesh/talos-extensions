@@ -4,8 +4,8 @@
 
 use crate::render;
 use crate::secrets::ResolvedSecrets;
-use crate::slipmesh_file::{GENERATED, HostDocument, SlipmeshFile};
 use anyhow::{Context, Result, bail};
+use sliplib_config::slipmesh_file::{GENERATED, HostDocument, SlipmeshFile};
 use sliplib_config::talos::{self, ConfigFile, ExtensionServiceConfig, Identity};
 use sliplib_yaml::Mapping;
 

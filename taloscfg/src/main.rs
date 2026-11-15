@@ -12,11 +12,12 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use sliplib_config::mesh_config;
+use sliplib_config::slipmesh_file::SlipmeshFile;
 use sliplib_secrets::wireguard::PrivateKey;
 use sliplib_yaml::MultiDoc;
 use std::path::{Path, PathBuf};
-use taloscfg::slipmesh_file::SlipmeshFile;
-use taloscfg::{defaults, edit, mesh_config, patch_file, roadwarrior, secrets};
+use taloscfg::{defaults, edit, patch_file, roadwarrior, secrets};
 
 #[derive(Parser)]
 #[command(
