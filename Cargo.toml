@@ -27,12 +27,12 @@ minijinja = { version = "3.1.0", default-features = false, features = ["builtins
 base64 = "0.23.1"
 # Ours, and not published to crates.io. By commit until the sliplib release that has what
 # `taloscfg` reads the file with; by its tag from then on.
-sliplib-config = { git = "https://github.com/slipmesh/sliplib", rev = "47be3785775829d7a8cb63ef66cf58f294c705cc" }
-sliplib-mesh = { git = "https://github.com/slipmesh/sliplib", rev = "47be3785775829d7a8cb63ef66cf58f294c705cc" }
-sliplib-net = { git = "https://github.com/slipmesh/sliplib", rev = "47be3785775829d7a8cb63ef66cf58f294c705cc" }
-sliplib-runtime = { git = "https://github.com/slipmesh/sliplib", rev = "47be3785775829d7a8cb63ef66cf58f294c705cc" }
-sliplib-secrets = { git = "https://github.com/slipmesh/sliplib", rev = "47be3785775829d7a8cb63ef66cf58f294c705cc" }
-sliplib-yaml = { git = "https://github.com/slipmesh/sliplib", rev = "47be3785775829d7a8cb63ef66cf58f294c705cc" }
+sliplib-config = { git = "https://github.com/slipmesh/sliplib", rev = "d934b2029415d938a2441a54e687ba7eb605ca95" }
+sliplib-mesh = { git = "https://github.com/slipmesh/sliplib", rev = "d934b2029415d938a2441a54e687ba7eb605ca95" }
+sliplib-net = { git = "https://github.com/slipmesh/sliplib", rev = "d934b2029415d938a2441a54e687ba7eb605ca95" }
+sliplib-runtime = { git = "https://github.com/slipmesh/sliplib", rev = "d934b2029415d938a2441a54e687ba7eb605ca95" }
+sliplib-secrets = { git = "https://github.com/slipmesh/sliplib", rev = "d934b2029415d938a2441a54e687ba7eb605ca95" }
+sliplib-yaml = { git = "https://github.com/slipmesh/sliplib", rev = "d934b2029415d938a2441a54e687ba7eb605ca95" }
 futures = "0.3.34"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }
