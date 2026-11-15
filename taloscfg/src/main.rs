@@ -1,23 +1,21 @@
-//! `generate`: reads `slipmesh.yaml`, writes whatever secrets the topology lacks into the fields of
-//! `slipmesh.yaml` they belong to, and the reference templates of the ones it does not set (see
-//! `defaults`) as documents of their own, computes every target node's `awg`/`router` config,
-//! validates each through the real daemon's own `validate()` (not a re-implementation - see the
-//! lib-target refactor this crate depends on), and writes `patches/<node>.yaml`: the `patch`
-//! documents aimed at that node, then the generated `ExtensionServiceConfig` documents. A patch
-//! file is output only - nothing in it is read back. `--check`/`--diff` both stop short of
-//! writing; `--diff` also prints what would change.
+//! `generate`: reads `slipmesh.yaml`, computes every target node's `awg`/`router` config through
+//! `sliplib-mesh`, which checks each the way the daemon would, and writes `patches/<node>.yaml`:
+//! the `patch` documents aimed at that node, then the generated `ExtensionServiceConfig`
+//! documents. It only reads `slipmesh.yaml`: what the file lacks is refused, with the command that
+//! writes it. A patch file is output only - nothing in it is read back. `--check`/`--diff` both
+//! stop short of writing; `--diff` also prints what would change.
 //!
 //! `validate`/`diff`/`apply` are deliberately not separate subcommands: `generate`'s own
 //! `--check`/`--diff` flags already cover them.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use sliplib_config::mesh_config;
+use sliplib_config::mesh_config::missing_defaults;
 use sliplib_config::slipmesh_file::SlipmeshFile;
-use sliplib_secrets::wireguard::PrivateKey;
+use sliplib_mesh::secrets::{MissingSecret, ResolvedSecrets};
 use sliplib_yaml::MultiDoc;
 use std::path::{Path, PathBuf};
-use taloscfg::{defaults, edit, patch_file, roadwarrior, secrets};
+use taloscfg::{defaults, patch_file};
 
 #[derive(Parser)]
 #[command(
@@ -35,8 +33,8 @@ struct Cli {
 enum Command {
     /// Compute and write patches/<node>.yaml for one or every node in slipmesh.yaml.
     Generate {
-        /// Only this node's patch file, instead of every node's. Secrets are still minted for the
-        /// whole topology: a link's two ends need the same ones.
+        /// Only this node's patch file, instead of every node's. Only the secrets this node's
+        /// config needs have to be written in slipmesh.yaml.
         #[arg(long)]
         node: Option<String>,
         /// Validate only, don't write anything to disk.
@@ -50,81 +48,9 @@ enum Command {
         #[arg(long, default_value = "patches")]
         patches_dir: PathBuf,
     },
-    /// Add a client to a roadwarriors pool in slipmesh.yaml.
-    RwAdd {
-        /// Which roadwarriors pool (its document's `name`, e.g. `plain`).
-        #[arg(long = "if")]
-        if_: String,
-        /// Client name (must not already exist in the pool).
-        #[arg(long)]
-        name: String,
-        /// Comma-separated CIDRs (v4/v6 mixed OK). A bare address gets /32 (v4) or /128 (v6).
-        #[arg(long = "allowed-ips")]
-        allowed_ips: String,
-        /// Client already has its own keypair - only its public half is ever given to us.
-        #[arg(long = "public-key")]
-        public_key: Option<String>,
-        /// The client's Endpoint: one of the pool's node_hostnames (default: the first one), or
-        /// any other host or address taken as written, the pool's listen_port added when it
-        /// carries no port of its own.
-        #[arg(long)]
-        endpoint: Option<String>,
-        /// Print a ready-to-import client config to stdout.
-        #[arg(long)]
-        export: bool,
-        /// Print the client config as an in-terminal QR code too.
-        #[arg(long)]
-        qr: bool,
-        /// Swap dark/light QR modules. A dark-themed terminal renders "dark" modules as the
-        /// foreground text color and "light" ones as the background - visually the opposite of
-        /// standard (dark-on-light) QR polarity. Confirmed: the official WireGuard app's own
-        /// scanner rejects that, while AmneziaWG's and a plain camera don't care either way.
-        #[arg(long)]
-        invert: bool,
-        /// Write the generated private key into the client's entry in place of its public key, so
-        /// rw-inspect can re-render the full config later.
-        #[arg(long = "keep-private")]
-        keep_private: bool,
-        #[arg(long, default_value = "slipmesh.yaml")]
-        config: PathBuf,
-    },
-    /// Remove a client from a roadwarriors pool in slipmesh.yaml.
-    RwDel {
-        #[arg(long = "if")]
-        if_: String,
-        #[arg(long)]
-        name: String,
-        #[arg(long, default_value = "slipmesh.yaml")]
-        config: PathBuf,
-    },
-    /// Re-render an existing client's config/QR without changing slipmesh.yaml.
-    RwInspect {
-        #[arg(long = "if")]
-        if_: String,
-        #[arg(long)]
-        name: String,
-        /// This client's private key, if you have it and rw-add did not keep it - fills in the
-        /// config in full instead of a placeholder.
-        #[arg(long = "private-key")]
-        private_key: Option<PrivateKey>,
-        /// The client's Endpoint: one of the pool's node_hostnames (default: the first one), or
-        /// any other host or address taken as written, the pool's listen_port added when it
-        /// carries no port of its own.
-        #[arg(long)]
-        endpoint: Option<String>,
-        #[arg(long)]
-        export: bool,
-        #[arg(long)]
-        qr: bool,
-        /// Swap dark/light QR modules. A dark-themed terminal renders "dark" modules as the
-        /// foreground text color and "light" ones as the background - visually the opposite of
-        /// standard (dark-on-light) QR polarity. Confirmed: the official WireGuard app's own
-        /// scanner rejects that, while AmneziaWG's and a plain camera don't care either way.
-        #[arg(long)]
-        invert: bool,
-        #[arg(long, default_value = "slipmesh.yaml")]
-        config: PathBuf,
-    },
+    /// Print the `patch` document holding a service's reference template, to add to
+    /// slipmesh.yaml.
+    Template { service: defaults::Service },
 }
 
 fn main() -> Result<()> {
@@ -137,184 +63,16 @@ fn main() -> Result<()> {
             config,
             patches_dir,
         } => generate(node.as_deref(), check, diff, &config, &patches_dir),
-        Command::RwAdd {
-            if_,
-            name,
-            allowed_ips,
-            public_key,
-            endpoint,
-            export,
-            qr,
-            invert,
-            keep_private,
-            config,
-        } => rw_add(
-            &if_,
-            &name,
-            &allowed_ips,
-            public_key.as_deref(),
-            endpoint.as_deref(),
-            export,
-            qr,
-            invert,
-            keep_private,
-            &config,
-        ),
-        Command::RwDel { if_, name, config } => rw_del(&if_, &name, &config),
-        Command::RwInspect {
-            if_,
-            name,
-            private_key,
-            endpoint,
-            export,
-            qr,
-            invert,
-            config,
-        } => rw_inspect(
-            &if_,
-            &name,
-            private_key.as_ref(),
-            endpoint.as_deref(),
-            export,
-            qr,
-            invert,
-            &config,
-        ),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn rw_add(
-    if_: &str,
-    name: &str,
-    allowed_ips: &str,
-    public_key: Option<&str>,
-    endpoint: Option<&str>,
-    export: bool,
-    qr: bool,
-    invert: bool,
-    keep_private: bool,
-    config_path: &Path,
-) -> Result<()> {
-    let (mut yaml, file) = read_slipmesh(config_path)?;
-    let topology = file.topology();
-    let document = pool_document(&file, topology, if_)?;
-    // Minted and written in along with the client: a pool key minted for the exported config has
-    // to be the one `generate` puts on the wire, not a key that dies with this process.
-    let (secrets, minted) = settle_secrets(config_path, &mut yaml, &file, false)?;
-
-    let added = roadwarrior::add(
-        topology,
-        &secrets,
-        if_,
-        name,
-        allowed_ips,
-        public_key,
-        endpoint,
-        export,
-        qr,
-        keep_private,
-    )?;
-    edit::add_client(&mut yaml, document, &added.client)?;
-    write_edits(config_path, &yaml)?;
-    report_minted(&minted, config_path);
-    println!(
-        "added {name:?} to roadwarriors pool {if_:?} in {}",
-        config_path.display()
-    );
-
-    if let Some((_, text)) = added.config {
-        if export {
-            println!("\n{text}");
-        }
-        if qr {
-            println!("\n{}", roadwarrior::render_qr(&text, invert)?);
+        Command::Template { service } => {
+            print!("{}", defaults::document(service));
+            Ok(())
         }
     }
-    Ok(())
 }
 
-fn rw_del(if_: &str, name: &str, config_path: &Path) -> Result<()> {
-    let (mut yaml, file) = read_slipmesh(config_path)?;
-    let topology = file.topology();
-    let document = pool_document(&file, topology, if_)?;
-
-    let (index, client) = roadwarrior::find_client(topology, if_, name)?;
-    edit::remove_client(&mut yaml, document, index)?;
-    write_edits(config_path, &yaml)?;
-    println!(
-        "removed {name:?} (public_key {:?}) from roadwarriors pool {if_:?} in {}",
-        client.public_key,
-        config_path.display()
-    );
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn rw_inspect(
-    if_: &str,
-    name: &str,
-    private_key: Option<&PrivateKey>,
-    endpoint: Option<&str>,
-    export: bool,
-    qr: bool,
-    invert: bool,
-    config_path: &Path,
-) -> Result<()> {
-    let (_, file) = read_slipmesh(config_path)?;
-    let topology = file.topology();
-    let (secrets, minted) = secrets::resolve(topology);
-    // Only this pool's: a config rendered with a key that is never written down would not connect.
-    anyhow::ensure!(
-        !minted.pools.iter().any(|pool| pool.name == if_),
-        "{} lacks the secrets of pool {if_:?} - run `slipmesh-taloscfg generate` to mint and \
-         write them",
-        config_path.display()
-    );
-
-    let text = roadwarrior::inspect(topology, &secrets, if_, name, private_key, endpoint)?;
-
-    // Inspecting is pointless with no output at all - default to --export if neither flag was
-    // given, unlike rw-add (where registering a client without ever displaying it is legitimate).
-    let export = export || !qr;
-    if export {
-        println!("{text}");
-    }
-    if qr {
-        println!("\n{}", roadwarrior::render_qr(&text, invert)?);
-    }
-    Ok(())
-}
-
-/// `slipmesh.yaml`, parsed for editing, and read.
-fn read_slipmesh(config_path: &Path) -> Result<(MultiDoc, SlipmeshFile)> {
-    let yaml = MultiDoc::read(config_path)?;
-    let file =
-        SlipmeshFile::read(&yaml).with_context(|| format!("reading {}", config_path.display()))?;
-    Ok((yaml, file))
-}
-
-/// The position of pool `name`'s document, erring with the pools there are.
-fn pool_document(
-    file: &SlipmeshFile,
-    topology: &mesh_config::MeshConfig,
-    name: &str,
-) -> Result<usize> {
-    roadwarrior::find_pool(topology, name)?;
-    file.pool_document(name)
-        .with_context(|| format!("pool {name:?} is in the topology but in no document"))
-}
-
-/// Writes `yaml` with its edits to `config_path` - once the result still reads as a valid
-/// `slipmesh.yaml`, so a bad edit is refused instead of written.
-fn write_edits(config_path: &Path, yaml: &MultiDoc) -> Result<()> {
-    write_text(config_path, &yaml.text()?)
-}
-
-fn write_text(config_path: &Path, updated: &str) -> Result<()> {
-    SlipmeshFile::parse(updated)
-        .context("the edited slipmesh.yaml does not read back - not written")?;
-    sliplib_yaml::replace_file(config_path, updated)
+fn read_slipmesh(config_path: &Path) -> Result<SlipmeshFile> {
+    SlipmeshFile::read(&MultiDoc::read(config_path)?)
+        .with_context(|| format!("reading {}", config_path.display()))
 }
 
 /// One host's patch file: what is on disk now, and what it would become.
@@ -332,51 +90,42 @@ fn generate(
     config_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
-    let (mut yaml, file) = read_slipmesh(config_path)?;
+    let file = read_slipmesh(config_path)?;
     if let Some(n) = node {
         anyhow::ensure!(file.hosts().contains(&n), "unknown node {n:?}");
     }
-
-    let (resolved, minted) = settle_secrets(config_path, &mut yaml, &file, check || diff)?;
-    let unset = edit::missing_defaults(file.topology());
-    let unset_keys = unset
+    // The nodes are told these, so a default the file does not show is refused rather than sent.
+    let unset: Vec<&str> = missing_defaults(file.topology())
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
+    anyhow::ensure!(
+        unset.is_empty(),
+        "{} lacks {} - `slipmesh mint` writes their defaults",
+        config_path.display(),
+        unset.join(", ")
+    );
+    // A node a template does not reach was aimed past; a template no document sets at all was
+    // left out, and its service would start on every node without one.
+    let untemplated: Vec<String> = defaults::missing(&file)
         .iter()
-        .map(|(key, _)| *key)
-        .collect::<Vec<_>>()
-        .join(", ");
+        .map(|service| format!("`slipmesh-taloscfg template {service}`"))
+        .collect();
     anyhow::ensure!(
-        !check || unset.is_empty(),
-        "{} lacks {unset_keys} - run `slipmesh-taloscfg generate` to write their defaults",
-        config_path.display()
+        untemplated.is_empty(),
+        "{} gives no node a template for a service that takes one - {} prints the document to add",
+        config_path.display(),
+        untemplated.join(" and ")
     );
-    edit::write_defaults(&mut yaml, &file, &unset)?;
-    let added = defaults::missing(&file);
-    let services: Vec<&str> = added.iter().map(|d| d.service).collect();
-    anyhow::ensure!(
-        !check || added.is_empty(),
-        "{} lacks the default templates of {services:?} - run `slipmesh-taloscfg generate` to \
-         write them",
-        config_path.display()
-    );
-    let updated = defaults::append(&yaml.text()?, &added);
-    let file = if added.is_empty() {
-        file
-    } else {
-        SlipmeshFile::parse(&updated).context("slipmesh.yaml with the default templates")?
-    };
+    let resolved = sliplib_mesh::secrets::read(file.topology());
     let targets = match node {
         Some(n) => vec![n],
         None => file.hosts(),
     };
 
     // Every host is rendered and validated before anything is written, so a host that fails
-    // leaves slipmesh.yaml and the patch files as they were rather than half of them new.
+    // leaves the patch files as they were rather than half of them new.
     let hosts = render_hosts(&file, &resolved, &targets, patches_dir)?;
-    if !diff && (!minted.is_empty() || !added.is_empty() || !unset.is_empty()) {
-        write_text(config_path, &updated)?;
-        report_minted(&minted, config_path);
-    }
-    report_defaults(config_path, diff, &services, &unset_keys);
 
     for host in &hosts {
         if diff {
@@ -399,66 +148,17 @@ fn generate(
     Ok(())
 }
 
-/// The whole topology's secrets, with whatever they had to mint recorded in `yaml`, in the fields
-/// it belongs to, and named in the second value - empty when nothing was minted. On a dry run,
-/// needing to mint anything is an error instead: a value that is never written down would differ
-/// on the next run.
-fn settle_secrets(
-    config_path: &Path,
-    yaml: &mut MultiDoc,
-    file: &SlipmeshFile,
-    dry_run: bool,
-) -> Result<(sliplib_mesh::secrets::ResolvedSecrets, String)> {
-    let (resolved, minted) = secrets::resolve(file.topology());
-    let routes = minted.routes().join(", ");
-    if minted.is_empty() {
-        return Ok((resolved, routes));
-    }
-    anyhow::ensure!(
-        !dry_run,
-        "{} lacks {routes} - run `slipmesh-taloscfg generate` to mint and write them",
-        config_path.display()
-    );
-    edit::record(yaml, file, &minted)?;
-    Ok((resolved, routes))
-}
-
-/// The default templates and keys this run wrote into `slipmesh.yaml`, or with `diff` would write.
-fn report_defaults(config_path: &Path, diff: bool, services: &[&str], unset_keys: &str) {
-    let path = config_path.display();
-    if !services.is_empty() {
-        if diff {
-            println!("{path}: the default templates of {services:?} would be added");
-        } else {
-            println!("added the default templates of {services:?} to {path}");
-        }
-    }
-    if !unset_keys.is_empty() {
-        if diff {
-            println!("{path}: {unset_keys} would be written with their defaults");
-        } else {
-            println!("wrote the defaults of {unset_keys} into {path}");
-        }
-    }
-}
-
-fn report_minted(routes: &str, config_path: &Path) {
-    if !routes.is_empty() {
-        println!("minted {routes} into {}", config_path.display());
-    }
-}
-
 /// Every target host's patch file, rendered and validated in memory.
 fn render_hosts(
     file: &SlipmeshFile,
-    resolved: &sliplib_mesh::secrets::ResolvedSecrets,
+    resolved: &ResolvedSecrets,
     targets: &[&str],
     patches_dir: &Path,
 ) -> Result<Vec<HostFile>> {
     targets
         .iter()
         .map(|&host| {
-            let after = patch_file::render(file, resolved, host)?;
+            let after = patch_file::render(file, resolved, host).map_err(with_its_cure)?;
             let path = patches_dir.join(format!("{host}.yaml"));
             // A missing file is the from-scratch case; anything else must not read as "there was
             // nothing here", or the diff would show a whole file where one line changed.
@@ -471,6 +171,15 @@ fn render_hosts(
             })
         })
         .collect()
+}
+
+/// `refusal`, with the command that creates the secret when a missing one is what it is about.
+fn with_its_cure(refusal: anyhow::Error) -> anyhow::Error {
+    if refusal.is::<MissingSecret>() {
+        anyhow::anyhow!("{refusal:#} - `slipmesh mint` creates it")
+    } else {
+        refusal
+    }
 }
 
 /// A unified diff of one host's patch file with its secrets masked, `None` when nothing would
@@ -509,6 +218,8 @@ fn print_diff(host: &str, before: &str, after: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sliplib_secrets::wireguard::PrivateKey;
+    use std::sync::LazyLock;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
@@ -555,19 +266,35 @@ mod tests {
         dir
     }
 
-    const SLIPMESH: &str = r#"slipmesh:
+    const OBFUSCATION: &str =
+        ", obfuscation: {jc: 4, jmin: 10, jmax: 50, s1: 15, s2: 16, h1: 5, h2: 6, h3: 7, h4: 8}";
+
+    /// A key generated for these tests alone.
+    fn key() -> String {
+        PrivateKey::generate().expose().to_owned()
+    }
+
+    /// The key of node `a` in `SLIPMESH`.
+    static KEY_OF_A: LazyLock<String> = LazyLock::new(key);
+
+    /// A file with everything `slipmesh mint` writes.
+    static SLIPMESH: LazyLock<String> = LazyLock::new(|| {
+        format!(
+            r#"slipmesh:
   kind: network
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
+  loopback_networks: {{ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}}
+  interface_prefix: {{mesh: mesh-}}
+  route_proto_id: {{egress: 152}}
 nodes:
-  - {name: a, node_id: "198.51.100.1", endpoint: "192.0.2.10"}
-  - {name: b, node_id: "198.51.100.2", endpoint: "192.0.2.11"}
-  - {name: c, node_id: "198.51.100.3"}
-  - {name: d, node_id: "198.51.100.4"}
+  - {{name: a, node_id: "198.51.100.1", endpoint: "192.0.2.10", mesh_private_key: "{a}"}}
+  - {{name: b, node_id: "198.51.100.2", endpoint: "192.0.2.11", mesh_private_key: "{b}"}}
+  - {{name: c, node_id: "198.51.100.3", mesh_private_key: "{c}"}}
+  - {{name: d, node_id: "198.51.100.4", mesh_private_key: "{d}"}}
 mesh:
   links:
-    - {pair: [a, b], port: 51820}
+    - {{pair: [a, b], port: 51820{OBFUSCATION}}}
 ---
 slipmesh:
   kind: patch
@@ -576,7 +303,13 @@ apiVersion: v1alpha1
 kind: UnattendedInstallConfig
 installer:
     disk: /dev/vda
-"#;
+"#,
+            a = *KEY_OF_A,
+            b = key(),
+            c = key(),
+            d = key(),
+        )
+    });
 
     struct Paths {
         config: PathBuf,
@@ -590,14 +323,6 @@ installer:
 
         fn patch(&self, host: &str) -> Option<String> {
             std::fs::read_to_string(self.patches.join(format!("{host}.yaml"))).ok()
-        }
-
-        fn config(&self) -> String {
-            std::fs::read_to_string(&self.config).unwrap()
-        }
-
-        fn topology(&self) -> mesh_config::MeshConfig {
-            SlipmeshFile::parse(&self.config()).unwrap().into_topology()
         }
 
         /// Every file a run could have written, with what it holds.
@@ -614,47 +339,32 @@ installer:
         }
     }
 
-    fn setup(extra_documents: &str) -> Paths {
+    /// A file holding `content`, with where its patch files go.
+    fn holding(content: &str) -> Paths {
         let dir = temp_dir();
         let config = dir.join("slipmesh.yaml");
-        std::fs::write(&config, format!("{SLIPMESH}{extra_documents}")).unwrap();
+        std::fs::write(&config, content).unwrap();
         Paths {
             config,
             patches: dir.join("patches"),
         }
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn an_edit_through_a_symlink_edits_its_target() {
-        let paths = setup("");
-        let target = paths.config.with_file_name("target.yaml");
-        std::fs::rename(&paths.config, &target).unwrap();
-        std::os::unix::fs::symlink(&target, &paths.config).unwrap();
-        paths.generate(None, false, false).unwrap();
-        assert!(
-            std::fs::symlink_metadata(&paths.config)
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        assert!(
-            std::fs::read_to_string(&target)
-                .unwrap()
-                .contains("mesh_private_key")
-        );
+    /// `network`, which is `SLIPMESH` or an edit of it, with both reference templates for every
+    /// host and then `extra_documents`.
+    fn setup_from(network: &str, extra_documents: &str) -> Paths {
+        let router = defaults::document(defaults::Service::Router);
+        let nftables = defaults::document(defaults::Service::Nftables);
+        holding(&format!(
+            "{network}---\n{router}---\n{nftables}{extra_documents}"
+        ))
     }
 
-    #[test]
-    fn generate_writes_what_it_minted_into_slipmesh_yaml() {
-        let paths = setup("");
-        paths.generate(None, false, false).unwrap();
-        let topology = paths.topology();
-        for node in &topology.nodes {
-            assert!(node.mesh_private_key.is_some(), "{}", node.name);
-        }
-        assert!(topology.mesh.links[0].obfuscation.h1.is_some());
+    fn setup(extra_documents: &str) -> Paths {
+        setup_from(&SLIPMESH, extra_documents)
     }
+
+    const MODES: [(bool, bool); 3] = [(false, false), (true, false), (false, true)];
 
     #[test]
     fn every_written_file_opens_with_the_header() {
@@ -668,15 +378,141 @@ installer:
         }
     }
 
+    /// A pool on node `a`, with `settings` after its required ones.
+    fn pool(settings: &str) -> String {
+        format!(
+            "---\nslipmesh:\n  kind: roadwarriors\nname: north\nnode_hostnames: [a]\naddress: \"203.0.113.1/27\"\nlisten_port: 51900\n{settings}"
+        )
+    }
+
     #[test]
-    fn a_dry_run_that_would_mint_a_secret_fails_and_writes_nothing() {
-        for (check, diff) in [(true, false), (false, true)] {
-            let paths = setup("");
-            let before = paths.config();
-            let err = paths.generate(None, check, diff).unwrap_err();
-            assert!(format!("{err:#}").contains("generate"), "{err:#}");
-            assert_eq!(paths.config(), before);
-            assert!(!paths.patches.exists());
+    fn a_file_lacking_a_secret_is_refused_in_every_mode_naming_the_command_that_creates_it() {
+        let without = |part: &str| {
+            assert!(SLIPMESH.contains(part), "{part}");
+            SLIPMESH.replace(part, "")
+        };
+        let key_of_a = format!(", mesh_private_key: \"{}\"", *KEY_OF_A);
+        let pool_key = format!("private_key: \"{}\"\n", key());
+        let key_of_a_is_not_set = "node \"a\": mesh_private_key is not set";
+        let cases = [
+            (key_of_a_is_not_set, without(&key_of_a), String::new(), "a"),
+            (key_of_a_is_not_set, without(&key_of_a), String::new(), "b"),
+            (
+                "mesh link a-b: obfuscation lacks",
+                without(OBFUSCATION),
+                String::new(),
+                "a",
+            ),
+            (
+                "roadwarriors pool \"north\": private_key is not set",
+                SLIPMESH.to_owned(),
+                pool("plain: true\n"),
+                "a",
+            ),
+            (
+                "roadwarriors pool \"north\": obfuscation lacks",
+                SLIPMESH.to_owned(),
+                pool(&pool_key),
+                "a",
+            ),
+        ];
+        for (missing, network, extra, node) in cases {
+            for (check, diff) in MODES {
+                let paths = setup_from(&network, &extra);
+                let before = paths.snapshot();
+                let err = paths.generate(Some(node), check, diff).unwrap_err();
+                let err = format!("{err:#}");
+                assert!(err.contains(missing), "{missing}: {err}");
+                assert!(err.contains("`slipmesh mint`"), "{missing}: {err}");
+                assert_eq!(paths.snapshot(), before, "{missing}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_key_that_does_not_decode_is_refused_naming_its_node_and_no_command() {
+        let network = SLIPMESH.replace(KEY_OF_A.as_str(), "not a key");
+        let err = setup_from(&network, "")
+            .generate(Some("b"), true, false)
+            .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("node \"a\": mesh_private_key"), "{err}");
+        assert!(!err.contains("slipmesh mint"), "{err}");
+    }
+
+    #[test]
+    fn a_run_for_one_node_needs_no_secret_of_a_node_it_is_not_linked_to() {
+        let key_of_d = SLIPMESH
+            .lines()
+            .find(|line| line.contains("name: d,"))
+            .and_then(|line| line.split(", mesh_private_key").nth(1))
+            .unwrap();
+        let network = SLIPMESH.replace(&format!(", mesh_private_key{key_of_d}"), "}");
+        assert_ne!(network, *SLIPMESH);
+        setup_from(&network, "")
+            .generate(Some("a"), true, false)
+            .unwrap();
+        let err = setup_from(&network, "")
+            .generate(None, true, false)
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("node \"d\""), "{err:#}");
+    }
+
+    #[test]
+    fn a_file_in_which_no_document_sets_a_template_is_refused_in_every_mode_naming_template() {
+        let router = defaults::document(defaults::Service::Router);
+        let nftables = defaults::document(defaults::Service::Nftables);
+        for (lacking, present) in [("nftables", &router), ("router", &nftables)] {
+            for (check, diff) in MODES {
+                let paths = holding(&format!("{}---\n{present}", *SLIPMESH));
+                let before = paths.snapshot();
+                let err = format!("{:#}", paths.generate(None, check, diff).unwrap_err());
+                let command = format!("`slipmesh-taloscfg template {lacking}`");
+                assert!(err.contains(&command), "{lacking}: {err}");
+                assert_eq!(paths.snapshot(), before, "{lacking}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_full_run_leaves_slipmesh_yaml_as_it_is() {
+        let paths = setup("");
+        let before = std::fs::read(&paths.config).unwrap();
+        paths.generate(None, false, false).unwrap();
+        assert_eq!(std::fs::read(&paths.config).unwrap(), before);
+    }
+
+    #[test]
+    fn a_refusal_that_no_secret_cures_names_no_command() {
+        let network = SLIPMESH.replace(
+            "  bgp_as: 64512\n",
+            "  bgp_as: 64512\n  awg_metrics_port: 0\n",
+        );
+        let err = setup_from(&network, "")
+            .generate(None, true, false)
+            .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(err.contains("awg_metrics_port"), "{err}");
+        assert!(!err.contains("slipmesh mint"), "{err}");
+    }
+
+    #[test]
+    fn a_file_without_the_prefix_and_protocol_keys_is_refused_in_every_mode_naming_them() {
+        let network = SLIPMESH
+            .replace("  interface_prefix: {mesh: mesh-}\n", "")
+            .replace("  route_proto_id: {egress: 152}\n", "");
+        for (check, diff) in MODES {
+            let paths = setup_from(&network, "");
+            let before = paths.snapshot();
+            let err = format!("{:#}", paths.generate(None, check, diff).unwrap_err());
+            for named in [
+                "cluster.interface_prefix.mesh",
+                "cluster.route_proto_id.egress",
+                "`slipmesh mint`",
+            ] {
+                assert!(err.contains(named), "{named}: {err}");
+            }
+            assert_eq!(paths.snapshot(), before);
         }
     }
 
@@ -691,105 +527,20 @@ installer:
     }
 
     #[test]
-    fn generate_writes_the_default_templates_into_slipmesh_yaml() {
-        let paths = setup("");
-        paths.generate(None, false, false).unwrap();
-        let file = SlipmeshFile::parse(&paths.config()).unwrap();
-        assert!(defaults::missing(&file).is_empty());
-        for host in ["a", "b", "c", "d"] {
-            let patch = paths.patch(host).unwrap();
-            for default in &defaults::DEFAULT_FILES {
-                assert!(patch.contains(default.mount_path), "{host}: {patch}");
-            }
+    fn a_dry_run_writes_no_patch_file() {
+        for (check, diff) in [(true, false), (false, true)] {
+            let paths = setup("");
+            paths.generate(None, check, diff).unwrap();
+            assert!(!paths.patches.exists());
         }
     }
 
-    /// The topology with its secrets written down and the default templates not.
-    fn setup_without_defaults() -> Paths {
+    #[test]
+    fn two_runs_render_the_same() {
         let paths = setup("");
-        paths.generate(None, false, false).unwrap();
-        let config = paths.config();
-        let first_default = config
-            .find("---\nslipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: router\n")
-            .expect(&config);
-        std::fs::write(&paths.config, &config[..first_default]).unwrap();
-        std::fs::remove_dir_all(&paths.patches).unwrap();
-        paths
-    }
-
-    #[test]
-    fn a_check_without_the_default_templates_fails_and_writes_nothing() {
-        let paths = setup_without_defaults();
-        let before = paths.snapshot();
-        let err = paths.generate(None, true, false).unwrap_err();
-        assert!(format!("{err:#}").contains("generate"), "{err:#}");
-        assert_eq!(paths.snapshot(), before);
-    }
-
-    #[test]
-    fn a_diff_without_the_default_templates_shows_them_and_writes_nothing() {
-        let paths = setup_without_defaults();
-        let before = paths.snapshot();
-        paths.generate(None, false, true).unwrap();
-        assert_eq!(paths.snapshot(), before);
-    }
-
-    /// A full run with the prefix and protocol keys taken back out of `slipmesh.yaml`.
-    fn setup_without_default_keys() -> Paths {
-        let paths = setup("");
-        paths.generate(None, false, false).unwrap();
-        let mut yaml = MultiDoc::parse(&paths.config()).unwrap();
-        let cluster = yaml.document_mut(0).unwrap()["cluster"]
-            .as_mapping_mut()
-            .unwrap();
-        cluster.shift_remove("interface_prefix");
-        cluster.shift_remove("route_proto_id");
-        std::fs::write(&paths.config, yaml.text().unwrap()).unwrap();
-        paths
-    }
-
-    #[test]
-    fn a_check_without_the_prefix_and_protocol_keys_fails_naming_them_and_writes_nothing() {
-        let paths = setup_without_default_keys();
-        let before = paths.snapshot();
-        let err = format!("{:#}", paths.generate(None, true, false).unwrap_err());
-        assert!(err.contains("cluster.interface_prefix.mesh"), "{err}");
-        assert!(err.contains("cluster.route_proto_id.egress"), "{err}");
-        assert_eq!(paths.snapshot(), before);
-    }
-
-    #[test]
-    fn a_diff_without_the_prefix_and_protocol_keys_writes_nothing() {
-        let paths = setup_without_default_keys();
-        let before = paths.snapshot();
-        paths.generate(None, false, true).unwrap();
-        assert_eq!(paths.snapshot(), before);
-    }
-
-    #[test]
-    fn a_run_that_mints_nothing_still_writes_the_keys_it_lacks() {
-        let paths = setup_without_default_keys();
-        paths.generate(None, false, false).unwrap();
-        let cluster = paths.topology().cluster;
-        assert_eq!(cluster.interface_prefix.mesh.as_deref(), Some("mesh-"));
-        assert_eq!(cluster.route_proto_id.egress, Some(152));
-    }
-
-    #[test]
-    fn a_run_that_mints_nothing_still_writes_the_templates_it_lacks() {
-        let paths = setup_without_defaults();
-        paths.generate(None, false, false).unwrap();
-        let file = SlipmeshFile::parse(&paths.config()).unwrap();
-        assert!(defaults::missing(&file).is_empty());
-    }
-
-    #[test]
-    fn two_dry_runs_render_the_same() {
-        let paths = setup("");
-        paths.generate(None, false, false).unwrap();
         let render = || {
-            let (mut yaml, file) = read_slipmesh(&paths.config).unwrap();
-            let (resolved, _) = settle_secrets(&paths.config, &mut yaml, &file, true).unwrap();
+            let file = read_slipmesh(&paths.config).unwrap();
+            let resolved = sliplib_mesh::secrets::read(file.topology());
             render_hosts(&file, &resolved, &["a", "b", "c", "d"], &paths.patches)
                 .unwrap()
                 .into_iter()
@@ -809,14 +560,10 @@ installer:
     }
 
     #[test]
-    fn regenerating_one_host_from_scratch_twice_changes_nothing() {
-        // Secrets are settled for the whole topology whichever host is rendered, so rendering a
-        // host before its peers mints their keys once rather than on every run.
+    fn a_run_for_one_host_writes_that_hosts_file_only() {
         let paths = setup("");
         paths.generate(Some("a"), false, false).unwrap();
-        let first = paths.snapshot();
-        paths.generate(Some("a"), false, false).unwrap();
-        assert_eq!(paths.snapshot(), first);
+        assert!(paths.patch("a").is_some());
         assert!(paths.patch("b").is_none());
     }
 
@@ -825,248 +572,16 @@ installer:
         let paths = setup(
             "---\nslipmesh:\n  kind: patch\n  include: [d]\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: nftables\nconfigFiles:\n  - mountPath: /etc/talos-extensions/nftables.conf.j2\n    content: |\n      table inet t { {{ bogus }} }\n",
         );
-        let before = paths.config();
         let err = paths.generate(None, false, false).unwrap_err();
         assert!(format!("{err:#}").contains("\"d\""), "{err:#}");
         for host in ["a", "b", "c", "d"] {
             assert!(paths.patch(host).is_none(), "{host} was written");
         }
-        assert_eq!(paths.config(), before, "the minted secrets were written");
     }
 
     #[test]
     fn generate_rejects_an_unknown_node() {
         let paths = setup("");
         assert!(paths.generate(Some("nonexistent"), false, false).is_err());
-    }
-
-    const POOLS: &str = r#"---
-slipmesh:
-  kind: roadwarriors
-name: first
-node_hostnames: [a]
-address: "203.0.113.1/27"
-listen_port: 51900
-clients: []
----
-slipmesh:
-  kind: roadwarriors
-name: second
-node_hostnames: [b]
-address: "203.0.113.33/27"
-listen_port: 51901
-clients:
-  - {name: carol, public_key: "CCC=", allowed_ips: ["203.0.113.42/32"]}
-"#;
-
-    /// The bytes of pool `name`'s document in `raw`, from its `---` to the next one.
-    fn pool_bounds(raw: &str, name: &str) -> std::ops::Range<usize> {
-        let named = raw
-            .find(&format!("kind: roadwarriors\nname: {name}\n"))
-            .unwrap();
-        let start = raw[..named].rfind("---").unwrap();
-        let end = raw[named..]
-            .find("\n---")
-            .map_or(raw.len(), |i| named + i + 1);
-        start..end
-    }
-
-    /// The values of `raw`'s documents, and the position among them of pool `name`.
-    fn documents_and_pool(raw: &str, name: &str) -> (Vec<sliplib_yaml::Value>, usize) {
-        let documents: Vec<_> = MultiDoc::parse(raw)
-            .unwrap()
-            .documents()
-            .iter()
-            .map(|d| d.value.clone())
-            .collect();
-        let pool = documents
-            .iter()
-            .position(|d| d["slipmesh"]["kind"] == "roadwarriors" && d["name"] == name)
-            .unwrap();
-        (documents, pool)
-    }
-
-    /// Asserts that every document but `edited` holds the same values in `after` as in `before`.
-    fn only_edited(before: &[sliplib_yaml::Value], after: &[sliplib_yaml::Value], edited: usize) {
-        assert_eq!(after.len(), before.len());
-        for (index, (before, after)) in before.iter().zip(after).enumerate() {
-            if index != edited {
-                assert_eq!(after, before, "document {index}");
-            }
-        }
-    }
-
-    fn client_names(pool: &sliplib_yaml::Value) -> Vec<&str> {
-        pool["clients"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .map(|c| c["name"].as_str().unwrap())
-            .collect()
-    }
-
-    #[test]
-    fn rw_add_edits_only_the_pools_own_document() {
-        let paths = setup(POOLS);
-        // Minted first, so that the only change the client makes is its own.
-        paths.generate(None, false, false).unwrap();
-        let (before, first) = documents_and_pool(&paths.config(), "first");
-        rw_add(
-            "first",
-            "dave",
-            "203.0.113.29",
-            Some("DDD="),
-            None,
-            false,
-            false,
-            false,
-            false,
-            &paths.config,
-        )
-        .unwrap();
-
-        let (after, _) = documents_and_pool(&paths.config(), "first");
-        only_edited(&before, &after, first);
-        assert_eq!(client_names(&after[first]), ["dave"]);
-    }
-
-    #[test]
-    fn rw_del_edits_only_the_pools_own_document() {
-        let paths = setup(POOLS);
-        let (before, second) = documents_and_pool(&paths.config(), "second");
-
-        rw_del("second", "carol", &paths.config).unwrap();
-
-        let (after, _) = documents_and_pool(&paths.config(), "second");
-        only_edited(&before, &after, second);
-        assert!(client_names(&after[second]).is_empty());
-    }
-
-    #[test]
-    fn rw_add_to_an_unknown_pool_names_the_pools_there_are() {
-        let paths = setup(POOLS);
-        let err = rw_add(
-            "third",
-            "dave",
-            "203.0.113.29",
-            Some("DDD="),
-            None,
-            false,
-            false,
-            false,
-            false,
-            &paths.config,
-        )
-        .unwrap_err();
-        let err = format!("{err:#}");
-        assert!(err.contains("first") && err.contains("second"), "{err}");
-    }
-
-    #[test]
-    fn rw_add_writes_down_the_pool_key_its_exported_config_was_built_with() {
-        // A pool key that went into the exported config but not into slipmesh.yaml would be minted
-        // anew by the next `generate`, and the exported config would never connect.
-        let paths = setup(POOLS);
-        rw_add(
-            "first",
-            "dave",
-            "203.0.113.29",
-            None,
-            None,
-            true,
-            false,
-            false,
-            false,
-            &paths.config,
-        )
-        .unwrap();
-
-        let topology = paths.topology();
-        assert!(topology.roadwarriors[0].private_key.is_some());
-        assert_eq!(topology.roadwarriors[0].clients[0].name, "dave");
-        // A dry run refuses to mint anything.
-        paths.generate(None, false, true).unwrap();
-    }
-
-    #[test]
-    fn rw_add_keeping_the_private_key_lets_rw_inspect_render_the_config_in_full() {
-        let paths = setup(POOLS);
-        rw_add(
-            "first",
-            "dave",
-            "203.0.113.29",
-            None,
-            None,
-            false,
-            false,
-            false,
-            true,
-            &paths.config,
-        )
-        .unwrap();
-
-        let config = paths.config();
-        let first = &config[pool_bounds(&config, "first")];
-        assert!(
-            first.contains("private_key:") && !first.contains("public_key"),
-            "{first}"
-        );
-        let topology = paths.topology();
-        let dave = &topology.roadwarriors[0].clients[0];
-        let private = dave.private_key.as_ref().unwrap();
-        assert_eq!(private.public_key().unwrap(), dave.public_key);
-        let (secrets, _) = secrets::resolve(&topology);
-        let text = roadwarrior::inspect(&topology, &secrets, "first", "dave", None, None).unwrap();
-        assert!(
-            text.contains(&format!("PrivateKey = {}", private.expose())),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn rw_inspect_needs_the_pool_key_to_be_written_down_already() {
-        let paths = setup(POOLS);
-        let inspect = || {
-            rw_inspect(
-                "second",
-                "carol",
-                None,
-                None,
-                true,
-                false,
-                false,
-                &paths.config,
-            )
-        };
-        let before = paths.config();
-        let err = inspect().unwrap_err();
-        assert!(format!("{err:#}").contains("generate"), "{err:#}");
-        assert_eq!(paths.config(), before);
-
-        paths.generate(None, false, false).unwrap();
-        inspect().unwrap();
-    }
-
-    #[test]
-    fn rw_inspect_needs_no_secret_but_its_pools() {
-        let paths = setup(POOLS);
-        paths.generate(None, false, false).unwrap();
-        let mut unkeyed = MultiDoc::parse(&paths.config()).unwrap();
-        unkeyed.document_mut(0).unwrap()["nodes"]
-            .as_sequence_mut()
-            .unwrap()
-            .push(sliplib_yaml::from_str("{name: e, node_id: \"198.51.100.5\"}").unwrap());
-        std::fs::write(&paths.config, unkeyed.text().unwrap()).unwrap();
-        rw_inspect(
-            "second",
-            "carol",
-            None,
-            None,
-            true,
-            false,
-            false,
-            &paths.config,
-        )
-        .unwrap();
     }
 }

@@ -22,12 +22,11 @@ router.workspace = true
 serde.workspace = true
 sliplib-config.workspace = true
 sliplib-mesh.workspace = true
-sliplib-net.workspace = true
-sliplib-secrets.workspace = true
 sliplib-yaml.workspace = true
 sha2 = "0.11.1"
 similar = "3.2.1"
-rand = "0.10.3"
-qrcode.workspace = true
 anstream = "1.0.0"
 anstyle = "1.0.14"
+
+[dev-dependencies]
+sliplib-secrets.workspace = true
