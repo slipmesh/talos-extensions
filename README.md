@@ -464,8 +464,17 @@ every node a service's reference template, to add to the file and edit there:
 slipmesh-taloscfg template router    # or: nftables
 ```
 
-A node no `router` template reaches is refused by `generate`, since `router` does not run without
-one; a node without an `nftables` template gets no ruleset.
+It prints the document alone, without a leading `---`:
+
+```sh
+{ echo ---; slipmesh-taloscfg template nftables; } >> slipmesh.yaml
+```
+
+A file in which no document sets a service's template for any node is refused by `generate` in
+every mode, naming the command above. A document aimed at some nodes only counts as setting it: the
+nodes it leaves out go without, as whoever aimed it decided - a node without an `nftables` template
+gets no ruleset, and one no `router` template reaches is refused, since `router` does not run
+without one.
 
 ### Mesh MTU
 
@@ -609,12 +618,14 @@ A `kind: nftables` document is refused, with where its ruleset went: into the fi
 `ExtensionServiceConfig` `nftables`, with the same `include`/`exclude`. A `{{ name }}` in the
 ruleset is already template syntax; a `{%` or `{#` in it now opens a tag or a comment.
 
-`generate` no longer writes into `slipmesh.yaml`, and `rw-add`, `rw-del` and `rw-inspect` are gone:
+`generate` no longer writes into `slipmesh.yaml`, and `rw-add`, `rw-del` and `rw-inspect` are gone.
+What wrote is now [`slipmesh`](https://github.com/slipmesh/sliplib#slipmesh), installed from the
+release assets of its repository or with `cargo install` from a checkout of it:
 
 | was | is |
 | --- | --- |
 | `generate` creating missing keys and obfuscation, and writing unset network defaults | `slipmesh mint` |
-| `generate` writing the reference templates into the file | `slipmesh-taloscfg template <service>`, added by hand |
+| `generate` writing the reference templates into a file that sets none | `generate` refuses the file and names `slipmesh-taloscfg template <service>`, whose output is added by hand |
 | `rw-add`, `rw-del`, `rw-inspect` | `slipmesh rw add`, `rw del`, `rw inspect` |
 
 Install it with `cargo install --path taloscfg`.
