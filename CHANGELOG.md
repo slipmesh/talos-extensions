@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-beta.0+sm.3] - 2026-11-15
+
+### Added ✨
+
+- Read slipmesh.yaml and never write it (#123)
+
 ## [1.15.0-beta.0+sm.2] - 2026-11-15
 
 ### Build system 🛠️
