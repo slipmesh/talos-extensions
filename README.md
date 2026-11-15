@@ -530,8 +530,8 @@ where those are kept. Writing anything into it rewrites the whole file from its 
 and documents of only comments, are not kept, and the layout becomes that of the YAML serializer.
 A run that mints nothing leaves the file as it is.
 
-Each rendered config is validated through the real daemon's own `validate()` - the daemons are
-depended on as libraries here, so there is no second implementation to drift.
+Each node's configs are rendered and validated by `sliplib-mesh`, on the config types the daemons
+read, so the generator and the daemons check one definition.
 
 ```sh
 slipmesh-taloscfg generate                      # every node, into ./patches
@@ -643,8 +643,9 @@ cargo deny --locked check licenses bans sources
 ```
 
 No mocking framework - pure logic (`config::validate`, `interface::diff_peers`,
-`rt::to_remove`, the bypass set arithmetic in `resolver.rs`, all of `taloscfg`'s rendering) is
-unit-tested directly; CIDR parsing and exclusion come from `sliplib-net` and are tested there;
+`rt::to_remove`, the bypass set arithmetic in `resolver.rs`, `taloscfg`'s patch files and secrets)
+is unit-tested directly; a node's configs are rendered by `sliplib-mesh` and CIDR parsing and
+exclusion come from `sliplib-net`, each tested there;
 netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`).
 
 Exercising a daemon end to end needs a Linux host with `CAP_NET_ADMIN`, and for `awg` the

@@ -11,8 +11,8 @@ use sliplib_yaml::Mapping;
 /// The namespace of every annotation this generator sets.
 pub const NAMESPACE: &str = "slipmesh.net/";
 
-/// The annotations of `node`, by name. `mesh_mtu` is the one MTU of every mesh interface, as
-/// [`sliplib_mesh::mtu::mesh_mtu`] works it out.
+/// The annotations of `node`, by name. `mesh_mtu` is the one MTU of every mesh interface: the
+/// largest at which a full-size packet crosses every link's underlay unfragmented.
 pub fn for_node(cluster: &ClusterConfig, node: &NodeEntry, mesh_mtu: Option<u32>) -> Mapping {
     let values = [
         (
