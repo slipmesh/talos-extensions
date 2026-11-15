@@ -50,6 +50,9 @@ enum Command {
         #[arg(long, default_value = "patches")]
         patches_dir: PathBuf,
     },
+    /// Print the `patch` document holding a service's reference template, to add to
+    /// slipmesh.yaml.
+    Template { service: defaults::Service },
     /// Add a client to a roadwarriors pool in slipmesh.yaml.
     RwAdd {
         /// Which roadwarriors pool (its document's `name`, e.g. `plain`).
@@ -137,6 +140,10 @@ fn main() -> Result<()> {
             config,
             patches_dir,
         } => generate(node.as_deref(), check, diff, &config, &patches_dir),
+        Command::Template { service } => {
+            print!("{}", defaults::document(service));
+            Ok(())
+        }
         Command::RwAdd {
             if_,
             name,

@@ -24,6 +24,22 @@ pub const DEFAULT_FILES: [DefaultFile; 2] = [
     },
 ];
 
+/// A service with a reference template.
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum Service {
+    Router,
+    Nftables,
+}
+
+impl Service {
+    fn file(self) -> &'static DefaultFile {
+        match self {
+            Service::Router => &DEFAULT_FILES[0],
+            Service::Nftables => &DEFAULT_FILES[1],
+        }
+    }
+}
+
 /// The default files no `patch` document in `file` sets for any host.
 ///
 /// A file set for some hosts only is not missing: who goes without it was decided by whoever
@@ -38,13 +54,22 @@ pub fn missing(file: &SlipmeshFile) -> Vec<&'static DefaultFile> {
 
 /// `text` with a document for each of `defaults` added at its end.
 pub fn append(text: &str, defaults: &[&DefaultFile]) -> String {
-    let documents: Vec<String> = defaults.iter().map(|default| document(default)).collect();
+    let documents: Vec<String> = defaults
+        .iter()
+        .map(|default| patch_document(default))
+        .collect();
     sliplib_yaml::append(text, &documents)
+}
+
+/// The `patch` document that gives every host the reference template of `service`, to add to
+/// `slipmesh.yaml` and edit there.
+pub fn document(service: Service) -> String {
+    patch_document(service.file())
 }
 
 /// A `patch` document for every host, the content written as a literal block so that it reads in
 /// `slipmesh.yaml` the way it reads in the file it becomes.
-fn document(default: &DefaultFile) -> String {
+fn patch_document(default: &DefaultFile) -> String {
     let content: String = default
         .content
         .lines()
@@ -90,13 +115,13 @@ nodes:
     }
 
     #[test]
-    fn the_appended_documents_reach_every_host_with_the_reference_text() {
-        let text = append(NETWORK, &missing(&SlipmeshFile::parse(NETWORK).unwrap()));
-        let file = SlipmeshFile::parse(&text).unwrap();
-        assert!(missing(&file).is_empty());
-        for host in ["node-a", "node-b"] {
-            let documents = file.patches_for(host).unwrap();
-            for default in &DEFAULT_FILES {
+    fn a_services_document_gives_every_host_its_reference_template() {
+        for service in [Service::Router, Service::Nftables] {
+            let default = service.file();
+            let text = format!("{NETWORK}---\n{}", document(service));
+            let file = SlipmeshFile::parse(&text).unwrap();
+            for host in ["node-a", "node-b"] {
+                let documents = file.patches_for(host).unwrap();
                 let document = documents
                     .iter()
                     .find(|d| d.identity == format!("ExtensionServiceConfig/{}", default.service))
@@ -109,6 +134,17 @@ nodes:
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_appended_documents_are_the_services_documents() {
+        let text = append(NETWORK, &missing(&SlipmeshFile::parse(NETWORK).unwrap()));
+        let expected = format!(
+            "{NETWORK}---\n{}---\n{}",
+            document(Service::Router),
+            document(Service::Nftables)
+        );
+        assert_eq!(text, expected);
     }
 
     #[test]
