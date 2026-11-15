@@ -1,5 +1,5 @@
 //! Every edit `taloscfg` makes to `slipmesh.yaml`: minted secrets written into the fields they
-//! belong to, roadwarrior clients added and removed.
+//! belong to.
 //!
 //! Written, a minted value is the operator's like any other: the next run mints nothing, and
 //! deleting it mints a new identity for that node, link or pool, and for every peer that refers to
@@ -13,10 +13,10 @@ use crate::secrets::Minted;
 use anyhow::{Context, Result};
 use sliplib_config::Obfuscation;
 use sliplib_config::mesh_config::{
-    DEFAULT_EGRESS_ROUTE_PROTO_ID, DEFAULT_MESH_INTERFACE_PREFIX, MeshConfig, RoadwarriorClient,
+    DEFAULT_EGRESS_ROUTE_PROTO_ID, DEFAULT_MESH_INTERFACE_PREFIX, MeshConfig,
 };
 use sliplib_config::slipmesh_file::SlipmeshFile;
-use sliplib_yaml::{Mapping, MultiDoc, Value};
+use sliplib_yaml::{MultiDoc, Value};
 
 /// Writes every value of `minted` into its field of `yaml`, the `slipmesh.yaml` `file` was read
 /// from.
@@ -89,57 +89,6 @@ pub fn write_defaults(
             .fold(&mut *network, |value, step| &mut value[step]) = value.clone();
     }
     Ok(())
-}
-
-/// Adds `client` to the end of the `clients` of the pool at `document` in `yaml`, starting the
-/// list when the pool has none.
-pub fn add_client(yaml: &mut MultiDoc, document: usize, client: &RoadwarriorClient) -> Result<()> {
-    let pool = self::document(yaml, document)?;
-    let entry = client_entry(client);
-    match pool.get_mut("clients") {
-        Some(clients) => clients
-            .as_sequence_mut()
-            .context("the pool's `clients` is not a list")?
-            .push(entry),
-        None => set(pool, "clients", Value::Sequence(vec![entry]))?,
-    }
-    Ok(())
-}
-
-/// Removes `clients[client_index]` from the pool at `document` in `yaml`.
-pub fn remove_client(yaml: &mut MultiDoc, document: usize, client_index: usize) -> Result<()> {
-    let clients = self::document(yaml, document)?
-        .get_mut("clients")
-        .and_then(Value::as_sequence_mut)
-        .context("pool has no clients list")?;
-    anyhow::ensure!(
-        client_index < clients.len(),
-        "pool has no client at position {client_index}"
-    );
-    clients.remove(client_index);
-    Ok(())
-}
-
-/// One client entry as `rw-add` writes it: by its private key when that was kept, else by its
-/// public key - never both.
-fn client_entry(client: &RoadwarriorClient) -> Value {
-    let mut entry = Mapping::new();
-    entry.insert("name".into(), client.name.clone().into());
-    match &client.private_key {
-        Some(key) => entry.insert("private_key".into(), key.expose().into()),
-        None => entry.insert("public_key".into(), client.public_key.clone().into()),
-    };
-    entry.insert(
-        "allowed_ips".into(),
-        Value::Sequence(
-            client
-                .allowed_ips
-                .iter()
-                .map(|ip| ip.clone().into())
-                .collect(),
-        ),
-    );
-    Value::Mapping(entry)
 }
 
 /// Writes the fields of `generated` into the `obfuscation` mapping of `owner`, starting one when
@@ -361,86 +310,5 @@ plain: true
         for (before, after) in before.iter().zip(&after) {
             assert!(within(before, after), "{before:?}\n{after:?}");
         }
-    }
-
-    /// A pool as its own `slipmesh.yaml` document.
-    const PLAIN_POOL: &str = r#"slipmesh:
-  kind: roadwarriors
-name: plain
-node_hostnames: ["a", "b"]
-address: "203.0.113.1/27"
-listen_port: 51820
-plain: true
-clients:
-  - {name: alice, public_key: "AAA=", allowed_ips: ["203.0.113.21/32"]}
-  - {name: bob, public_key: "BBB=", allowed_ips: ["203.0.113.12/32"]}
-"#;
-
-    fn client(name: &str) -> RoadwarriorClient {
-        RoadwarriorClient {
-            name: name.to_owned(),
-            public_key: format!("{name}="),
-            private_key: None,
-            allowed_ips: vec!["203.0.113.29/32".to_owned()],
-            advanced_security: false,
-        }
-    }
-
-    /// `source` after `edit`, as the text it comes back as.
-    fn edited(source: &str, edit: impl FnOnce(&mut MultiDoc)) -> String {
-        let mut yaml = MultiDoc::parse(source).unwrap();
-        edit(&mut yaml);
-        yaml.text().unwrap()
-    }
-
-    /// The pool in `source` without its clients.
-    fn without_clients(source: &str) -> Value {
-        let mut pool = values(source).remove(0);
-        pool.as_mapping_mut().unwrap().shift_remove("clients");
-        pool
-    }
-
-    fn client_names(source: &str) -> Vec<String> {
-        let value: sliplib_yaml::Value = sliplib_yaml::from_str(source).unwrap();
-        value["clients"]
-            .as_sequence()
-            .unwrap()
-            .iter()
-            .map(|c| c["name"].as_str().unwrap().to_owned())
-            .collect()
-    }
-
-    #[test]
-    fn add_client_appends_and_leaves_the_rest_untouched() {
-        let out = edited(PLAIN_POOL, |yaml| {
-            add_client(yaml, 0, &client("dave")).unwrap()
-        });
-        assert_eq!(without_clients(&out), without_clients(PLAIN_POOL));
-        let (before, after) = (&values(PLAIN_POOL)[0], &values(&out)[0]);
-        for kept in 0..2 {
-            assert_eq!(after["clients"][kept], before["clients"][kept]);
-        }
-        assert_eq!(client_names(&out), ["alice", "bob", "dave"]);
-    }
-
-    #[test]
-    fn add_client_starts_the_list_a_pool_lacks() {
-        let pool = PLAIN_POOL.split("clients:").next().unwrap();
-        let out = edited(pool, |yaml| add_client(yaml, 0, &client("dave")).unwrap());
-        assert_eq!(without_clients(&out), without_clients(pool));
-        assert_eq!(client_names(&out), ["dave"]);
-    }
-
-    #[test]
-    fn remove_client_deletes_exactly_the_target() {
-        let out = edited(PLAIN_POOL, |yaml| {
-            remove_client(yaml, 0, 0).unwrap() // alice
-        });
-        assert_eq!(without_clients(&out), without_clients(PLAIN_POOL));
-        assert_eq!(
-            values(&out)[0]["clients"][0],
-            values(PLAIN_POOL)[0]["clients"][1]
-        );
-        assert_eq!(client_names(&out), ["bob"]);
     }
 }

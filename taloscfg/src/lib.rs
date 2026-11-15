@@ -6,5 +6,4 @@ pub mod edit;
 pub mod obfuscation_gen;
 pub mod patch_file;
 pub mod redact;
-pub mod roadwarrior;
 pub mod secrets;
