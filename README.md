@@ -352,6 +352,11 @@ which describes the whole mesh and everything else a node's patch file carries, 
 then ships to that node. A patch file is output only: nothing in it is read back, so edit
 `slipmesh.yaml` and regenerate rather than editing the patch.
 
+It only reads `slipmesh.yaml`. What writes into the file - its keys and obfuscation, the defaults
+of its network settings, the clients of a road-warrior pool - is
+[`slipmesh`](https://github.com/slipmesh/sliplib#slipmesh), and where the file lacks something
+`generate` needs, the refusal names the `slipmesh` command that writes it.
+
 ### `slipmesh.yaml`
 
 A multi-document YAML file. Every document opens with a `slipmesh:` block saying what it is; the
@@ -451,12 +456,16 @@ the `router` template is rendered with each node's config, so one that would fai
 that falls back to its previous boot slot runs that daemon against this config, and would
 otherwise apply no ruleset at all. That copy goes once no node can fall back that far.
 
-When no `patch` document sets one of those two files, for any node, `generate` writes the reference
-template into `slipmesh.yaml` as a document of its own that reaches every node - `--check` fails
-instead, and `--diff` shows the patches as they would be with it. From then on the copy in
-`slipmesh.yaml` is the one in force, and a newer reference does not replace it. A document aimed at
-some nodes only counts as setting the file: the nodes it leaves out go without, as whoever aimed it
-decided - which `generate` refuses for `router`, since it does not run without its template.
+A template reaches a node only through a `patch` document of `slipmesh.yaml`: the copy there is the
+one in force, and a newer reference does not replace it. `template` prints the document that gives
+every node a service's reference template, to add to the file and edit there:
+
+```sh
+slipmesh-taloscfg template router    # or: nftables
+```
+
+A node no `router` template reaches is refused by `generate`, since `router` does not run without
+one; a node without an `nftables` template gets no ruleset.
 
 ### Mesh MTU
 
@@ -504,7 +513,7 @@ of its value in `slipmesh.yaml`:
 OSPF and `direct_interfaces` match them by; it takes ASCII letters, digits, `-`, `_` and `.`.
 `cluster.route_proto_id.egress` is the protocol number, `proto` in `ip route`, that egress routes
 carry; 0 to 4 are the kernel's own and refused. When `slipmesh.yaml` leaves either key out,
-`generate` writes its default into it, `--check` fails, and `--diff` names it.
+`generate` refuses the file in every mode, naming the key: `slipmesh mint` writes its default.
 
 Talos keeps the annotations it sets in step with the config: a changed value is rewritten on the
 Node, and one no longer given is taken off it. A `patch` document may set annotations of its own,
@@ -514,21 +523,13 @@ but none under `slipmesh.net/`.
 
 Everything derivable is derived: interface names and link-local/loopback addressing fall out of
 the topology rather than being written by hand, and only the public half of a peer's key ever
-appears in the other end's config. Keys aren't derivable, so the tool generates them once and
-writes them into `slipmesh.yaml` itself, into the fields an operator would otherwise fill in by
-hand: `nodes[].mesh_private_key`, a pool document's `private_key`, and whichever `obfuscation`
-fields a link or pool leaves unset.
-
-Written, a value is the operator's like any other. A regeneration never rotates a key that is
-written down; deleting one does, for that node, link or pool and every peer of it. Only what the
-tool generated is written: a field set on the entry or in the global `obfuscation` is never copied
-down, and neither are `random_trailers` and `disable_cookies`, which are never generated. Taking a
-node out of the `network` document takes its key with it, so putting it back mints a new one.
+appears in the other end's config. Keys aren't derivable: they stand in `slipmesh.yaml`, in
+`nodes[].mesh_private_key`, a pool document's `private_key`, and the `obfuscation` of every link
+and pool that is not `plain`. `slipmesh mint` creates the ones the file lacks and writes them
+there; `generate` creates none and refuses a node whose config needs one that is missing.
 
 So `slipmesh.yaml` holds private keys in the clear, as the patch files it renders do - keep it
-where those are kept. Writing anything into it rewrites the whole file from its values: comments,
-and documents of only comments, are not kept, and the layout becomes that of the YAML serializer.
-A run that mints nothing leaves the file as it is.
+where those are kept.
 
 Each node's configs are rendered and validated by `sliplib-mesh`, on the config types the daemons
 read, so the generator and the daemons check one definition.
@@ -539,9 +540,10 @@ slipmesh-taloscfg generate --node node-a --diff # one node, print what would cha
 slipmesh-taloscfg generate --check              # validate only
 ```
 
-Every run mints for the whole topology, whichever nodes it renders, and renders and validates every
-node before it writes any patch file. `--check` and `--diff` never write: when a secret would have
-to be minted they stop and name it, because a key minted and not kept would differ on the next run.
+Every run renders and validates every node it was asked for before it writes any patch file, and
+none writes `slipmesh.yaml`. With `--node`, only the secrets that node's config needs have to be
+there: its own key, and for each of its links and pools the peer's key, the pool's key and their
+obfuscation. `--check` and `--diff` write no patch file either.
 
 `--diff` prints no secret. The value of every `private_key`, `header_protection_key` and `password`
 line, at any depth, shows as `<redacted>` when it is the same on both sides and as
@@ -549,32 +551,9 @@ line, at any depth, shows as `<redacted>` when it is the same on both sides and 
 
 ### Road warriors
 
-`rw-add`/`rw-del` add or remove one client in the pool's own document, and write `slipmesh.yaml`
-back the same way:
-
-```sh
-slipmesh-taloscfg rw-add --if plain --name laptop --allowed-ips 203.0.113.5/32 --export --qr
-slipmesh-taloscfg rw-inspect --if plain --name laptop --qr   # re-render, change nothing
-slipmesh-taloscfg rw-del --if plain --name laptop
-```
-
-`rw-add` generates the client's keypair and prints a ready-to-import config (optionally as a
-terminal QR code), keeping only the public half. `rw-inspect` re-renders the rest and leaves a
-placeholder unless you pass the key back in. With `--keep-private`, `rw-add` writes the private key
-into the client's entry as `private_key`, in place of `public_key`, and `rw-inspect` renders the
-config in full from it; the public key is derived from it wherever it is needed. A client entry
-holds one of the two keys, never both. The
-pool's own key, which the config is built with, is written into the pool's document, so `generate`
-puts the same key on the wire; `rw-inspect` writes nothing and asks for `generate` first when that
-key is not written down yet.
-
-The client config's `Endpoint` is the first of the pool's `node_hostnames`. `--endpoint` on
-either command picks another of them, or names anything else - a DNS name in front of the pool,
-say - taken as written, with the pool's `listen_port` when it carries no port:
-
-```sh
-slipmesh-taloscfg rw-inspect --if plain --name laptop --endpoint rw.example.com --qr
-```
+A pool's clients are added, removed and shown with `slipmesh rw add`, `rw del` and `rw inspect`,
+described [with that tool](https://github.com/slipmesh/sliplib#slipmesh); `generate` renders the
+pool's interface on each of its `node_hostnames` from what the pool's document holds.
 
 The same generated `<node>.yaml` also drives [routeros](https://github.com/slipmesh/routeros),
 which converges a MikroTik device into the mesh from it - a mesh member need not be a Talos node.
@@ -596,8 +575,9 @@ hand before the first run:
 - the `private_key` of a pool's interface goes into the `private_key` of its `kind: roadwarriors`
   document, and the pool's `jc`...`h4` into its `obfuscation`, unless the pool is `plain`.
 
-Anything left out is minted anew on the first run: a new identity for that node or link and every
-peer of it, and for a pool, a new server key that no client config already handed out connects to.
+Anything left out has to be created by `slipmesh mint` before `generate` runs: a new identity for
+that node or link and every peer of it, and for a pool, a new server key that no client config
+already handed out connects to.
 
 `generate --diff` then shows what the patch files would become: with everything carried over, the
 keys and settings in them stay as they were and only their layout changes.
@@ -629,6 +609,14 @@ A `kind: nftables` document is refused, with where its ruleset went: into the fi
 `ExtensionServiceConfig` `nftables`, with the same `include`/`exclude`. A `{{ name }}` in the
 ruleset is already template syntax; a `{%` or `{#` in it now opens a tag or a comment.
 
+`generate` no longer writes into `slipmesh.yaml`, and `rw-add`, `rw-del` and `rw-inspect` are gone:
+
+| was | is |
+| --- | --- |
+| `generate` creating missing keys and obfuscation, and writing unset network defaults | `slipmesh mint` |
+| `generate` writing the reference templates into the file | `slipmesh-taloscfg template <service>`, added by hand |
+| `rw-add`, `rw-del`, `rw-inspect` | `slipmesh rw add`, `rw del`, `rw inspect` |
+
 Install it with `cargo install --path taloscfg`.
 
 ---
@@ -643,7 +631,7 @@ cargo deny --locked check licenses bans sources
 ```
 
 No mocking framework - pure logic (`config::validate`, `interface::diff_peers`,
-`rt::to_remove`, the bypass set arithmetic in `resolver.rs`, `taloscfg`'s patch files and secrets)
+`rt::to_remove`, the bypass set arithmetic in `resolver.rs`, `taloscfg`'s patch files)
 is unit-tested directly; a node's configs are rendered by `sliplib-mesh` and CIDR parsing and
 exclusion come from `sliplib-net`, each tested there;
 netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`).
