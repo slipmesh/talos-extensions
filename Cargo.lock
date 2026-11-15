@@ -1716,7 +1716,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 [[package]]
 name = "sliplib-config"
 version = "0.14.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
+source = "git+https://github.com/slipmesh/sliplib?rev=47be3785775829d7a8cb63ef66cf58f294c705cc#47be3785775829d7a8cb63ef66cf58f294c705cc"
 dependencies = [
  "anyhow",
  "serde",
@@ -1728,7 +1728,7 @@ dependencies = [
 [[package]]
 name = "sliplib-mesh"
 version = "0.14.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
+source = "git+https://github.com/slipmesh/sliplib?rev=47be3785775829d7a8cb63ef66cf58f294c705cc#47be3785775829d7a8cb63ef66cf58f294c705cc"
 dependencies = [
  "anyhow",
  "sliplib-config",
@@ -1739,7 +1739,7 @@ dependencies = [
 [[package]]
 name = "sliplib-net"
 version = "0.14.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
+source = "git+https://github.com/slipmesh/sliplib?rev=47be3785775829d7a8cb63ef66cf58f294c705cc#47be3785775829d7a8cb63ef66cf58f294c705cc"
 dependencies = [
  "ipnet",
 ]
@@ -1747,7 +1747,7 @@ dependencies = [
 [[package]]
 name = "sliplib-runtime"
 version = "0.14.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
+source = "git+https://github.com/slipmesh/sliplib?rev=47be3785775829d7a8cb63ef66cf58f294c705cc#47be3785775829d7a8cb63ef66cf58f294c705cc"
 dependencies = [
  "anyhow",
  "tokio-graceful-shutdown",
@@ -1758,7 +1758,7 @@ dependencies = [
 [[package]]
 name = "sliplib-secrets"
 version = "0.14.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
+source = "git+https://github.com/slipmesh/sliplib?rev=47be3785775829d7a8cb63ef66cf58f294c705cc#47be3785775829d7a8cb63ef66cf58f294c705cc"
 dependencies = [
  "base64",
  "curve25519-dalek",
@@ -1770,7 +1770,7 @@ dependencies = [
 [[package]]
 name = "sliplib-yaml"
 version = "0.14.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.14.0#5e03e4945c1f8eaafcf7969c7a3a2e42a89e5ffb"
+source = "git+https://github.com/slipmesh/sliplib?rev=47be3785775829d7a8cb63ef66cf58f294c705cc#47be3785775829d7a8cb63ef66cf58f294c705cc"
 dependencies = [
  "anyhow",
  "atomic-write-file",
@@ -1863,7 +1863,6 @@ dependencies = [
  "anyhow",
  "clap",
  "nftables",
- "rand",
  "router",
  "serde",
  "sha2",

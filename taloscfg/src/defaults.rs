@@ -1,8 +1,5 @@
-//! The files a daemon cannot run without and `slipmesh.yaml` gives it - its template - with the
-//! reference each one starts from. `generate` writes the reference into `slipmesh.yaml` where the
-//! file is missing; from then on the copy there is the one in force, edited like any other document.
-
-use sliplib_config::slipmesh_file::SlipmeshFile;
+//! The reference template of each service that takes one. A template reaches a node only as a
+//! `patch` document of `slipmesh.yaml`; the reference is what such a document starts from.
 
 pub struct DefaultFile {
     /// The `ExtensionServiceConfig` the file belongs to.
@@ -10,19 +7,6 @@ pub struct DefaultFile {
     pub mount_path: &'static str,
     pub content: &'static str,
 }
-
-pub const DEFAULT_FILES: [DefaultFile; 2] = [
-    DefaultFile {
-        service: "router",
-        mount_path: router::bird_conf::TEMPLATE_PATH,
-        content: router::bird_conf::REFERENCE_TEMPLATE,
-    },
-    DefaultFile {
-        service: "nftables",
-        mount_path: nftables::template::TEMPLATE_PATH,
-        content: nftables::template::REFERENCE_TEMPLATE,
-    },
-];
 
 /// A service with a reference template.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -32,44 +16,27 @@ pub enum Service {
 }
 
 impl Service {
-    fn file(self) -> &'static DefaultFile {
+    fn file(self) -> DefaultFile {
         match self {
-            Service::Router => &DEFAULT_FILES[0],
-            Service::Nftables => &DEFAULT_FILES[1],
+            Service::Router => DefaultFile {
+                service: "router",
+                mount_path: router::bird_conf::TEMPLATE_PATH,
+                content: router::bird_conf::REFERENCE_TEMPLATE,
+            },
+            Service::Nftables => DefaultFile {
+                service: "nftables",
+                mount_path: nftables::template::TEMPLATE_PATH,
+                content: nftables::template::REFERENCE_TEMPLATE,
+            },
         }
     }
 }
 
-/// The default files no `patch` document in `file` sets for any host.
-///
-/// A file set for some hosts only is not missing: who goes without it was decided by whoever
-/// aimed that document, and a default for everyone would undo the decision. Going without a
-/// router template is refused when the patch files are rendered, since `router` cannot run.
-pub fn missing(file: &SlipmeshFile) -> Vec<&'static DefaultFile> {
-    DEFAULT_FILES
-        .iter()
-        .filter(|d| !file.sets_file(d.service, d.mount_path))
-        .collect()
-}
-
-/// `text` with a document for each of `defaults` added at its end.
-pub fn append(text: &str, defaults: &[&DefaultFile]) -> String {
-    let documents: Vec<String> = defaults
-        .iter()
-        .map(|default| patch_document(default))
-        .collect();
-    sliplib_yaml::append(text, &documents)
-}
-
 /// The `patch` document that gives every host the reference template of `service`, to add to
-/// `slipmesh.yaml` and edit there.
-pub fn document(service: Service) -> String {
-    patch_document(service.file())
-}
-
-/// A `patch` document for every host, the content written as a literal block so that it reads in
+/// `slipmesh.yaml` and edit there. The content is written as a literal block so that it reads in
 /// `slipmesh.yaml` the way it reads in the file it becomes.
-fn patch_document(default: &DefaultFile) -> String {
+pub fn document(service: Service) -> String {
+    let default = service.file();
     let content: String = default
         .content
         .lines()
@@ -87,6 +54,7 @@ fn patch_document(default: &DefaultFile) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sliplib_config::slipmesh_file::SlipmeshFile;
 
     const NETWORK: &str = r#"slipmesh:
   kind: network
@@ -105,13 +73,6 @@ nodes:
             .find(|f| f["mountPath"].as_str() == Some(mount_path))
             .and_then(|f| f["content"].as_str())
             .map(str::to_owned)
-    }
-
-    #[test]
-    fn a_file_without_them_misses_every_default() {
-        let file = SlipmeshFile::parse(NETWORK).unwrap();
-        let services: Vec<&str> = missing(&file).iter().map(|d| d.service).collect();
-        assert_eq!(services, ["router", "nftables"]);
     }
 
     #[test]
@@ -134,27 +95,5 @@ nodes:
                 );
             }
         }
-    }
-
-    #[test]
-    fn the_appended_documents_are_the_services_documents() {
-        let text = append(NETWORK, &missing(&SlipmeshFile::parse(NETWORK).unwrap()));
-        let expected = format!(
-            "{NETWORK}---\n{}---\n{}",
-            document(Service::Router),
-            document(Service::Nftables)
-        );
-        assert_eq!(text, expected);
-    }
-
-    #[test]
-    fn a_file_set_for_some_hosts_only_is_not_missing() {
-        let nftables = format!(
-            "---\nslipmesh:\n  kind: patch\n  exclude: [node-b]\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: nftables\nconfigFiles:\n  - mountPath: {}\n    content: \"table inet t {{}}\\n\"\n",
-            nftables::template::TEMPLATE_PATH
-        );
-        let file = SlipmeshFile::parse(&format!("{NETWORK}{nftables}")).unwrap();
-        let services: Vec<&str> = missing(&file).iter().map(|d| d.service).collect();
-        assert_eq!(services, ["router"]);
     }
 }

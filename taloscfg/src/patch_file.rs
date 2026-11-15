@@ -122,8 +122,8 @@ fn validate_router_template(
         .find(|f| f.mount_path == router::bird_conf::TEMPLATE_PATH)
     else {
         bail!(
-            "no `patch` document gives it {} - aim one at it, or leave none in slipmesh.yaml for \
-             `generate` to write the reference for every node",
+            "no `patch` document gives it {} - aim one at it; `slipmesh-taloscfg template router` \
+             prints one holding the reference template",
             router::bird_conf::TEMPLATE_PATH
         );
     };
@@ -206,7 +206,8 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secrets;
+    use sliplib_secrets::wireguard::PrivateKey;
+    use std::sync::LazyLock;
 
     /// The `ExtensionServiceConfig` named `name` among the documents of `file`, if there is one.
     fn generated_document(file: &str, name: &str) -> Option<sliplib_yaml::Value> {
@@ -228,17 +229,21 @@ mod tests {
         document["configFiles"][0]["content"].as_str().unwrap()
     }
 
-    const SLIPMESH: &str = r#"slipmesh:
+    /// A file with everything its nodes' configs need, the keys generated for these tests alone.
+    static SLIPMESH: LazyLock<String> = LazyLock::new(|| {
+        let key = || PrivateKey::generate().expose().to_owned();
+        format!(
+            r#"slipmesh:
   kind: network
 cluster:
   bgp_as: 64512
-  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
+  loopback_networks: {{ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}}
 nodes:
-  - {name: a, node_id: "198.51.100.1", endpoint: "192.0.2.10"}
-  - {name: b, node_id: "198.51.100.2", endpoint: "192.0.2.11"}
+  - {{name: a, node_id: "198.51.100.1", endpoint: "192.0.2.10", mesh_private_key: "{a}"}}
+  - {{name: b, node_id: "198.51.100.2", endpoint: "192.0.2.11", mesh_private_key: "{b}"}}
 mesh:
   links:
-    - {pair: [a, b], port: 51820}
+    - {{pair: [a, b], port: 51820, obfuscation: {{jc: 4, jmin: 10, jmax: 50, s1: 15, s2: 16, h1: 5, h2: 6, h3: 7, h4: 8}}}}
 ---
 slipmesh:
   kind: patch
@@ -256,8 +261,12 @@ kind: ExtensionServiceConfig
 name: nftables
 configFiles:
   - mountPath: /etc/talos-extensions/nftables.conf.j2
-    content: "table inet x {}"
-"#;
+    content: "table inet x {{}}"
+"#,
+            a = key(),
+            b = key(),
+        )
+    });
 
     const TEMPLATE: &str = "router id {{ loopback }};\n";
 
@@ -336,7 +345,7 @@ configFiles:
 
     fn render_raw(raw: &str, host: &str) -> Result<String> {
         let file = SlipmeshFile::parse(raw).unwrap();
-        let (resolved, _) = secrets::resolve(file.topology());
+        let resolved = sliplib_mesh::secrets::read(file.topology());
         render(&file, &resolved, host)
     }
 
@@ -423,8 +432,8 @@ configFiles:
     #[test]
     fn obfuscation_the_kernel_module_refuses_is_not_rendered() {
         let raw = with_router_files(&[("", TEMPLATE)]).replace(
-            "{pair: [a, b], port: 51820}",
-            "{pair: [a, b], port: 51820, obfuscation: {header_protection_key: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}}",
+            "obfuscation: {jc: 4,",
+            "obfuscation: {header_protection_key: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\", jc: 4,",
         );
         let err = render_raw(&raw, "a").unwrap_err();
         assert!(format!("{err:#}").contains("s3, s4"), "{err:#}");
