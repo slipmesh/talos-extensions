@@ -339,23 +339,21 @@ fn identity_attrs(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribut
     Ok(device_attrs)
 }
 
-/// Refuses a config with an interface the kernel cannot be sent, naming it. It needs no kernel,
-/// so that a config can be refused whole before any of its interfaces is touched.
-pub fn check(interfaces: &[InterfaceEntry]) -> Result<()> {
-    for iface in interfaces {
-        iface
-            .obfuscation
-            .validate()
-            .and_then(|()| identity_attrs(iface).map(drop))
-            .with_context(|| format!("interface {}", iface.name))?;
-    }
-    Ok(())
+/// What `iface`'s identity is set with, or why the module would refuse or mishandle it, the
+/// interface named. It needs no kernel, so that such an interface is refused before it is
+/// touched.
+pub fn check(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribute>> {
+    iface
+        .obfuscation
+        .validate()
+        .and_then(|()| identity_attrs(iface))
+        .with_context(|| format!("interface {}", iface.name))
 }
 
 /// Sets the device's private key, listen port, and obfuscation params. Idempotent and cheap to
 /// call unconditionally every run - nothing about identity changes at runtime within one process.
-async fn set_identity(awg: &mut AwgClient, iface: &InterfaceEntry) -> Result<()> {
-    awg.set_device(identity_attrs(iface)?)
+async fn set_identity(awg: &mut AwgClient, identity: Vec<AmneziaWireguardAttribute>) -> Result<()> {
+    awg.set_device(identity)
         .await
         .context("SetDevice (identity) failed")
 }
@@ -367,6 +365,7 @@ pub async fn ensure_interface(
     awg: &mut AwgClient,
     iface: &InterfaceEntry,
 ) -> Result<()> {
+    let identity = check(iface)?;
     let (index, _created) = rt.ensure_link(&iface.name, "amneziawg").await?;
     rt.ensure_addresses(index, &iface.addresses).await?;
     if let Some(mtu) = iface.mtu {
@@ -384,7 +383,7 @@ pub async fn ensure_interface(
     // interfaces this daemon creates later, with no code here needed at all.
 
     rt.set_up(index).await?;
-    set_identity(awg, iface).await?;
+    set_identity(awg, identity).await?;
 
     let previous = current_peers(awg, &iface.name).await?;
     let mut desired = Vec::with_capacity(iface.peers.len());
@@ -729,33 +728,28 @@ mod tests {
     }
 
     #[test]
-    fn a_config_is_refused_for_the_interface_the_kernel_cannot_be_sent() {
+    fn an_interface_the_kernel_cannot_be_sent_is_refused_by_name() {
+        assert!(check(&interface("awg-a", Obfuscation::default())).is_ok());
         let too_large = Obfuscation {
             rekey_after_time: Some(65536),
             ..Obfuscation::default()
         };
-        let interfaces = [
-            interface("awg-a", Obfuscation::default()),
-            interface("awg-b", too_large),
-        ];
-        assert!(check(&interfaces[..1]).is_ok());
-        let shown = format!("{:#}", check(&interfaces).unwrap_err());
+        let shown = format!("{:#}", check(&interface("awg-b", too_large)).unwrap_err());
         assert!(
             shown.starts_with("interface awg-b: rekey_after_time"),
             "{shown}"
         );
     }
 
-    // The module refuses these only once the link is up.
+    // The module refuses this only once the link is up.
     #[test]
-    fn a_config_is_refused_for_an_interface_whose_obfuscation_the_module_refuses() {
+    fn an_interface_whose_obfuscation_the_module_refuses_is_refused_by_name() {
         let overlapping = Obfuscation {
             h1: Some(5),
             h2: Some(5),
             ..Obfuscation::default()
         };
-        let interfaces = [interface("awg-b", overlapping)];
-        let shown = format!("{:#}", check(&interfaces).unwrap_err());
+        let shown = format!("{:#}", check(&interface("awg-b", overlapping)).unwrap_err());
         assert!(
             shown.starts_with("interface awg-b: obfuscation.h1 and obfuscation.h2"),
             "{shown}"
@@ -763,10 +757,10 @@ mod tests {
     }
 
     #[test]
-    fn a_config_is_refused_for_an_undecodable_private_key_by_its_name() {
+    fn an_interface_with_an_undecodable_private_key_is_refused_by_its_name() {
         let mut iface = interface("awg-b", Obfuscation::default());
         iface.private_key = "not a key".into();
-        let shown = format!("{:#}", check(&[iface]).unwrap_err());
+        let shown = format!("{:#}", check(&iface).unwrap_err());
         assert!(
             shown.starts_with("interface awg-b: invalid private_key"),
             "{shown}"
