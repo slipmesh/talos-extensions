@@ -310,7 +310,8 @@ fn identity_attrs(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribut
     let mut device_attrs = vec![
         AmneziaWireguardAttribute::IfName(iface.name.clone()),
         AmneziaWireguardAttribute::PrivateKey(
-            decode_key(&iface.private_key).context("invalid private_key")?,
+            decode_key(&iface.private_key)
+                .map_err(|e| anyhow::anyhow!("invalid private_key: {e}"))?,
         ),
         AmneziaWireguardAttribute::ListenPort(iface.listen_port),
     ];
@@ -321,7 +322,7 @@ fn identity_attrs(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribut
 /// What `iface`'s identity is set with, or why the module would refuse or mishandle it, the
 /// interface named. It needs no kernel, so that such an interface is refused before it is
 /// touched.
-pub fn check(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribute>> {
+fn check(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribute>> {
     iface
         .obfuscation
         .validate()
@@ -337,8 +338,9 @@ async fn set_identity(awg: &mut AwgClient, identity: Vec<AmneziaWireguardAttribu
         .context("SetDevice (identity) failed")
 }
 
-/// Brings one interface fully up to date: link, addresses, identity, and peer set. Safe to call
-/// unconditionally on every process start - every step is idempotent.
+/// Brings one interface fully up to date: link, addresses, identity, and peer set. An interface
+/// `check` refuses is refused first, with nothing of it touched. Safe to call unconditionally on
+/// every process start - every step is idempotent.
 pub async fn ensure_interface(
     rt: &RtClient,
     awg: &mut AwgClient,
@@ -691,7 +693,7 @@ mod tests {
         );
     }
 
-    // The module refuses this only once the link is up.
+    // The module refuses this only at `SetDevice`, once the link exists.
     #[test]
     fn an_interface_whose_obfuscation_the_module_refuses_is_refused_by_name() {
         let overlapping = Obfuscation {
@@ -715,6 +717,24 @@ mod tests {
             shown.starts_with("interface awg-b: invalid private_key"),
             "{shown}"
         );
+        // The logged chain would otherwise show a character of the configured text and where.
+        assert!(!shown.contains("offset"), "{shown}");
+    }
+
+    #[test]
+    fn what_the_identity_of_an_interface_is_set_with_is_its_name_key_port_and_obfuscation() {
+        let obfuscation = Obfuscation {
+            jc: Some(4),
+            ..Obfuscation::default()
+        };
+        let mut expected = vec![
+            AmneziaWireguardAttribute::IfName("awg-a".to_string()),
+            AmneziaWireguardAttribute::PrivateKey(KEY),
+            AmneziaWireguardAttribute::ListenPort(51820),
+        ];
+        push_obfuscation_attrs(&mut expected, &obfuscation).unwrap();
+        assert!(expected.contains(&AmneziaWireguardAttribute::Jc(4)));
+        assert_eq!(check(&interface("awg-a", obfuscation)).unwrap(), expected);
     }
 
     // The config still accepts the flag; the module reads no such attribute.
