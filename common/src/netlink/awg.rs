@@ -36,8 +36,10 @@ use netlink_packet_generic::GenlMessage;
 /// it would already be) and a previously-obfuscated one (actually clears it), so there's no need
 /// to distinguish the two cases here.
 ///
-/// `i1`..`i5` and `header_protection_key` stay omit-if-unset: the module has no value of them
-/// that means "none" - an interface keeps a key it was given until it is created anew.
+/// `i1`..`i5` and `header_protection_key` stay omit-if-unset. The module has no way to take a key
+/// off an interface: it keeps one until the interface is created anew. An empty decoy spec reads
+/// as if it cleared one, but that has not been tried against a kernel, so an unset one is not
+/// sent.
 ///
 /// `h1`..`h4` are ranges of two `u32` ends; ours is the range from the single value to itself.
 ///
@@ -129,6 +131,8 @@ pub fn push_obfuscation_attrs(
     Ok(())
 }
 
+// `Obfuscation::validate` refuses a value above 65535 before an interface gets here; the
+// conversion still has to be fallible.
 fn range_of_one(name: &str, value: u32) -> Result<AmneziaWireguardRange<u16>> {
     let value = u16::try_from(value)
         .with_context(|| format!("{name} is {value}, and the module holds it in 16 bits"))?;

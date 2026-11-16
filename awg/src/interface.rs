@@ -676,6 +676,19 @@ mod tests {
     }
 
     #[test]
+    fn an_interface_with_a_tuning_value_above_65535_is_refused_by_name_and_key() {
+        let too_large = Obfuscation {
+            rekey_after_time: Some(65536),
+            ..Obfuscation::default()
+        };
+        let shown = format!("{:#}", check(&interface("awg-b", too_large)).unwrap_err());
+        assert!(
+            shown.starts_with("interface awg-b: obfuscation.rekey_after_time"),
+            "{shown}"
+        );
+    }
+
+    #[test]
     fn an_interface_the_kernel_cannot_be_sent_is_refused_by_name() {
         assert!(check(&interface("awg-a", Obfuscation::default())).is_ok());
         let undecodable = Obfuscation {

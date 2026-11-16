@@ -395,7 +395,7 @@ configFiles:
         );
         let shown = format!("{:#}", render_raw(&raw, "a").unwrap_err());
         for part in [
-            "node \"a\", interface ",
+            "node \"a\", interface \"mesh-b\": ",
             "obfuscation.rekey_after_time is 65536",
         ] {
             assert!(shown.contains(part), "{part:?} not in {shown}");

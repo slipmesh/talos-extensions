@@ -121,13 +121,14 @@ still accepted and does nothing: the module reads no per-peer switch. `awg` leav
 its request when the config has none, and the module has no way to take a key off an interface, so
 a key removed from the config stays in force until the interface is created anew, at the next boot.
 So does the module's check of the junk sizes below: a config that drops the key and takes any of
-`s1`..`s4` below 12 is refused on every pass until then.
+`s1`..`s4` below 12 is refused on every pass until then, by the module at `SetDevice` once the link
+is up, since the config alone does not show it.
 The kernel module also accepts the key only when every junk size `s1`..`s4` is at least
 12, room for the header protection nonce (an unset size counts as 0), and refuses magic headers
 `h1`..`h4` that are not all different (an unset one counts as 1..4); both come back as a bare
 `Invalid argument` for that interface. It never checks that `jmin` does not exceed `jmax` before
-drawing junk packet sizes between them. `awg` refuses an interface that breaks any of these without
-touching it - one an earlier run left up stays as it is - brings up the others, then exits and is
+drawing junk packet sizes between them. `awg` refuses an interface that breaks one of these three
+without touching it - one an earlier run left up stays as it is - brings up the others, then exits and is
 restarted, so route tracking and metrics wait until the config is fixed. `taloscfg` refuses to
 render it, see `common::Obfuscation::validate`.
 
@@ -532,7 +533,9 @@ key is not written down yet.
 The client config carries the pool's `Jc`, `Jmin` and `Jmax`, which are the client's own as the
 end that starts the handshake (no end checks the junk it receives), and what the pool and its
 clients have to share: `S1`..`S4` and `H1`..`H4`, and `HeaderProtectionKey` and `RandomTrailers`
-when the pool sets them.
+when the pool sets them. It carries none of the six tuning values, so a client runs the module's
+own: a `keepalive_timeout` of 10 and a `rekey_timeout` of 5. A pool's `keepalive_timeout` above 15
+then makes a client's one-way traffic re-handshake.
 
 The client config's `Endpoint` is the first of the pool's `node_hostnames`. `--endpoint` on
 either command picks another of them, or names anything else - a DNS name in front of the pool,
@@ -570,19 +573,22 @@ keys and settings in them stay as they were and only their layout changes.
 
 ### Breaking changes
 
-A tuning value above 65535 - `content_padding_addition`, `rekey_after_time`, `rekey_timeout`,
-`reject_after_time`, `keepalive_timeout` or `max_handshake_attempts` - is refused, by `taloscfg`
-naming the node, the interface and the key, and by `awg`, which leaves that interface down. The
-module holds each in 16 bits, so such a value never did what it said. Set it to 65535 or less, or
-take it out for the module's own value.
+Since v1.14.5+sm.3, a tuning value above 65535 - `content_padding_addition`, `rekey_after_time`,
+`rekey_timeout`, `reject_after_time`, `keepalive_timeout` or `max_handshake_attempts` - is refused:
+by `taloscfg`, naming the node, the interface and the key, and by `awg`, which leaves that interface
+as an earlier run left it, brings up the others and exits, so route tracking and metrics wait until
+the config is fixed. The module holds each in 16 bits, so such a value never did what it said. Set
+it to 65535 or less, or take it out for the module's own value.
 
-A tuning value taken out of the config is now taken off the interface too, back to the module's
-own value; it used to stay as the earlier config set it.
+Since v1.14.5+sm.3, a tuning value taken out of the config is taken off the interface too, back to
+the module's own value; it used to stay as the earlier config set it.
 
-A pool with `header_protection_key`, `s3`, `s4` or `random_trailers` now gets them into its
-client configs. Export the client configs of such a pool again with `rw-inspect`: a client
-without the key or without `RandomTrailers` completes no handshake, without `S4` sends no data the
-pool takes, and without `S3` reads no cookie reply.
+Since v1.14.5+sm.3, a pool with `header_protection_key`, `s3`, `s4` or `random_trailers` gets them
+into its client configs. Export the client configs of such a pool again with `rw-inspect`: a
+client without the key or without `RandomTrailers` completes no handshake, without `S4` sends no
+data the pool takes, and without `S3` reads no cookie reply. For a client whose private key the
+file does not keep, `rw-inspect` leaves a placeholder for it, so add the new lines to the client's
+own config by hand.
 
 The top of the `network` document, its `cluster:` block and every pool refuse a field they do not
 know, so a name that changed fails where it is written rather than being ignored into a listener
