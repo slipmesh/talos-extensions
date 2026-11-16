@@ -1026,7 +1026,7 @@ dependencies = [
 [[package]]
 name = "netlink-packet-amneziawg"
 version = "0.1.0"
-source = "git+https://github.com/slipmesh/netlink-packet-amneziawg?tag=v0.1.0#4169f6777b6f7e7a69d2afde19fb4271f882d82f"
+source = "git+https://github.com/slipmesh/netlink-packet-amneziawg?rev=e3e6f546dc65f0897a2f66a92f3985175b3cf673#e3e6f546dc65f0897a2f66a92f3985175b3cf673"
 dependencies = [
  "netlink-packet-core",
  "netlink-packet-generic",
