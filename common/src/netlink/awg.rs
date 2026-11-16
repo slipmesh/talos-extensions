@@ -145,7 +145,7 @@ pub fn push_obfuscation_attrs(
 
 fn range_of_one(name: &str, value: u32) -> Result<AmneziaWireguardRange<u16>> {
     let value = u16::try_from(value)
-        .with_context(|| format!("{name} is {value}, and the module takes at most 65535"))?;
+        .with_context(|| format!("{name} is {value}, and the module holds it in 16 bits"))?;
     Ok(AmneziaWireguardRange::from(value))
 }
 

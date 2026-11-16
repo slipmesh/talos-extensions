@@ -157,12 +157,12 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
         .with_context(|| format!("rendering awg config for node {host:?}"))?;
     awg::config::validate(&awg_cfg)
         .with_context(|| format!("rendered awg config for node {host:?} is invalid"))?;
-    // Checked here rather than by awg: the daemon can only refuse a config it is already running
-    // on, and a refusal there would leave every interface of the node down.
+    // Checked here as well as by awg, so that such a config is refused before it reaches a node,
+    // where awg would leave the interface down.
     for iface in &awg_cfg.interfaces {
         iface.obfuscation.validate().with_context(|| {
             format!(
-                "node {host:?}, interface {:?}: the kernel module refuses this obfuscation",
+                "node {host:?}, interface {:?}: the kernel module refuses or mishandles this obfuscation",
                 iface.name
             )
         })?;
