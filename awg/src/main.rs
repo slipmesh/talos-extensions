@@ -37,9 +37,9 @@ async fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    let cfg: config::AwgConfig =
-        sliplib_yaml::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
-    config::validate(&cfg).context("config validation failed")?;
+    let cfg = checked(
+        sliplib_yaml::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?,
+    )?;
     let cfg = Arc::new(cfg);
 
     tracing::info!(interfaces = cfg.interfaces.len(), "starting awg");
@@ -84,6 +84,15 @@ async fn run() -> Result<()> {
         "startup converged, entering handshake/route tracking loop"
     );
     handshake::run(rt, awg, tracked, verdict_tx).await;
+}
+
+/// `cfg` if all of it can be applied. Whatever refuses a config is here, ahead of the first
+/// socket: refused at its interface, a config would leave the interfaces before that one
+/// converged, the rest not, and the daemon restarting.
+fn checked(cfg: config::AwgConfig) -> Result<config::AwgConfig> {
+    config::validate(&cfg).context("config validation failed")?;
+    interface::check(&cfg.interfaces).context("config validation failed")?;
+    Ok(cfg)
 }
 
 /// Starts the metrics endpoint, if this node is configured for one. A task of its own with its own
@@ -179,4 +188,49 @@ async fn build_tracked_interfaces(
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sliplib_config::Obfuscation;
+    use sliplib_config::awg::{AwgConfig, InterfaceEntry};
+    use sliplib_secrets::wireguard::encode_key;
+
+    fn config(rekey_after_time: u32) -> AwgConfig {
+        let interface = |name: &str, obfuscation| InterfaceEntry {
+            name: name.to_string(),
+            listen_port: 51820,
+            addresses: vec![],
+            private_key: encode_key(&[7; 32]).as_str().into(),
+            obfuscation,
+            handshake_stale_secs: None,
+            mtu: None,
+            peers: vec![],
+        };
+        AwgConfig {
+            interfaces: vec![
+                interface("awg-a", Obfuscation::default()),
+                interface(
+                    "awg-b",
+                    Obfuscation {
+                        rekey_after_time: Some(rekey_after_time),
+                        ..Obfuscation::default()
+                    },
+                ),
+            ],
+            metrics: None,
+        }
+    }
+
+    // `checked` is given no socket, so a config it refuses has changed nothing.
+    #[test]
+    fn a_config_the_kernel_cannot_be_sent_in_full_is_refused_whole() {
+        assert!(checked(config(120)).is_ok());
+        let shown = format!("{:#}", checked(config(65536)).unwrap_err());
+        assert!(
+            shown.contains("interface awg-b: rekey_after_time"),
+            "{shown}"
+        );
+    }
 }
