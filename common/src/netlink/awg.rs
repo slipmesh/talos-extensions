@@ -47,7 +47,6 @@ use sliplib_secrets::wireguard::decode_key;
 /// real bug to fix.
 ///
 /// `h1`..`h4` are ranges of two `u32` ends; ours is the range from the single value to itself.
-/// `s3`/`s4` and `i1`..`i5` are a plain `u16` and a string.
 /// `content_padding_addition`/`rekey_after_time`/
 /// `rekey_timeout`/`reject_after_time`/`keepalive_timeout`/`max_handshake_attempts` are ranges
 /// of two `u16` ends, out of which the module draws: a value is sent as the range from it to

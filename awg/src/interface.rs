@@ -201,8 +201,8 @@ pub async fn current_peers(awg: &mut AwgClient, iface: &str) -> Result<Vec<Peer>
 /// `previous`/`desired` need not be pre-sorted - keyed by `public_key` internally.
 ///
 /// A peer counts as unchanged only if `allowed_ips` (compared as a set - CIDR order is not
-/// semantically meaningful to WireGuard), `endpoint` and the keepalive all match; any of them
-/// changing means the peer gets re-sent with `WGPEER_F_REPLACE_ALLOWEDIPS`.
+/// semantically meaningful to WireGuard), `endpoint`, `advanced_security` and the keepalive all
+/// match; any of them changing means the peer gets re-sent with `WGPEER_F_REPLACE_ALLOWEDIPS`.
 fn diff_peers(previous: &[Peer], desired: &[Peer]) -> Vec<(String, Option<Peer>)> {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -267,9 +267,7 @@ fn replace_peer_attrs(
             .with_context(|| format!("unparsable resolved endpoint {endpoint:?}"))?;
         attrs.push(AmneziaWireguardPeerAttribute::Endpoint(addr));
     }
-    // The range variant: the module's policy for this attribute is NLA_U32, and WireGuard's u16
-    // is refused as an attribute of invalid length. Sent even when zero: an omitted attribute
-    // keeps what the kernel holds.
+    // Sent even when zero: an omitted attribute keeps what the kernel holds.
     attrs.push(AmneziaWireguardPeerAttribute::PersistentKeepalive(
         peer.persistent_keepalive,
     ));
@@ -332,7 +330,9 @@ async fn sync_peers(
 fn identity_attrs(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribute>> {
     let mut device_attrs = vec![
         AmneziaWireguardAttribute::IfName(iface.name.clone()),
-        AmneziaWireguardAttribute::PrivateKey(decode_key(iface.private_key.expose())?),
+        AmneziaWireguardAttribute::PrivateKey(
+            decode_key(iface.private_key.expose()).context("invalid private_key")?,
+        ),
         AmneziaWireguardAttribute::ListenPort(iface.listen_port),
     ];
     push_obfuscation_attrs(&mut device_attrs, &iface.obfuscation)?;
@@ -343,7 +343,11 @@ fn identity_attrs(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribut
 /// so that a config can be refused whole before any of its interfaces is touched.
 pub fn check(interfaces: &[InterfaceEntry]) -> Result<()> {
     for iface in interfaces {
-        identity_attrs(iface).with_context(|| format!("interface {}", iface.name))?;
+        iface
+            .obfuscation
+            .validate()
+            .and_then(|()| identity_attrs(iface).map(drop))
+            .with_context(|| format!("interface {}", iface.name))?;
     }
     Ok(())
 }
@@ -738,6 +742,33 @@ mod tests {
         let shown = format!("{:#}", check(&interfaces).unwrap_err());
         assert!(
             shown.starts_with("interface awg-b: rekey_after_time"),
+            "{shown}"
+        );
+    }
+
+    // The module refuses these only once the link is up.
+    #[test]
+    fn a_config_is_refused_for_an_interface_whose_obfuscation_the_module_refuses() {
+        let overlapping = Obfuscation {
+            h1: Some(5),
+            h2: Some(5),
+            ..Obfuscation::default()
+        };
+        let interfaces = [interface("awg-b", overlapping)];
+        let shown = format!("{:#}", check(&interfaces).unwrap_err());
+        assert!(
+            shown.starts_with("interface awg-b: obfuscation.h1 and obfuscation.h2"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn a_config_is_refused_for_an_undecodable_private_key_by_its_name() {
+        let mut iface = interface("awg-b", Obfuscation::default());
+        iface.private_key = "not a key".into();
+        let shown = format!("{:#}", check(&[iface]).unwrap_err());
+        assert!(
+            shown.starts_with("interface awg-b: invalid private_key"),
             "{shown}"
         );
     }
