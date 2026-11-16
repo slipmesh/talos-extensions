@@ -15,14 +15,16 @@
 //!   the four must differ, an unset one counting as its WireGuard message type 1..4.
 //! - i1-i5: decoy/cover packets with a configurable header spec, sent alongside real traffic.
 //! - header_protection_key: encrypts the WireGuard packet header's own type/reserved fields with a
-//!   separate key - a distinct obfuscation layer from the junk-packet tricks above. Requires
-//!   `AdvancedSecurity` enabled on the peer(s) that should use it (see `PeerEntry` in
-//!   `awg/src/config.rs`; setting only this field does nothing on its own), and every s1..s4 at
-//!   least 12, room for its nonce.
+//!   separate key - a distinct obfuscation layer from the junk-packet tricks above. The key is
+//!   the interface's: once set, every packet to and from every peer of it is protected, so each
+//!   peer needs the same key and the same s1..s4, every one of them at least 12, room for the
+//!   nonce. The module reads no per-peer switch for it.
 //! - content_padding_addition, rekey_after_time, rekey_timeout, reject_after_time,
 //!   keepalive_timeout, max_handshake_attempts: protocol timing/padding constants vanilla
 //!   WireGuard hardcodes - configurable here specifically so they stop being a fixed,
-//!   fingerprintable signature.
+//!   fingerprintable signature. Each is a number up to 65535, the width the module holds it in,
+//!   and each end of a tunnel has its own. Zero or unset is the module's own constant for the
+//!   five timing values, and no added padding for content_padding_addition.
 
 use serde::{Deserialize, Serialize};
 
@@ -70,22 +72,22 @@ pub struct Obfuscation {
     pub header_protection_key: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_padding_addition: Option<u32>,
+    pub content_padding_addition: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rekey_after_time: Option<u32>,
+    pub rekey_after_time: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rekey_timeout: Option<u32>,
+    pub rekey_timeout: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reject_after_time: Option<u32>,
+    pub reject_after_time: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub keepalive_timeout: Option<u32>,
+    pub keepalive_timeout: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_handshake_attempts: Option<u32>,
+    pub max_handshake_attempts: Option<u16>,
 
     /// AmneziaWG 3.1. Appends a random-length trailer to outgoing packets, sized against what
-    /// the peer has been seen to send, so the wire lengths stop being a fingerprint. Receive-side
-    /// length checks become "at least" rather than "exactly", so both ends may set it
-    /// independently.
+    /// the peer has been seen to send, so the wire lengths stop being a fingerprint. Only an end
+    /// that sets it accepts a handshake or cookie message longer than its exact size, so an end
+    /// without it drops what an end with it sends: both ends of a tunnel set it, or neither.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub random_trailers: Option<bool>,
     /// AmneziaWG 3.1. Suppresses cookie replies, which are a message type of their own and
@@ -168,6 +170,25 @@ impl Obfuscation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The module holds each end of a tuning value in 16 bits: a larger number never applied as
+    // written.
+    #[test]
+    fn a_tuning_value_above_65535_is_not_read() {
+        for key in [
+            "content_padding_addition",
+            "rekey_after_time",
+            "rekey_timeout",
+            "reject_after_time",
+            "keepalive_timeout",
+            "max_handshake_attempts",
+        ] {
+            let read = |value: u32| {
+                yaml_serde::from_str::<Obfuscation>(&format!("{{{key}: {value}}}")).is_ok()
+            };
+            assert!(read(65535) && !read(65536), "{key}");
+        }
+    }
 
     #[test]
     fn serializing_omits_unset_fields_instead_of_writing_null() {

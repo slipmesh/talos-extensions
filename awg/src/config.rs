@@ -70,11 +70,9 @@ pub struct PeerEntry {
     /// both kinds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_ips: Option<Vec<String>>,
-    /// Enables AmneziaWG's "header protection" for this peer - encrypts the WireGuard packet
-    /// header's own type/reserved fields with the interface's `obfuscation.header_protection_key`.
-    /// Both ends must agree: the peer's own config needs the matching key and
-    /// `AdvancedSecurity: true` too. Setting `header_protection_key` alone, without this, does
-    /// nothing (confirmed against amneziawg-tools' `src/config.c`).
+    /// Accepted and not acted on: the module reads no per-peer switch, and protects the headers
+    /// of every peer of an interface that has `obfuscation.header_protection_key`. The key stays
+    /// in the format of this line, and a peer that sets it still needs the interface's key.
     #[serde(default)]
     pub advanced_security: bool,
 }
@@ -115,11 +113,8 @@ pub fn validate(cfg: &AwgConfig) -> anyhow::Result<()> {
                 iface.name,
                 peer.public_key
             );
-            // `advanced_security` alone does nothing without the interface's own
-            // `header_protection_key` (see `PeerEntry::advanced_security`'s own doc comment,
-            // confirmed against amneziawg-tools' src/config.c) - catching this here means a
-            // typo'd/missing key fails the config outright instead of silently negotiating
-            // without header protection, discoverable only by traffic analysis.
+            // Whoever set the flag meant header protection, which only the interface's key
+            // turns on: a missing key is refused here rather than found by traffic analysis.
             anyhow::ensure!(
                 !peer.advanced_security || iface.obfuscation.header_protection_key.is_some(),
                 "interface {:?}, peer {:?}: advanced_security is set but obfuscation.header_protection_key is not",

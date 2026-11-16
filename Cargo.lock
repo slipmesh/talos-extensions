@@ -101,7 +101,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "netlink-packet-amneziawg",
- "netlink-packet-core",
  "prometheus-client",
  "rtnetlink",
  "serde",

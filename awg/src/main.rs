@@ -195,12 +195,16 @@ mod tests {
     use base64::Engine;
     use common::Obfuscation;
 
-    fn config(rekey_after_time: u32) -> AwgConfig {
+    fn base64_key() -> String {
+        base64::engine::general_purpose::STANDARD.encode([7; 32])
+    }
+
+    fn config(header_protection_key: &str) -> AwgConfig {
         let interface = |name: &str, obfuscation| InterfaceEntry {
             name: name.to_string(),
             listen_port: 51820,
             addresses: vec![],
-            private_key: base64::engine::general_purpose::STANDARD.encode([7; 32]),
+            private_key: base64_key(),
             obfuscation,
             handshake_stale_secs: None,
             peers: vec![],
@@ -211,7 +215,11 @@ mod tests {
                 interface(
                     "awg-b",
                     Obfuscation {
-                        rekey_after_time: Some(rekey_after_time),
+                        header_protection_key: Some(header_protection_key.to_string()),
+                        s1: Some(12),
+                        s2: Some(12),
+                        s3: Some(12),
+                        s4: Some(12),
                         ..Obfuscation::default()
                     },
                 ),
@@ -223,10 +231,11 @@ mod tests {
     // `checked` is given no socket, so a config it refuses has changed nothing.
     #[test]
     fn a_config_the_kernel_cannot_be_sent_in_full_is_refused_whole() {
-        assert!(checked(config(120)).is_ok());
-        let shown = format!("{:#}", checked(config(65536)).unwrap_err());
+        let key = base64_key();
+        assert!(checked(config(&key)).is_ok());
+        let shown = format!("{:#}", checked(config("not a key")).unwrap_err());
         assert!(
-            shown.contains("interface awg-b: rekey_after_time"),
+            shown.contains("interface awg-b: invalid header_protection_key"),
             "{shown}"
         );
     }
