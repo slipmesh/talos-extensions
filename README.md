@@ -114,27 +114,36 @@ to). This is a config-authoring concern, not something `awg` decides. The same a
 `src/netlink.c` and amneziawg-tools' own config parser (`src/config.c`), since the kernel module's
 own README only documents the original set. See `common::Obfuscation`'s doc comment for the full
 field list and what each one does. `header_protection_key` belongs to the interface: once it is
-set, the kernel module protects the headers of every packet to and from every peer of that
-interface, so each peer needs the same key and the same `s1`..`s4`. A peer's `advanced_security` is
+set, the kernel module protects the header of every handshake, cookie and data packet to and from
+every peer of that interface, so each peer needs the same key and the same `s1`..`s4`; junk and
+decoy packets are not protected. A peer's `advanced_security` is
 still accepted and does nothing: the module reads no per-peer switch. `awg` leaves the key out of
 its request when the config has none, and the module has no way to take a key off an interface, so
 a key removed from the config stays in force until the interface is created anew, at the next boot.
+So does the module's check of the junk sizes below: a config that drops the key and takes any of
+`s1`..`s4` below 12 is refused on every pass until then.
 The kernel module also accepts the key only when every junk size `s1`..`s4` is at least
 12, room for the header protection nonce (an unset size counts as 0), and refuses magic headers
 `h1`..`h4` that are not all different (an unset one counts as 1..4); both come back as a bare
 `Invalid argument` for that interface. It never checks that `jmin` does not exceed `jmax` before
-drawing junk packet sizes between them. `awg` applies whatever config it is given; `taloscfg`
-refuses to render one that breaks any of these, see `common::Obfuscation::validate`.
+drawing junk packet sizes between them. `awg` refuses an interface that breaks any of these at
+start and leaves it down while the others come up, and `taloscfg` refuses to render it, see
+`common::Obfuscation::validate`.
 
 `content_padding_addition`, `rekey_after_time`, `rekey_timeout`, `reject_after_time`,
 `keepalive_timeout` and `max_handshake_attempts` are each a number up to 65535, the width the
-module holds them in; a larger one is refused when the config is read. They are this end's own
-and need not match the peer's. Zero or an unset one is the module's own constant for the five
-timing values, and no added padding for `content_padding_addition`; all six are sent on every
+module holds them in; a larger one is refused the same way. They need not be equal on the two
+ends, but `keepalive_timeout` meets the peer's timers: an end that sends without hearing back
+starts a new handshake after its own `keepalive_timeout` plus `rekey_timeout`, so a
+`keepalive_timeout` above that sum on the other end makes one-way traffic re-handshake. Zero or an
+unset one is the module's own constant for the five timing values, and for
+`content_padding_addition` the padding a data packet gets without it; all six are sent on every
 reconcile, so a value taken out of the config is taken off the interface. A `rekey_after_time`
 of 180 or more is accepted and does not do what it says: the module stops using a key 180
-seconds after its handshake whatever `reject_after_time` is set to, so the renewal comes after
-the key is gone and traffic waits for a handshake at every expiry. Keep it at 179 or below.
+seconds after its handshake whatever `reject_after_time` is set to, so an initiator that only
+sends renews after the key is gone and waits for a handshake at every expiry. One that also
+receives renews once the key is older than `reject_after_time` less `keepalive_timeout` and
+`rekey_timeout`, 165 seconds by default. Stay well below 180; the module's own value is 120.
 
 Of the two 3.1 switches, `random_trailers` has to be the same on both ends: it appends a
 random-length trailer to outgoing packets, and only an end that sets it accepts a handshake or
@@ -146,7 +155,9 @@ Both are sent explicitly on every reconcile, set or not: an omitted attribute le
 kernel's current value alone. A module older than 3.1 rejects them - generic netlink validates against
 the family's own attribute maximum and fails the whole request rather than ignoring what it
 does not know - so a refused `SetDevice` is retried once without them, and the interface comes
-up without the two switches instead of not at all.
+up without the two switches instead of not at all. Older than 3.0 the module takes none of this:
+the six values and the magic headers go out in the form of 3.0, so `awg` needs AmneziaWG 3.0 or
+later, and 3.1 for the two switches.
 
 ### Ownership: the whole `amneziawg` netlink kind, no naming convention
 
@@ -517,8 +528,10 @@ pool's own key, which the config is built with, is written into the pool's docum
 puts the same key on the wire; `rw-inspect` writes nothing and asks for `generate` first when that
 key is not written down yet.
 
-The client config carries what the pool and its clients have to share: `Jc`, `Jmin`, `Jmax`,
-`S1`..`S4` and `H1`..`H4`, and `HeaderProtectionKey` and `RandomTrailers` when the pool sets them.
+The client config carries the pool's `Jc`, `Jmin` and `Jmax`, which are the client's own as the
+end that starts the handshake (no end checks the junk it receives), and what the pool and its
+clients have to share: `S1`..`S4` and `H1`..`H4`, and `HeaderProtectionKey` and `RandomTrailers`
+when the pool sets them.
 
 The client config's `Endpoint` is the first of the pool's `node_hostnames`. `--endpoint` on
 either command picks another of them, or names anything else - a DNS name in front of the pool,
@@ -555,6 +568,20 @@ peer of it, and for a pool, a new server key that no client config already hande
 keys and settings in them stay as they were and only their layout changes.
 
 ### Breaking changes
+
+A tuning value above 65535 - `content_padding_addition`, `rekey_after_time`, `rekey_timeout`,
+`reject_after_time`, `keepalive_timeout` or `max_handshake_attempts` - is refused, by `taloscfg`
+naming the node, the interface and the key, and by `awg`, which leaves that interface down. The
+module holds each in 16 bits, so such a value never did what it said. Set it to 65535 or less, or
+take it out for the module's own value.
+
+A tuning value taken out of the config is now taken off the interface too, back to the module's
+own value; it used to stay as the earlier config set it.
+
+A pool with `header_protection_key`, `s3`, `s4` or `random_trailers` now gets them into its
+client configs. Export the client configs of such a pool again with `rw-inspect`: a client
+without the key or without `RandomTrailers` completes no handshake, without `S4` sends no data the
+pool takes, and without `S3` reads no cookie reply.
 
 The top of the `network` document, its `cluster:` block and every pool refuse a field they do not
 know, so a name that changed fails where it is written rather than being ignored into a listener

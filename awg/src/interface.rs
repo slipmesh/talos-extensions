@@ -187,8 +187,8 @@ pub async fn current_peers(awg: &mut AwgClient, iface: &str) -> Result<Vec<Peer>
 /// `previous`/`desired` need not be pre-sorted - keyed by `public_key` internally.
 ///
 /// A peer counts as unchanged only if `allowed_ips` (compared as a set - CIDR order is not
-/// semantically meaningful to WireGuard), `endpoint`, `advanced_security` and the keepalive all
-/// match; any of them changing means the peer gets re-sent with `WGPEER_F_REPLACE_ALLOWEDIPS`.
+/// semantically meaningful to WireGuard), `endpoint` and the keepalive all match; any of them
+/// changing means the peer gets re-sent with `WGPEER_F_REPLACE_ALLOWEDIPS`.
 fn diff_peers(previous: &[Peer], desired: &[Peer]) -> Vec<(String, Option<Peer>)> {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -714,6 +714,30 @@ mod tests {
         assert!(
             shown.starts_with("interface awg-b: invalid private_key"),
             "{shown}"
+        );
+    }
+
+    // The config still accepts the flag; the module reads no such attribute.
+    #[tokio::test]
+    async fn a_peer_flagged_advanced_security_is_sent_no_flag() {
+        let flagged = PeerEntry {
+            public_key: base64::engine::general_purpose::STANDARD.encode(KEY),
+            name: None,
+            endpoint: None,
+            allowed_ips: Some(vec!["203.0.113.1/32".to_string()]),
+            advanced_security: true,
+        };
+        let attrs = replace_peer_attrs(KEY, &resolve_peer(&flagged).await.unwrap()).unwrap();
+        assert_eq!(
+            attrs,
+            [
+                AmneziaWireguardPeerAttribute::PublicKey(KEY),
+                AmneziaWireguardPeerAttribute::Flags(AmneziaWireguardPeerFlags::ReplaceAllowedIps),
+                AmneziaWireguardPeerAttribute::AllowedIps(vec![
+                    cidr_to_allowed_ip("203.0.113.1/32").unwrap()
+                ]),
+                AmneziaWireguardPeerAttribute::PersistentKeepalive(AmneziaWireguardRange::default()),
+            ]
         );
     }
 

@@ -159,8 +159,10 @@ pub(crate) fn resolve_dns(mesh: &MeshConfig, pool: &RoadwarriorPool) -> Option<S
 /// Renders a client-side config: stock WireGuard `.conf` shape for both cases (AmneziaWG apps
 /// accept the same `[Interface]`/`[Peer]` INI with extra keys, not a different format) - the
 /// AmneziaWG lines are only emitted when `obfuscation` is non-default (a `plain` pool always
-/// resolves to `Obfuscation::default()`, see `resolve_pool_identity`). They are what both ends
-/// have to share: the junk and header values, the header protection key and the trailer switch.
+/// resolves to `Obfuscation::default()`, see `pool_identity`). `Jc`, `Jmin` and `Jmax` are the
+/// client's own as the end that starts the handshake, since no end checks the junk it receives;
+/// the rest is what both ends have to share: the junk sizes, the headers, the header protection
+/// key and the trailer switch.
 /// The tuning values, the decoy specs and the cookie switch are each end's own and stay with the
 /// pool.
 ///
@@ -550,9 +552,8 @@ roadwarriors:
         )
     }
 
-    // The module applies the key, the junk sizes of all four packet types and the trailer check
-    // to every packet of the interface: a client that lacks one of them cannot complete a
-    // handshake with the pool.
+    // A client without the key or the trailer switch completes no handshake with the pool,
+    // without S4 sends no data packet it takes, and without S3 reads no cookie reply.
     #[test]
     fn render_client_config_carries_what_both_ends_of_a_pool_must_share() {
         let key = keys::generate_private_key();
@@ -565,14 +566,15 @@ roadwarriors:
             random_trailers: Some(true),
             ..Obfuscation::default()
         });
-        assert!(cfg.contains("S3 = 60\n"), "{cfg}");
-        assert!(cfg.contains("S4 = 20\n"), "{cfg}");
-        assert!(
-            cfg.contains(&format!("HeaderProtectionKey = {key}\n")),
-            "{cfg}"
-        );
         let interface = cfg.split("[Peer]").next().unwrap();
-        assert!(interface.contains("RandomTrailers = on\n"), "{cfg}");
+        for line in [
+            "S3 = 60\n".to_string(),
+            "S4 = 20\n".to_string(),
+            format!("HeaderProtectionKey = {key}\n"),
+            "RandomTrailers = on\n".to_string(),
+        ] {
+            assert!(interface.contains(&line), "{line:?} not in {cfg}");
+        }
     }
 
     #[test]

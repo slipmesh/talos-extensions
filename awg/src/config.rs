@@ -71,8 +71,8 @@ pub struct PeerEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_ips: Option<Vec<String>>,
     /// Accepted and not acted on: the module reads no per-peer switch, and protects the headers
-    /// of every peer of an interface that has `obfuscation.header_protection_key`. The key stays
-    /// in the format of this line, and a peer that sets it still needs the interface's key.
+    /// of every peer of an interface that has `obfuscation.header_protection_key`. Accepted so
+    /// that existing configs stay valid, and a peer that sets it still needs the interface's key.
     #[serde(default)]
     pub advanced_security: bool,
 }

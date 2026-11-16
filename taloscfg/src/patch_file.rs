@@ -157,12 +157,12 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
         .with_context(|| format!("rendering awg config for node {host:?}"))?;
     awg::config::validate(&awg_cfg)
         .with_context(|| format!("rendered awg config for node {host:?} is invalid"))?;
-    // Checked here rather than by awg: the daemon can only refuse a config it is already running
-    // on, and a refusal there would leave every interface of the node down.
+    // Checked here as well as by awg, so that such a config is refused before it reaches a node,
+    // where awg would leave the interface down.
     for iface in &awg_cfg.interfaces {
         iface.obfuscation.validate().with_context(|| {
             format!(
-                "node {host:?}, interface {:?}: the kernel module refuses this obfuscation",
+                "node {host:?}, interface {:?}: the kernel module refuses or mishandles this obfuscation",
                 iface.name
             )
         })?;
@@ -383,6 +383,22 @@ configFiles:
         );
         let err = render_raw(&raw, "a").unwrap_err();
         assert!(format!("{err:#}").contains("s3, s4"), "{err:#}");
+    }
+
+    // The module holds it in 16 bits, so a larger value never did what it said.
+    #[test]
+    fn a_tuning_value_above_65535_is_not_rendered_naming_the_node_the_interface_and_the_key() {
+        let raw = with_router_files(&[("", TEMPLATE)]).replace(
+            "{pair: [a, b], port: 51820}",
+            "{pair: [a, b], port: 51820, obfuscation: {rekey_after_time: 65536}}",
+        );
+        let shown = format!("{:#}", render_raw(&raw, "a").unwrap_err());
+        for part in [
+            "node \"a\", interface ",
+            "obfuscation.rekey_after_time is 65536",
+        ] {
+            assert!(shown.contains(part), "{part:?} not in {shown}");
+        }
     }
 
     #[test]

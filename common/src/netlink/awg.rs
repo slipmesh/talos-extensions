@@ -47,7 +47,8 @@ use netlink_packet_generic::GenlMessage;
 /// always sent, zero for an unset one: zero is the module's "not set", and an omitted attribute
 /// would keep what an earlier config put there.
 ///
-/// Fallible only because `header_protection_key` needs base64 decoding like any other key.
+/// Fallible for a tuning value above 65535, and because `header_protection_key` needs base64
+/// decoding like any other key.
 pub fn push_obfuscation_attrs(
     attrs: &mut Vec<AmneziaWireguardAttribute>,
     o: &Obfuscation,
@@ -92,25 +93,31 @@ pub fn push_obfuscation_attrs(
             decode_key(key).context("invalid header_protection_key")?,
         ));
     }
-    let range_of = |value: Option<u16>| AmneziaWireguardRange::from(value.unwrap_or(0));
+    let range_of = |name, value: Option<u32>| range_of_one(name, value.unwrap_or(0));
     attrs.push(AmneziaWireguardAttribute::ContentPaddingAddition(range_of(
+        "content_padding_addition",
         o.content_padding_addition,
-    )));
+    )?));
     attrs.push(AmneziaWireguardAttribute::RekeyAfterTime(range_of(
+        "rekey_after_time",
         o.rekey_after_time,
-    )));
+    )?));
     attrs.push(AmneziaWireguardAttribute::RekeyTimeout(range_of(
+        "rekey_timeout",
         o.rekey_timeout,
-    )));
+    )?));
     attrs.push(AmneziaWireguardAttribute::RejectAfterTime(range_of(
+        "reject_after_time",
         o.reject_after_time,
-    )));
+    )?));
     attrs.push(AmneziaWireguardAttribute::KeepaliveTimeout(range_of(
+        "keepalive_timeout",
         o.keepalive_timeout,
-    )));
+    )?));
     attrs.push(AmneziaWireguardAttribute::MaxHandshakeAttempts(range_of(
+        "max_handshake_attempts",
         o.max_handshake_attempts,
-    )));
+    )?));
     // Always sent: these are obfuscation switches, and an omitted attribute leaves whatever the
     // kernel already has.
     attrs.push(AmneziaWireguardAttribute::RandomTrailers(
@@ -120,6 +127,12 @@ pub fn push_obfuscation_attrs(
         o.disable_cookies.unwrap_or(false),
     ));
     Ok(())
+}
+
+fn range_of_one(name: &str, value: u32) -> Result<AmneziaWireguardRange<u16>> {
+    let value = u16::try_from(value)
+        .with_context(|| format!("{name} is {value}, and the module holds it in 16 bits"))?;
+    Ok(AmneziaWireguardRange::from(value))
 }
 
 /// The 3.1 attributes removed, or `None` if there were none to remove.
@@ -311,7 +324,8 @@ mod tests {
             AmneziaWireguardAttribute::KeepaliveTimeout(AmneziaWireguardRange::from(12)),
             AmneziaWireguardAttribute::MaxHandshakeAttempts(AmneziaWireguardRange::from(20)),
         ] {
-            assert!(attrs.contains(&sent), "{sent:?} not in {attrs:?}");
+            let times = attrs.iter().filter(|attr| **attr == sent).count();
+            assert_eq!(times, 1, "{sent:?} in {attrs:?}");
         }
     }
 
@@ -412,7 +426,8 @@ mod tests {
             A::KeepaliveTimeout(AmneziaWireguardRange::default()),
             A::MaxHandshakeAttempts(AmneziaWireguardRange::default()),
         ] {
-            assert!(attrs.contains(&expected), "{expected:?} not in {attrs:?}");
+            let times = attrs.iter().filter(|attr| **attr == expected).count();
+            assert_eq!(times, 1, "{expected:?} in {attrs:?}");
         }
     }
 }
