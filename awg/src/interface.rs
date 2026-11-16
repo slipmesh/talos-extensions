@@ -13,7 +13,7 @@
 use anyhow::{Context, Result};
 use common::netlink::awg::{AwgClient, push_obfuscation_attrs};
 use common::netlink::rt::RtClient;
-use netlink_packet_amneziawg::range::u16_range_pack;
+use netlink_packet_amneziawg::range::Range;
 use netlink_packet_amneziawg::{
     AmneziaWireguardAddressFamily, AmneziaWireguardAllowedIp, AmneziaWireguardAllowedIpAttr,
     AmneziaWireguardAttribute, AmneziaWireguardPeer, AmneziaWireguardPeerAttribute,
@@ -60,18 +60,16 @@ pub struct Peer {
     /// re-sent on every single process start, not only when it actually changed - harmless, since
     /// re-sending is idempotent.
     pub advanced_security: bool,
-    /// As the module holds it: two u16 ends packed into a u32, from which it draws the interval
-    /// at every re-arm. Zero is no keepalive.
-    pub persistent_keepalive: u32,
+    /// As the module holds it: it draws the interval out of the range at every re-arm. The zero
+    /// range is no keepalive.
+    pub persistent_keepalive: Range<u16>,
 }
 
-/// A peer this node dials gets a keepalive, so that a NAT on the way keeps its mapping. A single
-/// interval is a range of that one value: a bare number of seconds is the range from it down to
-/// zero, out of which the module draws an arbitrary interval.
-fn persistent_keepalive(endpoint: Option<&str>) -> u32 {
+/// A peer this node dials gets a keepalive, so that a NAT on the way keeps its mapping.
+fn persistent_keepalive(endpoint: Option<&str>) -> Range<u16> {
     match endpoint {
-        Some(_) => u16_range_pack(PERSISTENT_KEEPALIVE_SECS, PERSISTENT_KEEPALIVE_SECS),
-        None => 0,
+        Some(_) => Range::from(PERSISTENT_KEEPALIVE_SECS),
+        None => Range::default(),
     }
 }
 
@@ -148,7 +146,7 @@ fn peer_from_attrs(attrs: Vec<AmneziaWireguardPeerAttribute>) -> Option<Peer> {
     let mut public_key = None;
     let mut allowed_ips = Vec::new();
     let mut endpoint = None;
-    let mut persistent_keepalive = 0;
+    let mut persistent_keepalive = Range::default();
     for attr in attrs {
         match attr {
             AmneziaWireguardPeerAttribute::PersistentKeepaliveRange(range) => {
@@ -528,9 +526,11 @@ mod tests {
     use netlink_packet_core::Nla;
 
     const KEY: [u8; 32] = [7; 32];
-    const KEEPALIVE: u32 = 0x0019_0019;
+    const KEEPALIVE: Range<u16> = Range { lo: 25, hi: 25 };
+    /// What a number of seconds sent in place of a range left in the module.
+    const BARE_25: Range<u16> = Range { lo: 25, hi: 0 };
 
-    fn keepalive_sent(peer: &Peer) -> Option<u32> {
+    fn keepalive_sent(peer: &Peer) -> Option<Range<u16>> {
         replace_peer_attrs(KEY, peer)
             .unwrap()
             .into_iter()
@@ -540,7 +540,6 @@ mod tests {
             })
     }
 
-    // The module reads the u32 as two u16 ends: a bare 25 would be the range 25..0.
     #[test]
     fn a_peer_with_an_endpoint_is_sent_its_keepalive_as_a_range_of_one_value() {
         let peer = peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"));
@@ -551,7 +550,7 @@ mod tests {
     #[test]
     fn a_peer_without_an_endpoint_is_sent_a_zero_keepalive() {
         let peer = peer("k1", &["203.0.113.1/32"], None);
-        assert_eq!(keepalive_sent(&peer), Some(0));
+        assert_eq!(keepalive_sent(&peer), Some(Range::default()));
     }
 
     #[test]
@@ -618,13 +617,13 @@ mod tests {
                 cidr_to_allowed_ip("203.0.113.1/32").unwrap(),
             ]),
             AmneziaWireguardPeerAttribute::Endpoint("192.0.2.1:51820".parse().unwrap()),
-            AmneziaWireguardPeerAttribute::PersistentKeepaliveRange(25),
+            AmneziaWireguardPeerAttribute::PersistentKeepaliveRange(BARE_25),
         ])
         .unwrap();
         assert_eq!(
             read,
             Peer {
-                persistent_keepalive: 25,
+                persistent_keepalive: BARE_25,
                 ..peer(
                     &encode_key(&KEY),
                     &["203.0.113.1/32"],
@@ -648,7 +647,7 @@ mod tests {
     fn a_keepalive_held_as_a_bare_number_yields_replace_op() {
         let desired = peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"));
         let held = Peer {
-            persistent_keepalive: 25,
+            persistent_keepalive: BARE_25,
             ..desired.clone()
         };
         assert_eq!(
@@ -660,7 +659,7 @@ mod tests {
     #[test]
     fn a_peer_kept_through_a_failed_lookup_gets_the_keepalive_of_its_endpoint() {
         let held = Peer {
-            persistent_keepalive: 25,
+            persistent_keepalive: BARE_25,
             ..peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"))
         };
         assert_eq!(
