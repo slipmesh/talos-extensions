@@ -11,7 +11,7 @@ use crate::obfuscation::Obfuscation;
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use genetlink::GenetlinkHandle;
-use netlink_packet_amneziawg::range::u32_range_pack;
+use netlink_packet_amneziawg::range::Range;
 use netlink_packet_amneziawg::{
     AmneziaWireguardAttribute, AmneziaWireguardCmd, AmneziaWireguardMessage,
 };
@@ -46,17 +46,18 @@ use netlink_packet_generic::GenlMessage;
 /// etc. read like runtime fallback thresholds, not raw values) - not worth guessing at without a
 /// real bug to fix.
 ///
-/// H1..H4 use the `*Range` variants (packed `u64`, `lo == hi == v` for our plain single-value
-/// case via `u32_range_pack`) - the wire format AmneziaWG 3.0's kernel module actually expects,
+/// H1..H4 use the `*Range` variants (the range from our single value to itself) - the wire
+/// format AmneziaWG 3.0's kernel module actually expects,
 /// not the NUL-terminated-string `H1`..`H4` variants, an older kernel module generation's format
 /// (see this crate's git-rev pin comment in the workspace `Cargo.toml`). `s3`/`s4` and `i1`..`i5`
 /// have no such split: the crate's plain `u16`/`String` variants already match the kernel's
 /// `NLA_U16`/`NLA_NUL_STRING` policy for those. `content_padding_addition`/`rekey_after_time`/
-/// `rekey_timeout`/`reject_after_time`/`keepalive_timeout`/`max_handshake_attempts` are plain
-/// `u32` on the wire (confirmed against netlink.c's `device_policy`), with no packed/range
-/// variant for these in the crate, unlike H1..H4.
+/// `rekey_timeout`/`reject_after_time`/`keepalive_timeout`/`max_handshake_attempts` are ranges
+/// of two `u16` ends, out of which the module draws: a value is sent as the range from it to
+/// itself, and one above 65535 is refused.
 ///
-/// Fallible only because `header_protection_key` needs base64 decoding like any other key.
+/// Fallible for that, and because `header_protection_key` needs base64 decoding like any other
+/// key.
 pub fn push_obfuscation_attrs(
     attrs: &mut Vec<AmneziaWireguardAttribute>,
     o: &Obfuscation,
@@ -69,10 +70,10 @@ pub fn push_obfuscation_attrs(
     attrs.push(AmneziaWireguardAttribute::S3(o.s3.unwrap_or(0)));
     attrs.push(AmneziaWireguardAttribute::S4(o.s4.unwrap_or(0)));
     let [h1, h2, h3, h4] = o.magic_headers();
-    attrs.push(AmneziaWireguardAttribute::H1Range(u32_range_pack(h1, h1)));
-    attrs.push(AmneziaWireguardAttribute::H2Range(u32_range_pack(h2, h2)));
-    attrs.push(AmneziaWireguardAttribute::H3Range(u32_range_pack(h3, h3)));
-    attrs.push(AmneziaWireguardAttribute::H4Range(u32_range_pack(h4, h4)));
+    attrs.push(AmneziaWireguardAttribute::H1Range(Range::from(h1)));
+    attrs.push(AmneziaWireguardAttribute::H2Range(Range::from(h2)));
+    attrs.push(AmneziaWireguardAttribute::H3Range(Range::from(h3)));
+    attrs.push(AmneziaWireguardAttribute::H4Range(Range::from(h4)));
     if let Some(v) = &o.i1 {
         attrs.push(AmneziaWireguardAttribute::I1(v.clone()));
     }
@@ -94,22 +95,38 @@ pub fn push_obfuscation_attrs(
         ));
     }
     if let Some(v) = o.content_padding_addition {
-        attrs.push(AmneziaWireguardAttribute::ContentPaddingAddition(v));
+        attrs.push(AmneziaWireguardAttribute::ContentPaddingAddition(
+            range_of_one("content_padding_addition", v)?,
+        ));
     }
     if let Some(v) = o.rekey_after_time {
-        attrs.push(AmneziaWireguardAttribute::RekeyAfterTime(v));
+        attrs.push(AmneziaWireguardAttribute::RekeyAfterTime(range_of_one(
+            "rekey_after_time",
+            v,
+        )?));
     }
     if let Some(v) = o.rekey_timeout {
-        attrs.push(AmneziaWireguardAttribute::RekeyTimeout(v));
+        attrs.push(AmneziaWireguardAttribute::RekeyTimeout(range_of_one(
+            "rekey_timeout",
+            v,
+        )?));
     }
     if let Some(v) = o.reject_after_time {
-        attrs.push(AmneziaWireguardAttribute::RejectAfterTime(v));
+        attrs.push(AmneziaWireguardAttribute::RejectAfterTime(range_of_one(
+            "reject_after_time",
+            v,
+        )?));
     }
     if let Some(v) = o.keepalive_timeout {
-        attrs.push(AmneziaWireguardAttribute::KeepaliveTimeout(v));
+        attrs.push(AmneziaWireguardAttribute::KeepaliveTimeout(range_of_one(
+            "keepalive_timeout",
+            v,
+        )?));
     }
     if let Some(v) = o.max_handshake_attempts {
-        attrs.push(AmneziaWireguardAttribute::MaxHandshakeAttempts(v));
+        attrs.push(AmneziaWireguardAttribute::MaxHandshakeAttempts(
+            range_of_one("max_handshake_attempts", v)?,
+        ));
     }
     // Always sent, unlike the tuning values above: these are obfuscation switches, and an
     // omitted attribute leaves whatever the kernel already has.
@@ -120,6 +137,12 @@ pub fn push_obfuscation_attrs(
         o.disable_cookies.unwrap_or(false),
     ));
     Ok(())
+}
+
+fn range_of_one(name: &str, value: u32) -> Result<Range<u16>> {
+    let value = u16::try_from(value)
+        .with_context(|| format!("{name} is {value}, and the module takes at most 65535"))?;
+    Ok(Range::from(value))
 }
 
 /// The 3.1 attributes removed, or `None` if there were none to remove.
@@ -270,10 +293,56 @@ mod tests {
     #[test]
     fn default_obfuscation_headers_are_the_real_wireguard_message_types_not_zero() {
         let attrs = push(&Obfuscation::default());
-        assert!(attrs.contains(&AmneziaWireguardAttribute::H1Range(u32_range_pack(1, 1))));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::H2Range(u32_range_pack(2, 2))));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::H3Range(u32_range_pack(3, 3))));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::H4Range(u32_range_pack(4, 4))));
+        assert!(attrs.contains(&AmneziaWireguardAttribute::H1Range(Range::from(1))));
+        assert!(attrs.contains(&AmneziaWireguardAttribute::H2Range(Range::from(2))));
+        assert!(attrs.contains(&AmneziaWireguardAttribute::H3Range(Range::from(3))));
+        assert!(attrs.contains(&AmneziaWireguardAttribute::H4Range(Range::from(4))));
+    }
+
+    #[test]
+    fn a_tuning_value_is_sent_as_the_range_of_that_one_value() {
+        let attrs = push(&Obfuscation {
+            content_padding_addition: Some(64),
+            rekey_after_time: Some(120),
+            rekey_timeout: Some(6),
+            reject_after_time: Some(200),
+            keepalive_timeout: Some(12),
+            max_handshake_attempts: Some(20),
+            ..Obfuscation::default()
+        });
+        for sent in [
+            AmneziaWireguardAttribute::ContentPaddingAddition(Range::from(64)),
+            AmneziaWireguardAttribute::RekeyAfterTime(Range::from(120)),
+            AmneziaWireguardAttribute::RekeyTimeout(Range::from(6)),
+            AmneziaWireguardAttribute::RejectAfterTime(Range::from(200)),
+            AmneziaWireguardAttribute::KeepaliveTimeout(Range::from(12)),
+            AmneziaWireguardAttribute::MaxHandshakeAttempts(Range::from(20)),
+        ] {
+            assert!(attrs.contains(&sent), "{sent:?} not in {attrs:?}");
+        }
+    }
+
+    #[test]
+    fn a_tuning_value_too_large_for_the_module_is_refused_and_named() {
+        let largest = Obfuscation {
+            rekey_after_time: Some(65535),
+            ..Obfuscation::default()
+        };
+        assert!(
+            push(&largest).contains(&AmneziaWireguardAttribute::RekeyAfterTime(Range::from(
+                65535
+            )))
+        );
+        let too_large = Obfuscation {
+            rekey_after_time: Some(65536),
+            ..Obfuscation::default()
+        };
+        let err = push_obfuscation_attrs(&mut Vec::new(), &too_large).unwrap_err();
+        let shown = format!("{err:#}");
+        assert!(
+            shown.contains("rekey_after_time") && shown.contains("65536"),
+            "{shown}"
+        );
     }
 
     #[test]
@@ -330,13 +399,9 @@ mod tests {
         assert!(attrs.contains(&AmneziaWireguardAttribute::JC(4)));
         assert!(attrs.contains(&AmneziaWireguardAttribute::Jmin(40)));
         assert!(attrs.contains(&AmneziaWireguardAttribute::Jmax(70)));
-        assert!(
-            attrs.contains(&AmneziaWireguardAttribute::H1Range(u32_range_pack(
-                12345, 12345
-            )))
-        );
+        assert!(attrs.contains(&AmneziaWireguardAttribute::H1Range(Range::from(12345))));
         // Untouched h2 still falls back to its own real default, independent of h1 being set.
-        assert!(attrs.contains(&AmneziaWireguardAttribute::H2Range(u32_range_pack(2, 2))));
+        assert!(attrs.contains(&AmneziaWireguardAttribute::H2Range(Range::from(2))));
     }
 
     /// `i1`..`i5`/`header_protection_key`/timing fields stay omit-if-unset (see this module's own
