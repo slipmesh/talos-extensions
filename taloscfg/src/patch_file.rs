@@ -158,8 +158,8 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
     awg::config::validate(&awg_cfg)
         .with_context(|| format!("rendered awg config for node {host:?} is invalid"))?;
     // Checked here as well as by awg, so that such a config is refused before it reaches a node.
-    // There awg leaves the interface as an earlier run left it, brings up the others and exits, so
-    // route tracking and metrics wait until the config is fixed.
+    // There awg leaves the interface as an earlier run left it, brings up the others, exits and is
+    // restarted, so route tracking and metrics wait until the config is fixed.
     for iface in &awg_cfg.interfaces {
         iface.obfuscation.validate().with_context(|| {
             format!(
