@@ -576,9 +576,9 @@ keys and settings in them stay as they were and only their layout changes.
 Since v1.14.5+sm.3, a tuning value above 65535 - `content_padding_addition`, `rekey_after_time`,
 `rekey_timeout`, `reject_after_time`, `keepalive_timeout` or `max_handshake_attempts` - is refused:
 by `taloscfg`, naming the node, the interface and the key, and by `awg`, which leaves that interface
-as an earlier run left it, brings up the others and exits, so route tracking and metrics wait until
-the config is fixed. The module holds each in 16 bits, so such a value never did what it said. Set
-it to 65535 or less, or take it out for the module's own value.
+as an earlier run left it, brings up the others, exits and is restarted, so route tracking and
+metrics wait until the config is fixed. The module holds each in 16 bits, so such a value never did
+what it said. Set it to 65535 or less, or take it out for the module's own value.
 
 Since v1.14.5+sm.3, a tuning value taken out of the config is taken off the interface too, back to
 the module's own value; it used to stay as the earlier config set it.
