@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 description = "Offline generator for Talos machine-config patches (awg mesh/roadwarriors, router BGP/OSPF, nftables) from a single slipmesh.yaml file - never touches a live node"
 
 [[bin]]
