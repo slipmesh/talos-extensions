@@ -20,7 +20,6 @@ http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 netlink-packet-amneziawg.workspace = true
-netlink-packet-core.workspace = true
 prometheus-client.workspace = true
 sliplib-config.workspace = true
 sliplib-net.workspace = true
