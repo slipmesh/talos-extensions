@@ -25,10 +25,9 @@ ignore = true
 
 [bans]
 multiple-versions = "warn"
-# The workspace members on this line are not marked `publish = false`, so the path and git
-# dependencies between them count as wildcards; a dependency from crates.io with a bare `*` is
-# not caught here.
-wildcards = "allow"
+wildcards = "deny"
+# A path dependency inside the workspace carries no version and is not a wildcard.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "deny"
