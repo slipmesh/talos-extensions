@@ -95,7 +95,7 @@ pub fn push_obfuscation_attrs(
     }
     if let Some(key) = &o.header_protection_key {
         attrs.push(AmneziaWireguardAttribute::HeaderProtectionKey(
-            decode_key(key).context("invalid header_protection_key")?,
+            decode_key(key).map_err(|e| anyhow::anyhow!("invalid header_protection_key: {e}"))?,
         ));
     }
     if let Some(v) = o.content_padding_addition {
@@ -338,7 +338,12 @@ mod tests {
             AmneziaWireguardAttribute::KeepaliveTimeout(AmneziaWireguardRange::from(12)),
             AmneziaWireguardAttribute::MaxHandshakeAttempts(AmneziaWireguardRange::from(20)),
         ] {
-            assert!(attrs.contains(&sent), "{sent:?} not in {attrs:?}");
+            let kind = std::mem::discriminant(&sent);
+            let of_kind: Vec<_> = attrs
+                .iter()
+                .filter(|attr| std::mem::discriminant(*attr) == kind)
+                .collect();
+            assert_eq!(of_kind, [&sent], "{attrs:?}");
         }
     }
 
@@ -402,6 +407,24 @@ mod tests {
             let shown = format!("{err:#}");
             assert!(shown.starts_with(&format!("{name} is 65536")), "{shown}");
         }
+    }
+
+    // The logged chain would otherwise show a character of the configured text and where.
+    #[test]
+    fn an_undecodable_header_protection_key_is_refused_without_its_text() {
+        let o = Obfuscation {
+            header_protection_key: Some("not a key".to_string()),
+            ..Obfuscation::default()
+        };
+        let shown = format!(
+            "{:#}",
+            push_obfuscation_attrs(&mut Vec::new(), &o).unwrap_err()
+        );
+        assert!(
+            shown.starts_with("invalid header_protection_key"),
+            "{shown}"
+        );
+        assert!(!shown.contains("offset"), "{shown}");
     }
 
     #[test]

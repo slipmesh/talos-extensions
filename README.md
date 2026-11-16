@@ -120,9 +120,10 @@ same key. The kernel module also accepts the key only when every junk size `s1`.
 12, room for the header protection nonce (an unset size counts as 0), and refuses magic headers
 `h1`..`h4` that are not all different (an unset one counts as 1..4); both come back as a bare
 `Invalid argument` for that interface. It never checks that `jmin` does not exceed `jmax` before
-drawing junk packet sizes between them. `awg` refuses an interface that breaks any of these at
-start and leaves it down while the others come up, and `taloscfg` refuses to render it, see
-`common::Obfuscation::validate`.
+drawing junk packet sizes between them. `awg` refuses an interface that breaks any of these without
+touching it - one an earlier run left up stays as it is - brings up the others, then exits and is
+restarted, so route tracking and metrics wait until the config is fixed. `taloscfg` refuses to
+render it, see `common::Obfuscation::validate`.
 
 The two 3.1 switches are the exception to that pairing: each end decides for itself.
 `random_trailers` appends a random-length trailer to outgoing packets and relaxes the receive-side
