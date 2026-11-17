@@ -59,7 +59,11 @@ async fn run() -> Result<()> {
     let mut failed = Vec::new();
     for iface in &cfg.interfaces {
         if let Err(e) = interface::ensure_interface(&rt, &mut awg, iface).await {
-            tracing::error!(iface = iface.name, error = %e, "failed to converge interface");
+            tracing::error!(
+                iface = iface.name,
+                error = %format_args!("{e:#}"),
+                "failed to converge interface"
+            );
             failed.push(iface.name.clone());
         }
     }
