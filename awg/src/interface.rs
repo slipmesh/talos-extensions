@@ -705,6 +705,19 @@ mod tests {
     }
 
     #[test]
+    fn an_interface_with_a_timing_value_the_module_misuses_is_refused_by_name() {
+        let too_late = Obfuscation {
+            rekey_after_time: Some(180.into()),
+            ..Obfuscation::default()
+        };
+        let shown = format!("{:#}", check(&interface("awg-b", too_late)).unwrap_err());
+        assert!(
+            shown.starts_with("interface awg-b: obfuscation.rekey_after_time (180)"),
+            "{shown}"
+        );
+    }
+
+    #[test]
     fn an_interface_with_an_undecodable_private_key_is_refused_by_its_name() {
         let mut iface = interface("awg-b", Obfuscation::default());
         iface.private_key = "not a key".into();
