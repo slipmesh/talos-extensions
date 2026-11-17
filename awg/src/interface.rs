@@ -16,6 +16,7 @@ use common::cidr::parse_cidr;
 use common::keys::decode_key;
 use common::netlink::awg::{AwgClient, push_obfuscation_attrs};
 use common::netlink::rt::RtClient;
+use netlink_packet_amneziawg::AmneziaWireguardRange;
 use netlink_packet_amneziawg::{
     AmneziaWireguardAddressFamily, AmneziaWireguardAllowedIp, AmneziaWireguardAllowedIpAttr,
     AmneziaWireguardAttribute, AmneziaWireguardPeer, AmneziaWireguardPeerAttribute,
@@ -38,7 +39,7 @@ const ENDPOINT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 /// does have a typed variant. Built manually via `Other(DefaultNla::new(...))`. `NLA_FLAG`: an
 /// empty payload means "present" (true); the attribute is simply omitted for "false".
 const WGPEER_A_ADVANCED_SECURITY: u16 = 11;
-const PERSISTENT_KEEPALIVE_SECS: u32 = 25;
+const PERSISTENT_KEEPALIVE_SECS: u16 = 25;
 
 fn full_tunnel_allowed_ips() -> Vec<String> {
     vec!["0.0.0.0/0".to_string(), "::/0".to_string()]
@@ -48,7 +49,7 @@ fn full_tunnel_allowed_ips() -> Vec<String> {
 /// full-tunnel default if the config entry left it unset) and `endpoint` is already DNS-resolved.
 /// Whether this peer is handshake-tracked (see `handshake.rs`) is a separate question, answered by
 /// the *config* entry's `allowed_ips: Option<_>` being `Some` - not encoded here.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Peer {
     pub public_key: String,
     pub allowed_ips: Vec<String>,
@@ -60,6 +61,27 @@ pub struct Peer {
     /// re-sent on every single process start, not only when it actually changed - harmless, since
     /// re-sending is idempotent.
     pub advanced_security: bool,
+    /// As the module holds it: it draws the interval out of the range at every re-arm. The zero
+    /// range is no keepalive.
+    pub persistent_keepalive: AmneziaWireguardRange<u16>,
+}
+
+/// A peer this node dials gets a keepalive, so that a NAT on the way keeps its mapping.
+fn persistent_keepalive(endpoint: Option<&str>) -> AmneziaWireguardRange<u16> {
+    match endpoint {
+        Some(_) => AmneziaWireguardRange::from(PERSISTENT_KEEPALIVE_SECS),
+        None => AmneziaWireguardRange::default(),
+    }
+}
+
+/// `existing` as the kernel holds it, for a peer whose endpoint could not be resolved this pass.
+/// Its keepalive is the one `entry` calls for, whatever the kernel holds: the kernel may have no
+/// endpoint for the peer yet.
+fn last_known_good(existing: &Peer, entry: &PeerEntry) -> Peer {
+    Peer {
+        persistent_keepalive: persistent_keepalive(entry.endpoint.as_deref()),
+        ..existing.clone()
+    }
 }
 
 async fn resolve_peer(entry: &PeerEntry) -> Result<Peer> {
@@ -74,6 +96,7 @@ async fn resolve_peer(entry: &PeerEntry) -> Result<Peer> {
     Ok(Peer {
         public_key: entry.public_key.clone(),
         allowed_ips,
+        persistent_keepalive: persistent_keepalive(endpoint.as_deref()),
         endpoint,
         advanced_security: entry.advanced_security,
     })
@@ -120,59 +143,68 @@ fn allowed_ip_to_cidr(attrs: &[AmneziaWireguardAllowedIpAttr]) -> Option<String>
     Some(format!("{ip}/{cidr}"))
 }
 
+fn peer_from_attrs(attrs: Vec<AmneziaWireguardPeerAttribute>) -> Option<Peer> {
+    use base64::Engine;
+
+    let mut public_key = None;
+    let mut allowed_ips = Vec::new();
+    let mut endpoint = None;
+    let mut persistent_keepalive = AmneziaWireguardRange::default();
+    for attr in attrs {
+        match attr {
+            AmneziaWireguardPeerAttribute::PersistentKeepalive(range) => {
+                persistent_keepalive = range;
+            }
+            AmneziaWireguardPeerAttribute::PublicKey(k) => {
+                public_key = Some(base64::engine::general_purpose::STANDARD.encode(k));
+            }
+            AmneziaWireguardPeerAttribute::AllowedIps(ips) => {
+                allowed_ips = ips
+                    .iter()
+                    .filter_map(|ip| allowed_ip_to_cidr(&ip.0))
+                    .collect();
+            }
+            AmneziaWireguardPeerAttribute::Endpoint(addr) => {
+                endpoint = Some(addr.to_string());
+            }
+            _ => {}
+        }
+    }
+    Some(Peer {
+        public_key: public_key?,
+        allowed_ips,
+        endpoint,
+        // Always false - see the `advanced_security` field's own doc comment.
+        advanced_security: false,
+        persistent_keepalive,
+    })
+}
+
 /// Reads back the peer set actually configured on the kernel interface. Always called, never
 /// assumed empty - see this module's doc comment for why (no in-memory state survives a restart).
 pub async fn current_peers(awg: &mut AwgClient, iface: &str) -> Result<Vec<Peer>> {
-    use base64::Engine;
-
     let attrs = awg.get_device(iface).await?;
     let mut peers = Vec::new();
     for attr in attrs {
         let AmneziaWireguardAttribute::Peers(device_peers) = attr else {
             continue;
         };
-        for peer in device_peers {
-            let mut public_key = None;
-            let mut allowed_ips = Vec::new();
-            let mut endpoint = None;
-            for pattr in peer.0 {
-                match pattr {
-                    AmneziaWireguardPeerAttribute::PublicKey(k) => {
-                        public_key = Some(base64::engine::general_purpose::STANDARD.encode(k));
-                    }
-                    AmneziaWireguardPeerAttribute::AllowedIps(ips) => {
-                        allowed_ips = ips
-                            .iter()
-                            .filter_map(|ip| allowed_ip_to_cidr(&ip.0))
-                            .collect();
-                    }
-                    AmneziaWireguardPeerAttribute::Endpoint(addr) => {
-                        endpoint = Some(addr.to_string());
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(public_key) = public_key {
-                peers.push(Peer {
-                    public_key,
-                    allowed_ips,
-                    endpoint,
-                    // Always false - see the `advanced_security` field's own doc comment.
-                    advanced_security: false,
-                });
-            }
-        }
+        peers.extend(
+            device_peers
+                .into_iter()
+                .filter_map(|peer| peer_from_attrs(peer.0)),
+        );
     }
-    peers.sort();
+    peers.sort_by(|a, b| a.public_key.cmp(&b.public_key));
     Ok(peers)
 }
 
 /// One entry per peer that needs to change: `Some(peer)` to add/replace, `None` to remove.
 /// `previous`/`desired` need not be pre-sorted - keyed by `public_key` internally.
 ///
-/// A peer counts as unchanged only if *both* `allowed_ips` (compared as a set - CIDR order is not
-/// semantically meaningful to WireGuard) and `endpoint` match; either changing means the peer gets
-/// re-sent with `WGPEER_F_REPLACE_ALLOWEDIPS`.
+/// A peer counts as unchanged only if `allowed_ips` (compared as a set - CIDR order is not
+/// semantically meaningful to WireGuard), `endpoint`, `advanced_security` and the keepalive all
+/// match; any of them changing means the peer gets re-sent with `WGPEER_F_REPLACE_ALLOWEDIPS`.
 fn diff_peers(previous: &[Peer], desired: &[Peer]) -> Vec<(String, Option<Peer>)> {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -193,6 +225,7 @@ fn diff_peers(previous: &[Peer], desired: &[Peer]) -> Vec<(String, Option<Peer>)
             as_set(&prev.allowed_ips) == as_set(&peer.allowed_ips)
                 && prev.endpoint == peer.endpoint
                 && prev.advanced_security == peer.advanced_security
+                && prev.persistent_keepalive == peer.persistent_keepalive
         });
         if !unchanged {
             ops.push((key.to_string(), Some((*peer).clone())));
@@ -204,6 +237,43 @@ fn diff_peers(previous: &[Peer], desired: &[Peer]) -> Vec<(String, Option<Peer>)
         }
     }
     ops
+}
+
+/// The attributes that add `peer` or replace what the kernel holds for it.
+fn replace_peer_attrs(
+    public_key: [u8; 32],
+    peer: &Peer,
+) -> Result<Vec<AmneziaWireguardPeerAttribute>> {
+    let allowed_ips = peer
+        .allowed_ips
+        .iter()
+        .map(|cidr| {
+            cidr_to_allowed_ip(cidr)
+                .with_context(|| format!("malformed allowed_ips entry {cidr:?}"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut attrs = vec![
+        AmneziaWireguardPeerAttribute::PublicKey(public_key),
+        AmneziaWireguardPeerAttribute::Flags(AmneziaWireguardPeerFlags::ReplaceAllowedIps),
+        AmneziaWireguardPeerAttribute::AllowedIps(allowed_ips),
+    ];
+    if peer.advanced_security {
+        attrs.push(AmneziaWireguardPeerAttribute::Other(DefaultNla::new(
+            WGPEER_A_ADVANCED_SECURITY,
+            Vec::new(),
+        )));
+    }
+    if let Some(endpoint) = &peer.endpoint {
+        let addr: SocketAddr = endpoint
+            .parse()
+            .with_context(|| format!("unparsable resolved endpoint {endpoint:?}"))?;
+        attrs.push(AmneziaWireguardPeerAttribute::Endpoint(addr));
+    }
+    // Sent even when zero: an omitted attribute keeps what the kernel holds.
+    attrs.push(AmneziaWireguardPeerAttribute::PersistentKeepalive(
+        peer.persistent_keepalive,
+    ));
+    Ok(attrs)
 }
 
 /// Applies exactly the peers that changed - unrelated peers keep their live session untouched.
@@ -231,55 +301,12 @@ async fn sync_peers(
             }
         };
         match peer {
-            Some(peer) => {
-                let mut allowed_ips = Vec::new();
-                let mut skip = false;
-                for cidr in &peer.allowed_ips {
-                    match cidr_to_allowed_ip(cidr) {
-                        Ok(a) => allowed_ips.push(a),
-                        Err(e) => {
-                            tracing::warn!(public_key, cidr, error = %e, "skipping peer with malformed allowed_ips entry");
-                            skip = true;
-                            break;
-                        }
-                    }
+            Some(peer) => match replace_peer_attrs(decoded, &peer) {
+                Ok(attrs) => wg_peers.push(AmneziaWireguardPeer(attrs)),
+                Err(e) => {
+                    tracing::warn!(public_key, error = %format_args!("{e:#}"), "skipping peer")
                 }
-                if skip {
-                    continue;
-                }
-                let mut attrs = vec![
-                    AmneziaWireguardPeerAttribute::PublicKey(decoded),
-                    AmneziaWireguardPeerAttribute::Flags(
-                        AmneziaWireguardPeerFlags::ReplaceAllowedIps,
-                    ),
-                    AmneziaWireguardPeerAttribute::AllowedIps(allowed_ips),
-                ];
-                if peer.advanced_security {
-                    attrs.push(AmneziaWireguardPeerAttribute::Other(DefaultNla::new(
-                        WGPEER_A_ADVANCED_SECURITY,
-                        Vec::new(),
-                    )));
-                }
-                if let Some(endpoint) = &peer.endpoint {
-                    match endpoint.parse::<SocketAddr>() {
-                        Ok(addr) => {
-                            attrs.push(AmneziaWireguardPeerAttribute::Endpoint(addr));
-                            // *Range, not the plain u16 variant: this kernel module's
-                            // WGPEER_A_PERSISTENT_KEEPALIVE_INTERVAL policy is NLA_U32 (4 bytes),
-                            // not the u16 vanilla WireGuard uses - confirmed against
-                            // amneziawg-linux-kernel-module's netlink.c on a real node ("attribute
-                            // type 5 has an invalid length" with the plain variant).
-                            attrs.push(AmneziaWireguardPeerAttribute::PersistentKeepaliveRange(
-                                PERSISTENT_KEEPALIVE_SECS,
-                            ));
-                        }
-                        Err(e) => {
-                            tracing::warn!(public_key, endpoint, error = %e, "skipping unparsable resolved endpoint");
-                        }
-                    }
-                }
-                wg_peers.push(AmneziaWireguardPeer(attrs));
-            }
+            },
             None => {
                 wg_peers.push(AmneziaWireguardPeer(vec![
                     AmneziaWireguardPeerAttribute::PublicKey(decoded),
@@ -301,27 +328,48 @@ async fn sync_peers(
     .context("SetDevice (peer diff) failed")
 }
 
-/// Sets the device's private key, listen port, and obfuscation params. Idempotent and cheap to
-/// call unconditionally every run - nothing about identity changes at runtime within one process.
-async fn set_identity(awg: &mut AwgClient, iface: &InterfaceEntry) -> Result<()> {
+/// The device's private key, listen port and obfuscation params as the kernel is sent them.
+fn identity_attrs(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribute>> {
     let mut device_attrs = vec![
         AmneziaWireguardAttribute::IfName(iface.name.clone()),
-        AmneziaWireguardAttribute::PrivateKey(decode_key(&iface.private_key)?),
+        AmneziaWireguardAttribute::PrivateKey(
+            decode_key(&iface.private_key)
+                .map_err(|e| anyhow::anyhow!("invalid private_key: {e}"))?,
+        ),
         AmneziaWireguardAttribute::ListenPort(iface.listen_port),
     ];
     push_obfuscation_attrs(&mut device_attrs, &iface.obfuscation)?;
-    awg.set_device(device_attrs)
+    Ok(device_attrs)
+}
+
+/// What `iface`'s identity is set with, or why the module would refuse or mishandle it, the
+/// interface named. It needs no kernel, so that such an interface is refused before it is
+/// touched.
+fn check(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribute>> {
+    iface
+        .obfuscation
+        .validate()
+        .and_then(|()| identity_attrs(iface))
+        .with_context(|| format!("interface {}", iface.name))
+}
+
+/// Sets the device's private key, listen port, and obfuscation params. Idempotent and cheap to
+/// call unconditionally every run - nothing about identity changes at runtime within one process.
+async fn set_identity(awg: &mut AwgClient, identity: Vec<AmneziaWireguardAttribute>) -> Result<()> {
+    awg.set_device(identity)
         .await
         .context("SetDevice (identity) failed")
 }
 
-/// Brings one interface fully up to date: link, addresses, identity, and peer set. Safe to call
-/// unconditionally on every process start - every step is idempotent.
+/// Brings one interface fully up to date: link, addresses, identity, and peer set. An interface
+/// `check` refuses is refused first, with nothing of it touched. Safe to call unconditionally on
+/// every process start - every step is idempotent.
 pub async fn ensure_interface(
     rt: &RtClient,
     awg: &mut AwgClient,
     iface: &InterfaceEntry,
 ) -> Result<()> {
+    let identity = check(iface)?;
     let (index, _created) = rt.ensure_link(&iface.name, "amneziawg").await?;
     rt.ensure_addresses(index, &iface.addresses).await?;
 
@@ -336,7 +384,7 @@ pub async fn ensure_interface(
     // interfaces this daemon creates later, with no code here needed at all.
 
     rt.set_up(index).await?;
-    set_identity(awg, iface).await?;
+    set_identity(awg, identity).await?;
 
     let previous = current_peers(awg, &iface.name).await?;
     let mut desired = Vec::with_capacity(iface.peers.len());
@@ -355,7 +403,7 @@ pub async fn ensure_interface(
                         interface = %iface.name, peer = %peer.public_key, error = %e,
                         "failed to resolve peer, keeping its last-known-good state this pass"
                     );
-                    desired.push(existing.clone());
+                    desired.push(last_known_good(existing, peer));
                 }
                 None => tracing::warn!(
                     interface = %iface.name, peer = %peer.public_key, error = %e,
@@ -364,7 +412,7 @@ pub async fn ensure_interface(
             },
         }
     }
-    desired.sort();
+    desired.sort_by(|a, b| a.public_key.cmp(&b.public_key));
 
     sync_peers(awg, &iface.name, &previous, &desired).await?;
     Ok(())
@@ -373,6 +421,7 @@ pub async fn ensure_interface(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::Obfuscation;
 
     fn peer(public_key: &str, allowed_ips: &[&str], endpoint: Option<&str>) -> Peer {
         Peer {
@@ -380,6 +429,7 @@ mod tests {
             allowed_ips: allowed_ips.iter().map(|s| s.to_string()).collect(),
             endpoint: endpoint.map(str::to_string),
             advanced_security: false,
+            persistent_keepalive: persistent_keepalive(endpoint),
         }
     }
 
@@ -494,6 +544,249 @@ mod tests {
             ops,
             vec![("k3".to_string(), Some(peer("k3", &["10.0.0.3/32"], None)))]
         );
+    }
+
+    use base64::Engine;
+    use netlink_packet_core::Nla;
+
+    const KEY: [u8; 32] = [7; 32];
+    const KEEPALIVE: AmneziaWireguardRange<u16> = AmneziaWireguardRange { lo: 25, hi: 25 };
+    /// What a number of seconds sent in place of a range left in the module.
+    const BARE_25: AmneziaWireguardRange<u16> = AmneziaWireguardRange { lo: 25, hi: 0 };
+
+    fn keepalive_sent(peer: &Peer) -> Option<AmneziaWireguardRange<u16>> {
+        replace_peer_attrs(KEY, peer)
+            .unwrap()
+            .into_iter()
+            .find_map(|attr| match attr {
+                AmneziaWireguardPeerAttribute::PersistentKeepalive(v) => Some(v),
+                _ => None,
+            })
+    }
+
+    #[test]
+    fn a_peer_with_an_endpoint_is_sent_its_keepalive_as_a_range_of_one_value() {
+        let peer = peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"));
+        assert_eq!(keepalive_sent(&peer), Some(KEEPALIVE));
+    }
+
+    // Sent rather than left out: an omitted attribute keeps what the kernel holds.
+    #[test]
+    fn a_peer_without_an_endpoint_is_sent_a_zero_keepalive() {
+        let peer = peer("k1", &["203.0.113.1/32"], None);
+        assert_eq!(
+            keepalive_sent(&peer),
+            Some(AmneziaWireguardRange::default())
+        );
+    }
+
+    #[test]
+    fn a_replaced_peer_carries_its_key_its_allowed_ips_and_its_endpoint() {
+        let attrs = replace_peer_attrs(
+            KEY,
+            &peer("k1", &["203.0.113.1/32"], Some("192.0.2.1:51820")),
+        )
+        .unwrap();
+        assert!(attrs.contains(&AmneziaWireguardPeerAttribute::PublicKey(KEY)));
+        assert!(attrs.contains(&AmneziaWireguardPeerAttribute::Flags(
+            AmneziaWireguardPeerFlags::ReplaceAllowedIps
+        )));
+        assert!(
+            attrs.contains(&AmneziaWireguardPeerAttribute::AllowedIps(vec![
+                cidr_to_allowed_ip("203.0.113.1/32").unwrap()
+            ]))
+        );
+        assert!(attrs.contains(&AmneziaWireguardPeerAttribute::Endpoint(
+            "192.0.2.1:51820".parse().unwrap()
+        )));
+    }
+
+    #[test]
+    fn a_malformed_allowed_ip_refuses_the_peer_and_names_the_entry() {
+        let err = replace_peer_attrs(KEY, &peer("k1", &["203.0.113.1/32", "not-a-cidr"], None))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not-a-cidr"), "{err}");
+    }
+
+    #[test]
+    fn an_unparsable_endpoint_refuses_the_peer_and_names_it() {
+        let err = replace_peer_attrs(KEY, &peer("k1", &["203.0.113.1/32"], Some("node-b:51820")))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("node-b:51820"), "{err}");
+    }
+
+    #[test]
+    fn only_a_flagged_peer_is_sent_the_advanced_security_attribute() {
+        let is_flag = |attr: &AmneziaWireguardPeerAttribute| matches!(attr, AmneziaWireguardPeerAttribute::Other(nla) if nla.kind() == WGPEER_A_ADVANCED_SECURITY);
+        let mut flagged = peer("k1", &["203.0.113.1/32"], None);
+        assert!(
+            !replace_peer_attrs(KEY, &flagged)
+                .unwrap()
+                .iter()
+                .any(is_flag)
+        );
+        flagged.advanced_security = true;
+        assert!(
+            replace_peer_attrs(KEY, &flagged)
+                .unwrap()
+                .iter()
+                .any(is_flag)
+        );
+    }
+
+    #[test]
+    fn a_peer_is_read_back_with_its_key_allowed_ips_endpoint_and_keepalive() {
+        let read = peer_from_attrs(vec![
+            AmneziaWireguardPeerAttribute::PublicKey(KEY),
+            AmneziaWireguardPeerAttribute::AllowedIps(vec![
+                cidr_to_allowed_ip("203.0.113.1/32").unwrap(),
+            ]),
+            AmneziaWireguardPeerAttribute::Endpoint("192.0.2.1:51820".parse().unwrap()),
+            AmneziaWireguardPeerAttribute::PersistentKeepalive(BARE_25),
+        ])
+        .unwrap();
+        assert_eq!(
+            read,
+            Peer {
+                persistent_keepalive: BARE_25,
+                ..peer(
+                    &base64::engine::general_purpose::STANDARD.encode(KEY),
+                    &["203.0.113.1/32"],
+                    Some("192.0.2.1:51820")
+                )
+            }
+        );
+    }
+
+    #[test]
+    fn attributes_without_a_public_key_are_not_a_peer() {
+        assert_eq!(
+            peer_from_attrs(vec![AmneziaWireguardPeerAttribute::PersistentKeepalive(
+                KEEPALIVE
+            )]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_keepalive_held_as_a_bare_number_yields_replace_op() {
+        let desired = peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"));
+        let held = Peer {
+            persistent_keepalive: BARE_25,
+            ..desired.clone()
+        };
+        assert_eq!(
+            diff_peers(&[held], std::slice::from_ref(&desired)),
+            vec![("k1".to_string(), Some(desired))]
+        );
+    }
+
+    fn entry(endpoint: Option<&str>) -> PeerEntry {
+        PeerEntry {
+            public_key: "k1".to_string(),
+            name: None,
+            endpoint: endpoint.map(str::to_string),
+            allowed_ips: None,
+            advanced_security: false,
+        }
+    }
+
+    #[test]
+    fn a_peer_kept_through_a_failed_lookup_gets_the_keepalive_its_entry_calls_for() {
+        let held = Peer {
+            persistent_keepalive: BARE_25,
+            ..peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"))
+        };
+        assert_eq!(
+            last_known_good(&held, &entry(Some("node-b.example.net:51820"))),
+            peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"))
+        );
+    }
+
+    // A lookup fails only for an entry that has an endpoint, and the kernel may hold none for
+    // that peer yet.
+    #[test]
+    fn a_peer_the_kernel_holds_without_an_endpoint_is_kept_with_its_entrys_keepalive() {
+        let held = peer("k1", &["0.0.0.0/0"], None);
+        assert_eq!(
+            last_known_good(&held, &entry(Some("node-b.example.net:51820"))),
+            Peer {
+                persistent_keepalive: KEEPALIVE,
+                ..held.clone()
+            }
+        );
+    }
+
+    fn interface(name: &str, obfuscation: Obfuscation) -> InterfaceEntry {
+        InterfaceEntry {
+            name: name.to_string(),
+            listen_port: 51820,
+            addresses: vec![],
+            private_key: base64::engine::general_purpose::STANDARD.encode(KEY),
+            obfuscation,
+            handshake_stale_secs: None,
+            peers: vec![],
+        }
+    }
+
+    #[test]
+    fn an_interface_the_kernel_cannot_be_sent_is_refused_by_name() {
+        assert!(check(&interface("awg-a", Obfuscation::default())).is_ok());
+        let too_large = Obfuscation {
+            rekey_after_time: Some(65536),
+            ..Obfuscation::default()
+        };
+        let shown = format!("{:#}", check(&interface("awg-b", too_large)).unwrap_err());
+        assert!(
+            shown.starts_with("interface awg-b: rekey_after_time"),
+            "{shown}"
+        );
+    }
+
+    // The module refuses this only at `SetDevice`, once the link exists.
+    #[test]
+    fn an_interface_whose_obfuscation_the_module_refuses_is_refused_by_name() {
+        let overlapping = Obfuscation {
+            h1: Some(5),
+            h2: Some(5),
+            ..Obfuscation::default()
+        };
+        let shown = format!("{:#}", check(&interface("awg-b", overlapping)).unwrap_err());
+        assert!(
+            shown.starts_with("interface awg-b: obfuscation.h1 and obfuscation.h2"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn an_interface_with_an_undecodable_private_key_is_refused_by_its_name() {
+        let mut iface = interface("awg-b", Obfuscation::default());
+        iface.private_key = "not a key".to_string();
+        let shown = format!("{:#}", check(&iface).unwrap_err());
+        assert!(
+            shown.starts_with("interface awg-b: invalid private_key"),
+            "{shown}"
+        );
+        // The logged chain would otherwise show a character of the configured text and where.
+        assert!(!shown.contains("offset"), "{shown}");
+    }
+
+    #[test]
+    fn what_the_identity_of_an_interface_is_set_with_is_its_name_key_port_and_obfuscation() {
+        let obfuscation = Obfuscation {
+            jc: Some(4),
+            ..Obfuscation::default()
+        };
+        let mut expected = vec![
+            AmneziaWireguardAttribute::IfName("awg-a".to_string()),
+            AmneziaWireguardAttribute::PrivateKey(KEY),
+            AmneziaWireguardAttribute::ListenPort(51820),
+        ];
+        push_obfuscation_attrs(&mut expected, &obfuscation).unwrap();
+        assert!(expected.contains(&AmneziaWireguardAttribute::Jc(4)));
+        assert_eq!(check(&interface("awg-a", obfuscation)).unwrap(), expected);
     }
 
     #[test]

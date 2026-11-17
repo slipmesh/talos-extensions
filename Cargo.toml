@@ -69,7 +69,7 @@ genetlink = "0.3.1"
 # version 3, which carries WGDEVICE_A_H1..H4 as packed u64 ranges, and 0.1.2 only knows the old
 # NUL-terminated strings the module's nla_policy now rejects ("attribute type 14 has an invalid
 # length"). It is built on netlink-packet-wireguard, so it follows the netlink-packet-* majors below.
-netlink-packet-amneziawg = { git = "https://github.com/slipmesh/netlink-packet-amneziawg", tag = "v0.1.0" }
+netlink-packet-amneziawg = { git = "https://github.com/slipmesh/netlink-packet-amneziawg", tag = "v0.2.0" }
 # These four move as one unit, and the amneziawg crate above is the fifth: its types implement
 # `GenlFamily`/`Nla`/`Emitable` from *these* major versions, so a mismatch anywhere here stops the
 # awg module compiling. It is also the only crate that speaks AmneziaWG's genl family

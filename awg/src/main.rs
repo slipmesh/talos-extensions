@@ -28,7 +28,7 @@ async fn main() -> std::process::ExitCode {
     match run().await {
         Ok(()) => unreachable!("run() only returns via the infinite handshake loop or an Err"),
         Err(e) => {
-            tracing::error!(error = %e, "awg failed to start");
+            tracing::error!(error = %format_args!("{e:#}"), "awg failed to start");
             std::process::ExitCode::FAILURE
         }
     }
@@ -59,7 +59,11 @@ async fn run() -> Result<()> {
     let mut failed = Vec::new();
     for iface in &cfg.interfaces {
         if let Err(e) = interface::ensure_interface(&rt, &mut awg, iface).await {
-            tracing::error!(iface = iface.name, error = %e, "failed to converge interface");
+            tracing::error!(
+                iface = iface.name,
+                error = %format_args!("{e:#}"),
+                "failed to converge interface"
+            );
             failed.push(iface.name.clone());
         }
     }
