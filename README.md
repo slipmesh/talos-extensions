@@ -146,9 +146,10 @@ out of the config is taken off the interface. A non-zero `content_padding_additi
 padding of a data packet, `random_trailers`' included. `rekey_after_time` has to end below 180: the
 module stops using a key 180 seconds after its handshake, whatever `reject_after_time` says, so an
 initiator that only sends would renew after the key is gone. One that also receives renews once the
-key is older than `reject_after_time` less `keepalive_timeout` and `rekey_timeout`, 165 seconds by
-default. Stay well below 180; the module's own value is 120. A config with a range in it needs this
-release of `awg` or a later one: an earlier one refuses it.
+key is older than `reject_after_time` less the low ends of `keepalive_timeout` and `rekey_timeout`,
+165 seconds by default; keep that below 180 too. Keep `rekey_after_time` well below 180; the
+module's own value is 120. A config with a range in it needs this release of `awg` or a later one:
+an earlier one refuses it.
 
 Of the two 3.1 switches, `random_trailers` has to be the same on both ends: it appends a
 random-length trailer to outgoing packets, and only an end that sets it accepts a handshake or
@@ -625,22 +626,26 @@ Since v1.15.0-beta.0+sm.4, a peer's `advanced_security` is gone from the config:
 has it is read and the key ignored. The module reads no per-peer switch; header protection is the
 interface's key.
 
-Since v1.15.0-beta.0+sm.4, `taloscfg` and `awg` refuse a tuning value above 65535, a
-`rekey_after_time` of 180 or more, a range of a timing value that starts at 0, and a
-`reject_after_time` not above `keepalive_timeout` plus `rekey_timeout`. `awg` leaves such an
-interface as an earlier run left it, brings up the others and exits, so route tracking and metrics
-wait until the config is fixed. Such a value never did what it said; set it within those bounds or
-take it out for the module's own value.
+Since v1.15.0-beta.0+sm.4, a file in which one of the six tuning values is above 65535, or one of
+them or of `h1`..`h4` is a reversed range or neither a number nor `lo-hi` in decimal digits, cannot
+be read: `taloscfg` refuses `slipmesh.yaml`, and `awg` refuses its whole config at start and
+touches no interface, so those an earlier run left stay as they are.
+
+Since v1.15.0-beta.0+sm.4, `taloscfg` and `awg` refuse a `rekey_after_time` of 180 or more, a range
+of a timing value that starts at 0, and a `reject_after_time` not above `keepalive_timeout` plus
+`rekey_timeout`. `awg` leaves such an interface as an earlier run left it, brings up the others and
+exits, so route tracking and metrics wait until the config is fixed. Such a value never did what it
+said; set it within those bounds or take it out for the module's own value.
 
 Since v1.15.0-beta.0+sm.4, a tuning value taken out of the config is taken off the interface too,
 back to the module's own value; it used to stay as the earlier config set it.
 
-Since v1.15.0-beta.0+sm.4, a pool with `header_protection_key`, `s3`, `s4` or `random_trailers`
-gets them into its client configs. Export the client configs of such a pool again: a client
-without the key or without `RandomTrailers` completes no handshake, without `S4` sends no data the
-pool takes, and without `S3` reads no cookie reply. For a client whose private key the file does
-not keep, the exported config carries a placeholder for it, so add the new lines to the client's
-own config by hand.
+Since `slipmesh` 0.17.0, a pool with `header_protection_key`, `s3`, `s4` or `random_trailers` gets
+them into its client configs. Export the client configs of such a pool again, each with
+`slipmesh rw inspect --if <pool> --name <client>`: a client without the key or without
+`RandomTrailers` completes no handshake, without `S4` sends no data the pool takes, and without
+`S3` reads no cookie reply. For a client whose private key the file does not keep, the exported
+config carries a placeholder for it, so add the new lines to the client's own config by hand.
 
 The top of the `network` document, its `cluster:` block and every pool refuse a field they do not
 know, so a name that changed fails where it is written rather than being ignored into a listener

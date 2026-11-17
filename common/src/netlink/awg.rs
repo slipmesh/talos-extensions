@@ -37,11 +37,8 @@ use sliplib_secrets::wireguard::decode_key;
 /// to distinguish the two cases here.
 ///
 /// `i1`..`i5` and `header_protection_key` stay omit-if-unset. The module has no way to take a key
-/// off an interface: it keeps one until the interface is created anew. An empty decoy spec reads
-/// as if it cleared one, but that has not been tried against a kernel, so an unset one is not
-/// sent.
-///
-/// `h1`..`h4` are ranges of two `u32` ends.
+/// off an interface, and whether an empty decoy spec clears a decoy is not known, so an unset one
+/// is not sent.
 ///
 /// `content_padding_addition`/`rekey_after_time`/`rekey_timeout`/`reject_after_time`/
 /// `keepalive_timeout`/`max_handshake_attempts` are ranges of two `u16` ends, out of which the
@@ -378,8 +375,8 @@ mod tests {
         );
     }
 
-    // An unset one of these is left out of the request: no value of it restores the module's
-    // state for an interface that never had one.
+    // The module has no way to take a key off an interface, and whether an empty decoy spec
+    // clears a decoy is not known, so an unset one is left out of the request.
     #[test]
     fn unset_decoy_specs_and_the_header_protection_key_are_omitted() {
         let attrs = push(&Obfuscation::default());
