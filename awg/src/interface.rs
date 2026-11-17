@@ -22,7 +22,6 @@ use netlink_packet_amneziawg::{
     AmneziaWireguardAttribute, AmneziaWireguardPeer, AmneziaWireguardPeerAttribute,
     AmneziaWireguardPeerFlags,
 };
-use netlink_packet_core::DefaultNla;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
@@ -34,11 +33,6 @@ use std::time::Duration;
 /// the process never exits for `restart: always` to get a chance to retry it.
 const ENDPOINT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// `wgpeer_attribute` has no crate support (as of v0.1.0) for this one - confirmed absent
-/// from `netlink-packet-amneziawg`'s `peer.rs`, unlike everything else in this file, which
-/// does have a typed variant. Built manually via `Other(DefaultNla::new(...))`. `NLA_FLAG`: an
-/// empty payload means "present" (true); the attribute is simply omitted for "false".
-const WGPEER_A_ADVANCED_SECURITY: u16 = 11;
 const PERSISTENT_KEEPALIVE_SECS: u16 = 25;
 
 fn full_tunnel_allowed_ips() -> Vec<String> {
@@ -54,13 +48,6 @@ pub struct Peer {
     pub public_key: String,
     pub allowed_ips: Vec<String>,
     pub endpoint: Option<String>,
-    /// See `PeerEntry::advanced_security`'s doc comment - the kernel never reports this back in a
-    /// `GetDevice` dump (confirmed against `netlink.c`'s `get_peer`), so `current_peers()` can
-    /// never populate this truthfully; it always reads back `false` there regardless of the real
-    /// state. That's fine for the diff this feeds: it just means a peer configured `true` gets
-    /// re-sent on every single process start, not only when it actually changed - harmless, since
-    /// re-sending is idempotent.
-    pub advanced_security: bool,
     /// As the module holds it: it draws the interval out of the range at every re-arm. The zero
     /// range is no keepalive.
     pub persistent_keepalive: AmneziaWireguardRange<u16>,
@@ -98,7 +85,6 @@ async fn resolve_peer(entry: &PeerEntry) -> Result<Peer> {
         allowed_ips,
         persistent_keepalive: persistent_keepalive(endpoint.as_deref()),
         endpoint,
-        advanced_security: entry.advanced_security,
     })
 }
 
@@ -174,8 +160,6 @@ fn peer_from_attrs(attrs: Vec<AmneziaWireguardPeerAttribute>) -> Option<Peer> {
         public_key: public_key?,
         allowed_ips,
         endpoint,
-        // Always false - see the `advanced_security` field's own doc comment.
-        advanced_security: false,
         persistent_keepalive,
     })
 }
@@ -203,8 +187,8 @@ pub async fn current_peers(awg: &mut AwgClient, iface: &str) -> Result<Vec<Peer>
 /// `previous`/`desired` need not be pre-sorted - keyed by `public_key` internally.
 ///
 /// A peer counts as unchanged only if `allowed_ips` (compared as a set - CIDR order is not
-/// semantically meaningful to WireGuard), `endpoint`, `advanced_security` and the keepalive all
-/// match; any of them changing means the peer gets re-sent with `WGPEER_F_REPLACE_ALLOWEDIPS`.
+/// semantically meaningful to WireGuard), `endpoint` and the keepalive all match; any of them
+/// changing means the peer gets re-sent with `WGPEER_F_REPLACE_ALLOWEDIPS`.
 fn diff_peers(previous: &[Peer], desired: &[Peer]) -> Vec<(String, Option<Peer>)> {
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -224,7 +208,6 @@ fn diff_peers(previous: &[Peer], desired: &[Peer]) -> Vec<(String, Option<Peer>)
         let unchanged = prev_map.get(key).is_some_and(|prev| {
             as_set(&prev.allowed_ips) == as_set(&peer.allowed_ips)
                 && prev.endpoint == peer.endpoint
-                && prev.advanced_security == peer.advanced_security
                 && prev.persistent_keepalive == peer.persistent_keepalive
         });
         if !unchanged {
@@ -257,12 +240,6 @@ fn replace_peer_attrs(
         AmneziaWireguardPeerAttribute::Flags(AmneziaWireguardPeerFlags::ReplaceAllowedIps),
         AmneziaWireguardPeerAttribute::AllowedIps(allowed_ips),
     ];
-    if peer.advanced_security {
-        attrs.push(AmneziaWireguardPeerAttribute::Other(DefaultNla::new(
-            WGPEER_A_ADVANCED_SECURITY,
-            Vec::new(),
-        )));
-    }
     if let Some(endpoint) = &peer.endpoint {
         let addr: SocketAddr = endpoint
             .parse()
@@ -428,7 +405,6 @@ mod tests {
             public_key: public_key.to_string(),
             allowed_ips: allowed_ips.iter().map(|s| s.to_string()).collect(),
             endpoint: endpoint.map(str::to_string),
-            advanced_security: false,
             persistent_keepalive: persistent_keepalive(endpoint),
         }
     }
@@ -515,18 +491,6 @@ mod tests {
     }
 
     #[test]
-    fn advanced_security_alone_yields_replace_op() {
-        // The kernel never reports this back (see `Peer::advanced_security`'s doc comment), so
-        // `previous` always carries `false` here regardless of the real state - a peer configured
-        // `true` must still show up as changed, every single time, not just once.
-        let previous = vec![peer("k1", &["10.0.0.1/32"], None)];
-        let mut desired = peer("k1", &["10.0.0.1/32"], None);
-        desired.advanced_security = true;
-        let ops = diff_peers(&previous, &[desired.clone()]);
-        assert_eq!(ops, vec![("k1".to_string(), Some(desired))]);
-    }
-
-    #[test]
     fn unrelated_peers_are_never_mentioned() {
         let previous = vec![
             peer("k1", &["10.0.0.1/32"], None),
@@ -547,7 +511,6 @@ mod tests {
     }
 
     use base64::Engine;
-    use netlink_packet_core::Nla;
 
     const KEY: [u8; 32] = [7; 32];
     const KEEPALIVE: AmneziaWireguardRange<u16> = AmneziaWireguardRange { lo: 25, hi: 25 };
@@ -615,25 +578,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("node-b:51820"), "{err}");
-    }
-
-    #[test]
-    fn only_a_flagged_peer_is_sent_the_advanced_security_attribute() {
-        let is_flag = |attr: &AmneziaWireguardPeerAttribute| matches!(attr, AmneziaWireguardPeerAttribute::Other(nla) if nla.kind() == WGPEER_A_ADVANCED_SECURITY);
-        let mut flagged = peer("k1", &["203.0.113.1/32"], None);
-        assert!(
-            !replace_peer_attrs(KEY, &flagged)
-                .unwrap()
-                .iter()
-                .any(is_flag)
-        );
-        flagged.advanced_security = true;
-        assert!(
-            replace_peer_attrs(KEY, &flagged)
-                .unwrap()
-                .iter()
-                .any(is_flag)
-        );
     }
 
     #[test]
@@ -732,15 +676,32 @@ mod tests {
     }
 
     #[test]
-    fn an_interface_the_kernel_cannot_be_sent_is_refused_by_name() {
-        assert!(check(&interface("awg-a", Obfuscation::default())).is_ok());
+    fn an_interface_with_a_tuning_value_above_65535_is_refused_by_name_and_key() {
         let too_large = Obfuscation {
             rekey_after_time: Some(65536),
             ..Obfuscation::default()
         };
         let shown = format!("{:#}", check(&interface("awg-b", too_large)).unwrap_err());
         assert!(
-            shown.starts_with("interface awg-b: rekey_after_time"),
+            shown.starts_with("interface awg-b: obfuscation.rekey_after_time"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn an_interface_the_kernel_cannot_be_sent_is_refused_by_name() {
+        assert!(check(&interface("awg-a", Obfuscation::default())).is_ok());
+        let undecodable = Obfuscation {
+            header_protection_key: Some("not a key".to_string()),
+            s1: Some(12),
+            s2: Some(12),
+            s3: Some(12),
+            s4: Some(12),
+            ..Obfuscation::default()
+        };
+        let shown = format!("{:#}", check(&interface("awg-b", undecodable)).unwrap_err());
+        assert!(
+            shown.starts_with("interface awg-b: invalid header_protection_key"),
             "{shown}"
         );
     }
@@ -787,6 +748,30 @@ mod tests {
         push_obfuscation_attrs(&mut expected, &obfuscation).unwrap();
         assert!(expected.contains(&AmneziaWireguardAttribute::Jc(4)));
         assert_eq!(check(&interface("awg-a", obfuscation)).unwrap(), expected);
+    }
+
+    // The config still accepts the flag; the module reads no such attribute.
+    #[tokio::test]
+    async fn a_peer_flagged_advanced_security_is_sent_no_flag() {
+        let flagged = PeerEntry {
+            public_key: base64::engine::general_purpose::STANDARD.encode(KEY),
+            name: None,
+            endpoint: None,
+            allowed_ips: Some(vec!["203.0.113.1/32".to_string()]),
+            advanced_security: true,
+        };
+        let attrs = replace_peer_attrs(KEY, &resolve_peer(&flagged).await.unwrap()).unwrap();
+        assert_eq!(
+            attrs,
+            [
+                AmneziaWireguardPeerAttribute::PublicKey(KEY),
+                AmneziaWireguardPeerAttribute::Flags(AmneziaWireguardPeerFlags::ReplaceAllowedIps),
+                AmneziaWireguardPeerAttribute::AllowedIps(vec![
+                    cidr_to_allowed_ip("203.0.113.1/32").unwrap()
+                ]),
+                AmneziaWireguardPeerAttribute::PersistentKeepalive(AmneziaWireguardRange::default()),
+            ]
+        );
     }
 
     #[test]

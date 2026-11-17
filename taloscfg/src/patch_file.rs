@@ -386,6 +386,22 @@ configFiles:
         assert!(format!("{err:#}").contains("s3, s4"), "{err:#}");
     }
 
+    // The module holds it in 16 bits, so a larger value never did what it said.
+    #[test]
+    fn a_tuning_value_above_65535_is_not_rendered_naming_the_node_the_interface_and_the_key() {
+        let raw = with_router_files(&[("", TEMPLATE)]).replace(
+            "{pair: [a, b], port: 51820}",
+            "{pair: [a, b], port: 51820, obfuscation: {rekey_after_time: 65536}}",
+        );
+        let shown = format!("{:#}", render_raw(&raw, "a").unwrap_err());
+        for part in [
+            "node \"a\", interface \"mesh-b\": ",
+            "obfuscation.rekey_after_time is 65536",
+        ] {
+            assert!(shown.contains(part), "{part:?} not in {shown}");
+        }
+    }
+
     #[test]
     fn a_ruleset_also_goes_out_as_the_file_the_previous_daemon_reads() {
         let a = rendered("a");

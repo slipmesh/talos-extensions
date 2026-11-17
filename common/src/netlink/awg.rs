@@ -36,24 +36,21 @@ use netlink_packet_generic::GenlMessage;
 /// it would already be) and a previously-obfuscated one (actually clears it), so there's no need
 /// to distinguish the two cases here.
 ///
-/// `i1`..`i5`/`header_protection_key`/`content_padding_addition`/`rekey_after_time`/
-/// `rekey_timeout`/`reject_after_time`/`keepalive_timeout`/`max_handshake_attempts` stay
-/// omit-if-unset: none of them are populated by any interface in this workspace today (mesh links
-/// only ever set jc/jmin/jmax/s1/s2/h1..h4; roadwarrior pools can set `header_protection_key`, but
-/// never *unset* it once set - see `awg::config`'s `advanced_security` validation), so there's no
-/// observed instance of the same stale-state bug for these, and (unlike h1..h4) their true
-/// kernel-module "default" isn't a simple constant confirmable the same way (`rekey_after_time`
-/// etc. read like runtime fallback thresholds, not raw values) - not worth guessing at without a
-/// real bug to fix.
+/// `i1`..`i5` and `header_protection_key` stay omit-if-unset. The module has no way to take a key
+/// off an interface: it keeps one until the interface is created anew. An empty decoy spec reads
+/// as if it cleared one, but that has not been tried against a kernel, so an unset one is not
+/// sent.
 ///
 /// `h1`..`h4` are ranges of two `u32` ends; ours is the range from the single value to itself.
-/// `content_padding_addition`/`rekey_after_time`/
-/// `rekey_timeout`/`reject_after_time`/`keepalive_timeout`/`max_handshake_attempts` are ranges
-/// of two `u16` ends, out of which the module draws: a value is sent as the range from it to
-/// itself, and one above 65535 is refused.
 ///
-/// Fallible for that, and because `header_protection_key` needs base64 decoding like any other
-/// key.
+/// `content_padding_addition`/`rekey_after_time`/`rekey_timeout`/`reject_after_time`/
+/// `keepalive_timeout`/`max_handshake_attempts` are ranges of two `u16` ends, out of which the
+/// module draws. A number from the config goes out as the range from it to itself. They are
+/// always sent, zero for an unset one: zero is the module's "not set", and an omitted attribute
+/// would keep what an earlier config put there.
+///
+/// Fallible for a tuning value above 65535, and because `header_protection_key` needs base64
+/// decoding like any other key.
 pub fn push_obfuscation_attrs(
     attrs: &mut Vec<AmneziaWireguardAttribute>,
     o: &Obfuscation,
@@ -98,42 +95,33 @@ pub fn push_obfuscation_attrs(
             decode_key(key).map_err(|e| anyhow::anyhow!("invalid header_protection_key: {e}"))?,
         ));
     }
-    if let Some(v) = o.content_padding_addition {
-        attrs.push(AmneziaWireguardAttribute::ContentPaddingAddition(
-            range_of_one("content_padding_addition", v)?,
-        ));
-    }
-    if let Some(v) = o.rekey_after_time {
-        attrs.push(AmneziaWireguardAttribute::RekeyAfterTime(range_of_one(
-            "rekey_after_time",
-            v,
-        )?));
-    }
-    if let Some(v) = o.rekey_timeout {
-        attrs.push(AmneziaWireguardAttribute::RekeyTimeout(range_of_one(
-            "rekey_timeout",
-            v,
-        )?));
-    }
-    if let Some(v) = o.reject_after_time {
-        attrs.push(AmneziaWireguardAttribute::RejectAfterTime(range_of_one(
-            "reject_after_time",
-            v,
-        )?));
-    }
-    if let Some(v) = o.keepalive_timeout {
-        attrs.push(AmneziaWireguardAttribute::KeepaliveTimeout(range_of_one(
-            "keepalive_timeout",
-            v,
-        )?));
-    }
-    if let Some(v) = o.max_handshake_attempts {
-        attrs.push(AmneziaWireguardAttribute::MaxHandshakeAttempts(
-            range_of_one("max_handshake_attempts", v)?,
-        ));
-    }
-    // Always sent, unlike the tuning values above: these are obfuscation switches, and an
-    // omitted attribute leaves whatever the kernel already has.
+    let range_of = |name, value: Option<u32>| range_of_one(name, value.unwrap_or(0));
+    attrs.push(AmneziaWireguardAttribute::ContentPaddingAddition(range_of(
+        "content_padding_addition",
+        o.content_padding_addition,
+    )?));
+    attrs.push(AmneziaWireguardAttribute::RekeyAfterTime(range_of(
+        "rekey_after_time",
+        o.rekey_after_time,
+    )?));
+    attrs.push(AmneziaWireguardAttribute::RekeyTimeout(range_of(
+        "rekey_timeout",
+        o.rekey_timeout,
+    )?));
+    attrs.push(AmneziaWireguardAttribute::RejectAfterTime(range_of(
+        "reject_after_time",
+        o.reject_after_time,
+    )?));
+    attrs.push(AmneziaWireguardAttribute::KeepaliveTimeout(range_of(
+        "keepalive_timeout",
+        o.keepalive_timeout,
+    )?));
+    attrs.push(AmneziaWireguardAttribute::MaxHandshakeAttempts(range_of(
+        "max_handshake_attempts",
+        o.max_handshake_attempts,
+    )?));
+    // Always sent: these are obfuscation switches, and an omitted attribute leaves whatever the
+    // kernel already has.
     attrs.push(AmneziaWireguardAttribute::RandomTrailers(
         o.random_trailers.unwrap_or(false),
     ));
@@ -143,6 +131,8 @@ pub fn push_obfuscation_attrs(
     Ok(())
 }
 
+// `Obfuscation::validate` refuses a value above 65535 before an interface gets here; the
+// conversion still has to be fallible.
 fn range_of_one(name: &str, value: u32) -> Result<AmneziaWireguardRange<u16>> {
     let value = u16::try_from(value)
         .with_context(|| format!("{name} is {value}, and the module holds it in 16 bits"))?;
@@ -347,68 +337,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn each_tuning_value_too_large_for_the_module_is_refused_by_its_own_name() {
-        let largest = Obfuscation {
-            rekey_after_time: Some(65535),
-            ..Obfuscation::default()
-        };
-        assert!(
-            push(&largest).contains(&AmneziaWireguardAttribute::RekeyAfterTime(
-                AmneziaWireguardRange::from(65535)
-            ))
-        );
-        let cases = [
-            (
-                "content_padding_addition",
-                Obfuscation {
-                    content_padding_addition: Some(65536),
-                    ..Obfuscation::default()
-                },
-            ),
-            (
-                "rekey_after_time",
-                Obfuscation {
-                    rekey_after_time: Some(65536),
-                    ..Obfuscation::default()
-                },
-            ),
-            (
-                "rekey_timeout",
-                Obfuscation {
-                    rekey_timeout: Some(65536),
-                    ..Obfuscation::default()
-                },
-            ),
-            (
-                "reject_after_time",
-                Obfuscation {
-                    reject_after_time: Some(65536),
-                    ..Obfuscation::default()
-                },
-            ),
-            (
-                "keepalive_timeout",
-                Obfuscation {
-                    keepalive_timeout: Some(65536),
-                    ..Obfuscation::default()
-                },
-            ),
-            (
-                "max_handshake_attempts",
-                Obfuscation {
-                    max_handshake_attempts: Some(65536),
-                    ..Obfuscation::default()
-                },
-            ),
-        ];
-        for (name, too_large) in cases {
-            let err = push_obfuscation_attrs(&mut Vec::new(), &too_large).unwrap_err();
-            let shown = format!("{err:#}");
-            assert!(shown.starts_with(&format!("{name} is 65536")), "{shown}");
-        }
-    }
-
     // The logged chain would otherwise show a character of the configured text and where.
     #[test]
     fn an_undecodable_header_protection_key_is_refused_without_its_text() {
@@ -494,11 +422,10 @@ mod tests {
         );
     }
 
-    /// `i1`..`i5`/`header_protection_key`/timing fields stay omit-if-unset (see this module's own
-    /// doc comment for why) - unlike jc/jmin/jmax/s1..s4/h1..h4, an unset one of these must not
-    /// appear in the pushed attributes at all.
+    // An unset one of these is left out of the request: no value of it restores the module's
+    // state for an interface that never had one.
     #[test]
-    fn unset_decoy_and_timing_fields_are_omitted_not_defaulted() {
+    fn unset_decoy_specs_and_the_header_protection_key_are_omitted() {
         let attrs = push(&Obfuscation::default());
         assert!(
             !attrs
@@ -510,10 +437,27 @@ mod tests {
                 .iter()
                 .any(|a| matches!(a, AmneziaWireguardAttribute::HeaderProtectionKey(_)))
         );
-        assert!(
-            !attrs
+    }
+
+    // Zero is the module's "not set", and an omitted attribute keeps what the kernel holds.
+    #[test]
+    fn an_unset_tuning_value_is_sent_as_zero() {
+        let attrs = push(&Obfuscation::default());
+        use AmneziaWireguardAttribute as A;
+        for expected in [
+            A::ContentPaddingAddition(AmneziaWireguardRange::default()),
+            A::RekeyAfterTime(AmneziaWireguardRange::default()),
+            A::RekeyTimeout(AmneziaWireguardRange::default()),
+            A::RejectAfterTime(AmneziaWireguardRange::default()),
+            A::KeepaliveTimeout(AmneziaWireguardRange::default()),
+            A::MaxHandshakeAttempts(AmneziaWireguardRange::default()),
+        ] {
+            let kind = std::mem::discriminant(&expected);
+            let of_kind: Vec<_> = attrs
                 .iter()
-                .any(|a| matches!(a, AmneziaWireguardAttribute::RekeyAfterTime(_)))
-        );
+                .filter(|attr| std::mem::discriminant(*attr) == kind)
+                .collect();
+            assert_eq!(of_kind, [&expected], "{attrs:?}");
+        }
     }
 }

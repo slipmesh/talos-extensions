@@ -11,7 +11,9 @@ The image carries the same tag with `+` as `-`, since OCI tags cannot hold a `+`
 
 Stable releases come only from `release-1.X` branches, one per Talos minor; `main` follows the next
 minor. A change that breaks a daemon's behaviour or the `slipmesh.yaml` that `slipmesh-taloscfg`
-reads lands only on `main`, with the next minor. Any other change lands on `main` first and is
+reads lands only on `main`, with the next minor. The one exception so far is v1.14.5+sm.3, which
+refuses a tuning value above 65535: the module holds each in 16 bits, so such a value never did
+what it said, and it is refused on the stable line too. Any other change lands on `main` first and is
 cherry-picked to the release branches it applies to (`git cherry-pick -x`, then a pull request
 into `release-1.X`). A line is supported while upstream ships patches for it.
 

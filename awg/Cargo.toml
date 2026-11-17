@@ -23,7 +23,6 @@ http-body-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 netlink-packet-amneziawg = { workspace = true, optional = true }
-netlink-packet-core = { workspace = true, optional = true }
 prometheus-client.workspace = true
 rtnetlink = { workspace = true, optional = true }
 serde.workspace = true
@@ -39,6 +38,5 @@ default = ["runtime"]
 runtime = [
     "common/netlink",
     "dep:netlink-packet-amneziawg",
-    "dep:netlink-packet-core",
     "dep:rtnetlink",
 ]
