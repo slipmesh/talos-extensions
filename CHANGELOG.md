@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.14.5+sm.3] - 2026-11-17
+
+### Build system 🛠️
+
+- Update rust crate genetlink to 0.3.1 (release-1.14) (#76)
+- Update rust crate minijinja to 3.0.5 (release-1.14) (#77)
+- Update rust crate prometheus-client to 0.25.2 (release-1.14) (#78)
+- Update rust crate yaml_serde to 0.10.7 (release-1.14) (#79)
+
+### Fixed 🐛
+
+- Send the persistent keepalive and the tuning values as ranges of one value (#128)
+- Always send the tuning values, refuse one above 65535 and stop sending the peer flag (#129)
+
+### Miscellaneous 🧹
+
+- Add the cargo-deny policy and mark the crates as never published (#127)
+
 ## [1.14.5+sm.2] - 2026-11-04
 
 ### Build system 🛠️
