@@ -80,25 +80,24 @@ interfaces:
     peers:
       - public_key: "...client's base64 public key..."
         allowed_ips: ["203.0.113.5/32"] # tracked: handshake polled, route installed while fresh
-        advanced_security: true         # requires header_protection_key below, same on both ends
     obfuscation:
       jc: 4
       jmin: 40
       jmax: 70
       s1: 50
       s2: 100
-      h1: 1
-      h2: 2
-      h3: 3
-      h4: 4
+      h1: 5-1000                       # a header is one number or a range lo-hi
+      h2: 1001
+      h3: 1002
+      h4: 1003
       s3: 60                           # junk size, cookie-reply packets
       s4: 20                           # junk size, transport (data) packets; lowers the MTU that fits
       i1: "5-10"                       # decoy/cover packet header spec
-      header_protection_key: "...base64, same wire format as private_key..."
-      content_padding_addition: 128
-      rekey_after_time: 120
+      header_protection_key: "...base64, same wire format as private_key..."  # every peer needs it
+      content_padding_addition: 0-128  # bytes; a number or a range, ends up to 65535
+      rekey_after_time: 100-140        # seconds
       max_handshake_attempts: 90
-      random_trailers: true            # 3.1: pad outgoing packets to a varying length
+      random_trailers: true            # 3.1: pad outgoing packets to a varying length; both ends
       disable_cookies: true            # 3.1: never send cookie replies
 metrics:
   listen: "198.51.100.4:9586"           # omit the whole section to serve nothing
@@ -114,29 +113,57 @@ to). This is a config-authoring concern, not something `awg` decides. The same a
 **Every AmneziaWG obfuscation parameter is exposed**, through 3.1, not just the original nine
 (jc/jmin/jmax/s1/s2/h1-h4) - confirmed field-by-field against the current kernel module's
 `src/netlink.c` and amneziawg-tools' own config parser (`src/config.c`), since the kernel module's
-own README only documents the original set. See `sliplib_config::Obfuscation`'s doc comment for the full
-field list and what each one does. `header_protection_key` + a peer's `advanced_security: true` are
-a matched pair - the key alone does nothing without the flag, and both ends of a peering need the
-same key. The kernel module also accepts the key only when every junk size `s1`..`s4` is at least
-12, room for the header protection nonce (an unset size counts as 0), and refuses magic headers
-`h1`..`h4` that are not all different (an unset one counts as 1..4); both come back as a bare
-`Invalid argument` for that interface. It never checks that `jmin` does not exceed `jmax` before
-drawing junk packet sizes between them. `awg` refuses an interface that breaks any of these without
-touching it - one an earlier run left up stays as it is - brings up the others, then exits and is
-restarted, so route tracking and metrics wait until the config is fixed. `taloscfg` refuses to
-render it, see `sliplib_config::Obfuscation::validate`.
+own README only documents the original set. See `sliplib_config::Obfuscation`'s doc comment for the
+full field list and what each one does. `header_protection_key` belongs to the interface: once it is
+set, the kernel module protects the header of every handshake, cookie and data packet to and from
+every peer of that interface, so each peer needs the same key and the same `s1`..`s4`; junk and
+decoy packets are not protected, and there is no per-peer switch. `awg` leaves the key out of its
+request when the config has none, and the module has no way to take a key off an interface, so a
+key removed from the config stays in force until the interface is created anew, at the next boot.
+So does the module's check of the junk sizes below: a config that drops the key and takes any of
+`s1`..`s4` below 12 is refused on every pass until then, by the module at `SetDevice` once the link
+is up, since the config alone does not show it. The kernel module also accepts the key
+only when every junk size `s1`..`s4` is at least 12, room for the header protection nonce (an
+unset size counts as 0), and refuses magic headers `h1`..`h4` that share a value (an unset one
+counts as 1..4); both come back as a bare `Invalid argument` for that interface. It never checks
+that `jmin` does not exceed `jmax` before drawing junk packet sizes between them. `awg` refuses an
+interface that breaks one of these three without touching it - one an earlier run left up stays as
+it is - brings up the others, then exits and is restarted, so route tracking and metrics wait until
+the config is fixed. `taloscfg` refuses to render it, see `sliplib_config::Obfuscation::validate`.
 
-The two 3.1 switches are the exception to that pairing: each end decides for itself.
-`random_trailers` appends a random-length trailer to outgoing packets and relaxes the receive-side
-length check to "at least", so a peer that doesn't set it still accepts the traffic.
-`disable_cookies` suppresses cookie replies, whose own message type is a signature - at the cost
-of the load-shedding they exist for.
+`h1`..`h4` and the six values `content_padding_addition`, `rekey_after_time`, `rekey_timeout`,
+`reject_after_time`, `keepalive_timeout` and `max_handshake_attempts` are each a number or a range
+written `lo-hi`: the module draws the header of every packet, and each timing or padding value where
+it uses one, out of the range. A number is the range of that one value. Both ends of a tunnel carry
+the same four header ranges. The six values need not be equal on the two ends, but
+`keepalive_timeout` meets the peer's timers: an end that sends without hearing back starts a new
+handshake after its own `keepalive_timeout` plus `rekey_timeout`, so a `keepalive_timeout` above
+that sum on the other end makes one-way traffic re-handshake. Their ends go up to 65535, the width
+the module holds them in. Zero or an unset one leaves a timing value to the module's own constants
+and a data packet to the padding it gets without `content_padding_addition`: WireGuard's own, or the
+random trailer when `random_trailers` is on. All six are sent on every reconcile, so a value taken
+out of the config is taken off the interface. A non-zero `content_padding_addition` replaces the
+padding of a data packet, `random_trailers`' included. `rekey_after_time` has to end below 180: the
+module stops using a key 180 seconds after its handshake, whatever `reject_after_time` says, so an
+initiator that only sends would renew after the key is gone. One that also receives renews once the
+key is older than `reject_after_time` less the low ends of `keepalive_timeout` and `rekey_timeout`,
+165 seconds by default; keep that below 180 too. Keep `rekey_after_time` well below 180; the
+module's own value is 120. A config with a range in it needs this release of `awg` or a later one:
+an earlier one refuses it.
+
+Of the two 3.1 switches, `random_trailers` has to be the same on both ends: it appends a
+random-length trailer to outgoing packets, and only an end that sets it accepts a handshake or
+cookie message longer than its exact size, so an end without it drops what an end with it sends.
+`disable_cookies` is each end's own: it suppresses cookie replies, whose own message type is a
+signature - at the cost of the load-shedding they exist for.
 
 Both are sent explicitly on every reconcile, set or not: an omitted attribute leaves the
 kernel's current value alone. A module older than 3.1 rejects them - generic netlink validates against
 the family's own attribute maximum and fails the whole request rather than ignoring what it
 does not know - so a refused `SetDevice` is retried once without them, and the interface comes
-up without the two switches instead of not at all.
+up without the two switches instead of not at all. Older than 3.0 the module takes none of this:
+the six values and the magic headers go out in the form of 3.0, so `awg` needs AmneziaWG 3.0 or
+later, and 3.1 for the two switches.
 
 ### Ownership: the whole `amneziawg` netlink kind, no naming convention
 
@@ -594,6 +621,31 @@ already handed out connects to.
 keys and settings in them stay as they were and only their layout changes.
 
 ### Breaking changes
+
+Since v1.15.0-beta.0+sm.4, a peer's `advanced_security` is gone from the config: a file that still
+has it is read and the key ignored. The module reads no per-peer switch; header protection is the
+interface's key.
+
+Since v1.15.0-beta.0+sm.4, a file in which one of the six tuning values is above 65535, or one of
+them or of `h1`..`h4` is a reversed range or neither a number nor `lo-hi` in decimal digits, cannot
+be read: `taloscfg` refuses `slipmesh.yaml`, and `awg` refuses its whole config at start and
+touches no interface, so those an earlier run left stay as they are.
+
+Since v1.15.0-beta.0+sm.4, `taloscfg` and `awg` refuse a `rekey_after_time` of 180 or more, a range
+of a timing value that starts at 0, and a `reject_after_time` not above `keepalive_timeout` plus
+`rekey_timeout`. `awg` leaves such an interface as an earlier run left it, brings up the others and
+exits, so route tracking and metrics wait until the config is fixed. Such a value never did what it
+said; set it within those bounds or take it out for the module's own value.
+
+Since v1.15.0-beta.0+sm.4, a tuning value taken out of the config is taken off the interface too,
+back to the module's own value; it used to stay as the earlier config set it.
+
+Since `slipmesh` 0.17.0, a pool with `header_protection_key`, `s3`, `s4` or `random_trailers` gets
+them into its client configs. Export the client configs of such a pool again, each with
+`slipmesh rw inspect --if <pool> --name <client>`: a client without the key or without
+`RandomTrailers` completes no handshake, without `S4` sends no data the pool takes, and without
+`S3` reads no cookie reply. For a client whose private key the file does not keep, the exported
+config carries a placeholder for it, so add the new lines to the client's own config by hand.
 
 The top of the `network` document, its `cluster:` block and every pool refuse a field they do not
 know, so a name that changed fails where it is written rather than being ignored into a listener
