@@ -185,8 +185,8 @@ pub async fn current_peers(awg: &mut AwgClient, iface: &str) -> Result<Vec<Peer>
 /// `previous`/`desired` need not be pre-sorted - keyed by `public_key` internally.
 ///
 /// A peer counts as unchanged only if `allowed_ips` (compared as a set - CIDR order is not
-/// semantically meaningful to WireGuard), `endpoint`, `advanced_security` and the keepalive all
-/// match; any of them changing means the peer gets re-sent with `WGPEER_F_REPLACE_ALLOWEDIPS`.
+/// semantically meaningful to WireGuard), `endpoint` and the keepalive all match; any of
+/// them changing means the peer gets re-sent with `WGPEER_F_REPLACE_ALLOWEDIPS`.
 fn diff_peers(previous: &[Peer], desired: &[Peer]) -> Vec<(String, Option<Peer>)> {
     use std::collections::{BTreeMap, BTreeSet};
 
