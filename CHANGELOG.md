@@ -5,9 +5,23 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-beta.0+sm.4] - 2026-11-17
+
+### Breaking changes 💥
+
+- Take the tuning values and magic headers as ranges and always send them (#130)
+
+### Fixed 🐛
+
+- Send the persistent keepalive and the tuning values as ranges of one value (#126)
+
+### Miscellaneous 🧹
+
+- Put breaking changes in a changelog section of their own (#125)
+
 ## [1.15.0-beta.0+sm.3] - 2026-11-15
 
-### Added ✨
+### Breaking changes 💥
 
 - Read slipmesh.yaml and never write it (#123)
 
@@ -51,10 +65,13 @@ and follows [Semantic Versioning](https://semver.org/).
 
 ## [1.15.0-alpha.2+sm.4] - 2026-11-10
 
+### Breaking changes 💥
+
+- Read and write every YAML file through sliplib-yaml (#99)
+
 ### Changed 🔧
 
 - Take cidr parsing and exclusion from sliplib-net (#98)
-- Read and write every YAML file through sliplib-yaml (#99)
 - Take the patch format from sliplib-config (#103)
 
 ### Fixed 🐛
@@ -155,12 +172,15 @@ and follows [Semantic Versioning](https://semver.org/).
 
 ## [0.4.0] - 2026-10-19
 
+### Breaking changes 💥
+
+- Read the bird.conf template from the node's config
+- Apply a ruleset template given as its own file
+
 ### Added ✨
 
 - Add templates compiled from text at runtime
-- Read the bird.conf template from the node's config
 - Let slipmesh.yaml add files to the generated documents
-- Apply a ruleset template given as its own file
 - Write the reference templates into slipmesh.yaml when it has none
 - Hand the ruleset to the previous nftables daemon too
 
@@ -214,7 +234,7 @@ and follows [Semantic Versioning](https://semver.org/).
 
 ## [0.3.0] - 2026-09-28
 
-### Added ✨
+### Breaking changes 💥
 
 - Generate patch files from slipmesh.yaml
 
