@@ -129,6 +129,14 @@ fn generate(
     // leaves the patch files as they were rather than half of them new.
     let hosts = render_hosts(&file, &resolved, &targets, patches_dir)?;
 
+    // Told in every mode, and failing none: the file is valid, and its writer should still know.
+    for warning in sliplib_mesh::warnings::warnings(file.topology(), &resolved)
+        .iter()
+        .filter(|warning| targets.iter().any(|target| warning.concerns(target)))
+    {
+        eprintln!("warning: {warning}");
+    }
+
     for host in &hosts {
         if diff {
             print_diff(&host.host, &host.before, &host.after);
