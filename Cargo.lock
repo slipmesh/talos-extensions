@@ -1913,6 +1913,7 @@ dependencies = [
  "sliplib-secrets",
  "sliplib-yaml",
  "tempfile",
+ "thiserror",
 ]
 
 [[package]]

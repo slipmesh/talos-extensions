@@ -3,9 +3,9 @@
 //! `validate()` accepts it, and any files the `patch` documents add to it.
 
 use crate::patches::{self, GENERATED, HostDocument};
+use crate::talos::{self, ConfigFile, ExtensionServiceConfig, Identity};
 use anyhow::{Context, Result, bail};
 use sliplib_config::slipmesh_file::SlipmeshFile;
-use sliplib_config::talos::{self, ConfigFile, ExtensionServiceConfig, Identity};
 use sliplib_mesh::render::{NodeConfigs, node_configs};
 use sliplib_mesh::secrets::ResolvedSecrets;
 use sliplib_yaml::Mapping;

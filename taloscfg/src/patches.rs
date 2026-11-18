@@ -1,9 +1,9 @@
 //! The `patch` documents of `slipmesh.yaml` as Talos documents: checked as far as the generator
 //! knows them, and merged into what one host gets.
 
+use crate::talos::{self, Identity};
 use anyhow::{Context, Result, bail, ensure};
 use sliplib_config::slipmesh_file::{Patch, SlipmeshFile};
-use sliplib_config::talos::{self, Identity};
 use sliplib_yaml::Value;
 
 /// The `ExtensionServiceConfig`s generated from the network, by name, with the file each one
