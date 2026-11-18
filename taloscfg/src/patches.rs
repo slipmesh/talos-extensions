@@ -53,15 +53,8 @@ fn check_one(patch: &Patch) -> Result<()> {
             "{patch}: `ExtensionServiceConfig` {name:?} is generated from the network - a patch \
              may add `configFiles` to it and nothing else, not {others:?}"
         );
-        let over_generated = patch
-            .value()
-            .get("configFiles")
-            .and_then(Value::as_sequence)
-            .into_iter()
-            .flatten()
-            .any(|f| f.get("mountPath").and_then(Value::as_str) == Some(generated));
         ensure!(
-            !over_generated,
+            !talos::sets_file(patch.value(), name, generated),
             "{patch}: {generated} is the file generated for {name:?} - add files next to it, not \
              over it"
         );
