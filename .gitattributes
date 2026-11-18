@@ -1,0 +1,2 @@
+# Golden files are compared byte for byte, whatever line endings a checkout would give them.
+*.yaml text eol=lf

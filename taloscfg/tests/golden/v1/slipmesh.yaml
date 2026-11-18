@@ -1,6 +1,12 @@
-# A network in format version 1 that uses every part of the format, for the golden test beside
-# it: the patch file of every node of this file is compared with the files of this directory, byte
-# for byte.
+# A network in format version 1 for the golden test beside it: what every node of this file gets
+# is compared with the files of this directory, byte for byte, with derived public keys named by
+# their owner.
+#
+# This is the full fixture: every key of the format set, most to a value that is not its default.
+# ../v1-alternate holds the other side of each key that a file sets once: other names for the
+# interfaces and the route protocol, no tunnel networks, a set mesh MTU, BFD off, the keys that
+# may be left out left out. Between them they leave to other tests what no node's config shows:
+# the config of a pool's client, which is where a pool's `dns` goes, and every refusal.
 #
 # Every network and address is from a range reserved for documentation, but the link-local
 # network of the links; a node_id is an identity, not an address. Every name stands for nothing
@@ -28,12 +34,16 @@ cluster:
   pod_subnet: 203.0.113.0/26
 bfd:
   enable: true
+  min_rx_ms: 250
+  min_tx_ms: 350
   multiplier: 3
 # What every link and pool that is not plain starts from.
 obfuscation:
+  jc: 9
   s3: 40
   s4: 16
   i1: "<b 0xabcd><r 16>"
+  keepalive_timeout: 11
   random_trailers: true
 nodes:
   - name: node-a
@@ -86,8 +96,12 @@ mesh:
         h2: 2202
         h3: 3303
         h4: 4404
+        i3: "<t><r 8>"
+        i4: "<rc 12>"
+        i5: "<rd 6>"
         header_protection_key: ccccccccccccccccccccccccccccccccccccccccccc=
-    # The pair written from the end that dials. Its own s4 and switch replace the network's.
+    # The pair written from the end that dials. Its own s4, timing value and switch replace the
+    # network's.
     - pair: [node-c, node-a]
       port: 51831
       obfuscation:
@@ -104,7 +118,8 @@ mesh:
         rekey_after_time: 100-140
         keepalive_timeout: 12
         random_trailers: false
-    # A null takes the network's value, here s3.
+    # In version 1 a null is a key left out: the link takes the network's s3. Its own decoy
+    # replaces the network's.
     - pair: [node-a, node-d]
       port: 51832
       obfuscation:
@@ -118,18 +133,25 @@ mesh:
         h2: 12
         h3: 13
         h4: 14
+        i1: "<r 8>"
         i2: "<r 32>"
         content_padding_addition: 0-32
         rekey_timeout: 6
         reject_after_time: 170
         max_handshake_attempts: 20
         disable_cookies: true
+    # Its own s4 makes this link the one that limits the MTU of the mesh, counted for IPv6 since
+    # the one endpoint is a host name without a family. It leaves jc to the network.
     - pair: [node-c, node-e]
       port: 51833
-      obfuscation: {jc: 6, jmin: 60, jmax: 600, s1: 60, s2: 61, h1: 21, h2: 22, h3: 23, h4: 24}
+      obfuscation: {jmin: 60, jmax: 600, s1: 60, s2: 61, s4: 20, h1: 21, h2: 22, h3: 23, h4: 24}
     - pair: [node-f, node-c]
       port: 51834
       obfuscation: {jc: 7, jmin: 70, jmax: 700, s1: 62, s2: 63, h1: 31, h2: 32, h3: 33, h4: 34}
+    # A host name counted as IPv6 at one end and an IPv6 address at the other: one family.
+    - pair: [node-e, node-f]
+      port: 51836
+      obfuscation: {jc: 2, jmin: 20, jmax: 200, s1: 58, s2: 59, h1: 51, h2: 52, h3: 53, h4: 54}
     # Stock WireGuard: none of the obfuscation above reaches it.
     - pair: [node-a, router1]
       port: 51835

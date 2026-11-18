@@ -11,7 +11,7 @@ annotations:
   slipmesh.net/interface_prefix.mesh: mesh-
   slipmesh.net/route_proto_id.egress: '152'
   slipmesh.net/endpoint: 192.0.2.7
-  slipmesh.net/mesh_mtu: '1324'
+  slipmesh.net/mesh_mtu: '1320'
 ---
 apiVersion: v1alpha1
 kind: ExtensionServiceConfig
@@ -27,7 +27,7 @@ configFiles:
       - 198.51.100.135/32
       private_key: YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY=
       obfuscation: {}
-      mtu: 1324
+      mtu: 1320
       peers:
       - public_key: <public key of node-a>
         name: node-a
@@ -60,8 +60,8 @@ configFiles:
     - name: node-f
       address: 3fff:0:0:1::6
     bfd:
-      min_rx_ms: 300
-      min_tx_ms: 300
+      min_rx_ms: 250
+      min_tx_ms: 350
       multiplier: 3
     ospf_interfaces:
     - mesh-*

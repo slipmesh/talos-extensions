@@ -37,7 +37,7 @@ annotations:
   slipmesh.net/interface_prefix.mesh: mesh-
   slipmesh.net/route_proto_id.egress: '152'
   slipmesh.net/endpoint: node-b.example.com
-  slipmesh.net/mesh_mtu: '1324'
+  slipmesh.net/mesh_mtu: '1320'
 ---
 apiVersion: v1alpha1
 kind: ExtensionServiceConfig
@@ -65,9 +65,13 @@ configFiles:
         h3: 3303
         h4: 4404
         i1: <b 0xabcd><r 16>
+        i3: <t><r 8>
+        i4: <rc 12>
+        i5: <rd 6>
         header_protection_key: ccccccccccccccccccccccccccccccccccccccccccc=
+        keepalive_timeout: 11
         random_trailers: true
-      mtu: 1324
+      mtu: 1320
       peers:
       - public_key: <public key of node-a>
         name: node-a
@@ -91,6 +95,7 @@ configFiles:
         h3: 43
         h4: 44
         i1: <b 0xabcd><r 16>
+        keepalive_timeout: 11
         random_trailers: true
       handshake_stale_secs: 300
       peers:
@@ -126,8 +131,8 @@ configFiles:
     - name: router1
       address: 3fff:0:0:1::7
     bfd:
-      min_rx_ms: 300
-      min_tx_ms: 300
+      min_rx_ms: 250
+      min_tx_ms: 350
       multiplier: 3
     ospf_interfaces:
     - mesh-*
