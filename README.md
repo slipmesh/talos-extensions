@@ -701,6 +701,19 @@ is unit-tested directly; a node's configs are rendered by `sliplib-mesh` and CID
 exclusion come from `sliplib-net`, each tested there;
 netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`).
 
+[`taloscfg/tests/golden.rs`](taloscfg/tests/golden.rs) pins what `slipmesh-taloscfg generate` writes
+from a file of format version 1: the patch file of every node of the two fixtures under
+[`taloscfg/tests/golden/`](taloscfg/tests/golden) is compared byte for byte with the files beside
+each, with derived public keys named by their owner. `v1` sets every key of the format, and
+`v1-alternate` takes the other side of each key a file sets once. The fixtures are copies of the
+ones `sliplib-mesh` pins a node's configs on, and both tests hold the hash of each, so the copies
+change together. A change meant to move the patch files records the new ones, and the difference
+is reviewed with the rest of the pull request; the test refuses to record in CI:
+
+```sh
+UPDATE_EXPECT=1 cargo test -p taloscfg --test golden
+```
+
 Exercising a daemon end to end needs a Linux host with `CAP_NET_ADMIN`, and for `awg` the
 `amneziawg` kernel module loaded. Each daemon reads its config from the fixed path its
 `extension-services/` spec mounts, so a smoke test puts a hand-written config there:

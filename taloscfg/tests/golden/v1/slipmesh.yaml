@@ -1,0 +1,327 @@
+# A network in format version 1 for the golden test beside it: what every node of this file gets
+# is compared with the files of this directory, byte for byte, with derived public keys named by
+# their owner.
+#
+# This is the full fixture: every key of the format set, most to a value that is not its default.
+# ../v1-alternate holds the other side of each key that a file sets once: other names for the
+# interfaces and the route protocol, no tunnel networks, a set mesh MTU, BFD off, the keys that
+# may be left out left out. Between them they leave to other tests what no node's config shows:
+# the config of a pool's client, which is where a pool's `dns` goes, and every refusal.
+#
+# Every network and address is from a range reserved for documentation, but the link-local
+# network of the links; a node_id is an identity, not an address. Every name stands for nothing
+# and every key is one letter repeated.
+
+slipmesh:
+  kind: network
+cluster:
+  bgp_as: 64500
+  interface_prefix:
+    mesh: mesh-
+  route_proto_id:
+    egress: 152
+  loopback_networks:
+    ipv4: 198.51.100.0/25
+    ipv6: "3fff:0:0:1::/64"
+  tunnel_networks:
+    ipv4: 198.51.100.128/25
+    ipv6: "fe80::1:0/120"
+  bypass_refresh_interval_secs: 3600
+  awg_metrics_port: 9586
+  router_metrics_port: 9324
+  direct_interfaces: [lan0, "mesh-*"]
+  service_subnet: 203.0.113.64/26
+  pod_subnet: 203.0.113.0/26
+bfd:
+  enable: true
+  min_rx_ms: 250
+  min_tx_ms: 350
+  multiplier: 3
+# What every link and pool that is not plain starts from.
+obfuscation:
+  jc: 9
+  s3: 40
+  s4: 16
+  i1: "<b 0xabcd><r 16>"
+  keepalive_timeout: 11
+  random_trailers: true
+nodes:
+  - name: node-a
+    node_id: 0.0.0.1
+    endpoint: 192.0.2.1
+    mesh_private_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+  # A host name, with the family it is dialed over.
+  - name: node-b
+    node_id: 0.0.0.2
+    endpoint: node-b.example.com
+    address_family: ipv4
+    mesh_private_key: EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE=
+  # Behind NAT, on a narrower uplink: it has no endpoint and dials the other end of its links.
+  - name: node-c
+    node_id: 0.0.0.3
+    uplink_mtu: 1420
+    mesh_private_key: IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII=
+  # An endpoint with a port of its own, which its peers dial in place of the link's.
+  - name: node-d
+    node_id: 0.0.0.4
+    endpoint: 192.0.2.4:51999
+    address_family: ipv4
+    mesh_private_key: MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM=
+  # A host name without a family: counted as IPv6.
+  - name: node-e
+    node_id: 0.0.0.5
+    endpoint: node-e.example.net
+    mesh_private_key: QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ=
+  - name: node-f
+    node_id: 0.0.0.6
+    endpoint: "2001:db8::6"
+    mesh_private_key: UUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUUU=
+  # Its own list replaces the cluster's.
+  - name: router1
+    node_id: 0.0.0.7
+    endpoint: 192.0.2.7
+    mesh_private_key: YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY=
+    direct_interfaces: [bridge-lan, "mesh-*"]
+mesh:
+  links:
+    - pair: [node-a, node-b]
+      port: 51830
+      obfuscation:
+        jc: 4
+        jmin: 40
+        jmax: 400
+        s1: 64
+        s2: 48
+        h1: 1101
+        h2: 2202
+        h3: 3303
+        h4: 4404
+        i3: "<t><r 8>"
+        i4: "<rc 12>"
+        i5: "<rd 6>"
+        header_protection_key: ccccccccccccccccccccccccccccccccccccccccccc=
+    # The pair written from the end that dials. Its own s4, timing value and switch replace the
+    # network's.
+    - pair: [node-c, node-a]
+      port: 51831
+      obfuscation:
+        jc: 5
+        jmin: 50
+        jmax: 500
+        s1: 72
+        s2: 56
+        s4: 24
+        h1: 8808
+        h2: 6606
+        h3: 7707
+        h4: 5505-5599
+        rekey_after_time: 100-140
+        keepalive_timeout: 12
+        random_trailers: false
+    # In version 1 a null is a key left out: the link takes the network's s3. Its own decoy
+    # replaces the network's.
+    - pair: [node-a, node-d]
+      port: 51832
+      obfuscation:
+        jc: 3
+        jmin: 30
+        jmax: 300
+        s1: 34
+        s2: 35
+        s3: null
+        h1: 11
+        h2: 12
+        h3: 13
+        h4: 14
+        i1: "<r 8>"
+        i2: "<r 32>"
+        content_padding_addition: 0-32
+        rekey_timeout: 6
+        reject_after_time: 170
+        max_handshake_attempts: 20
+        disable_cookies: true
+    # Its own s4 makes this link the one that limits the MTU of the mesh, counted for IPv6 since
+    # the one endpoint is a host name without a family. It leaves jc to the network.
+    - pair: [node-c, node-e]
+      port: 51833
+      obfuscation: {jmin: 60, jmax: 600, s1: 60, s2: 61, s4: 20, h1: 21, h2: 22, h3: 23, h4: 24}
+    - pair: [node-f, node-c]
+      port: 51834
+      obfuscation: {jc: 7, jmin: 70, jmax: 700, s1: 62, s2: 63, h1: 31, h2: 32, h3: 33, h4: 34}
+    # A host name counted as IPv6 at one end and an IPv6 address at the other: one family.
+    - pair: [node-e, node-f]
+      port: 51836
+      obfuscation: {jc: 2, jmin: 20, jmax: 200, s1: 58, s2: 59, h1: 51, h2: 52, h3: 53, h4: 54}
+    # Stock WireGuard: none of the obfuscation above reaches it.
+    - pair: [node-a, router1]
+      port: 51835
+      plain: true
+bypass:
+  - node: node-b
+    include:
+      - kind: literal
+        prefixes:
+          - net: 192.0.2.128/25
+            label: documentation
+          - net: 198.18.2.0/24
+      - kind: asn
+        label: example-as
+        asns: [AS64496]
+    exclude:
+      - kind: dns
+        label: example-hosts
+        hostnames: [www.example.org]
+  # A second entry for the same node joins the first.
+  - node: node-b
+    include:
+      - kind: geoip
+        country: ZZ
+---
+slipmesh:
+  kind: roadwarriors
+name: plain
+node_hostnames: [node-a]
+address: 198.18.0.1/24
+listen_port: 51840
+private_key: ggggggggggggggggggggggggggggggggggggggggggg=
+plain: true
+dns: 198.18.0.53
+clients:
+  # Kept by its private key: the public half is derived.
+  - name: laptop
+    private_key: kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk=
+    allowed_ips: [198.18.0.2/32]
+  - name: phone
+    public_key: ooooooooooooooooooooooooooooooooooooooooooo=
+    allowed_ips: [198.18.0.3/32, "3fff:0:0:2::3/128"]
+---
+slipmesh:
+  kind: roadwarriors
+name: obf
+node_hostnames: [node-a, node-b]
+address: 198.18.1.1/24
+address6: "3fff:0:0:3::1/64"
+listen_port: 51841
+handshake_stale_secs: 300
+private_key: sssssssssssssssssssssssssssssssssssssssssss=
+obfuscation:
+  jc: 8
+  jmin: 80
+  jmax: 800
+  s1: 50
+  s2: 51
+  h1: 41
+  h2: 42
+  h3: 43
+  h4: 44
+clients:
+  - name: tablet
+    public_key: wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww=
+    allowed_ips: [198.18.1.2/32]
+---
+# The router template, for every node.
+slipmesh:
+  kind: patch
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: router
+configFiles:
+  - mountPath: /etc/talos-extensions/router.conf.j2
+    content: |
+      router id {{ loopback }};
+      protocol device {
+      }
+---
+# The same document for one node: merged over the one above, its list replaces that one's.
+slipmesh:
+  kind: patch
+  include: [node-b]
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: router
+configFiles:
+  - mountPath: /etc/talos-extensions/router.conf.j2
+    content: |
+      router id {{ loopback }};
+      protocol device {
+        scan time 10;
+      }
+---
+# The ruleset, for every node but one.
+slipmesh:
+  kind: patch
+  exclude: [router1]
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: nftables
+configFiles:
+  - mountPath: /etc/talos-extensions/nftables.conf.j2
+    content: |
+      table ip example_nat {
+          chain postrouting {
+              type nat hook postrouting priority srcnat; policy accept;
+              oifname "{{ defaultroute_interface_ipv4 }}" ip saddr 203.0.113.0/26 masquerade
+          }
+      }
+---
+# A file added to a generated document.
+slipmesh:
+  kind: patch
+  include: [node-a]
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: awg
+configFiles:
+  - mountPath: /usr/local/etc/example/beside-awg.conf
+    content: |
+      example = true
+---
+slipmesh:
+  kind: patch
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: example
+environment:
+  - EXAMPLE_LEVEL=info
+---
+# Reaches node-b alone. Its file is written as YAML: the node gets its text.
+slipmesh:
+  kind: patch
+  include: [node-b, node-c]
+  exclude: [node-c]
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: example
+environment:
+  - EXAMPLE_LEVEL=debug
+configFiles:
+  - mountPath: /usr/local/etc/example/example.yaml
+    content:
+      listen: 198.51.100.2
+---
+# Deletes the document on one node.
+slipmesh:
+  kind: patch
+  include: [node-d]
+apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: example
+$patch: delete
+---
+# The generator's annotations join these.
+slipmesh:
+  kind: patch
+  include: [node-a, node-c]
+apiVersion: v1alpha1
+kind: KubeNodeConfig
+annotations:
+  example.com/role: edge
+---
+# A document without a name.
+slipmesh:
+  kind: patch
+  include: [node-a]
+apiVersion: v1alpha1
+kind: UnattendedInstallConfig
+installer:
+  disk: /dev/vda
