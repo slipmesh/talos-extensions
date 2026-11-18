@@ -392,20 +392,27 @@ configFiles:
     #[test]
     fn a_document_that_deletes_itself_takes_no_annotations() {
         let mut document = yaml("kind: KubeNodeConfig\n$patch: delete\n");
-        let err = format!(
-            "{:#}",
-            annotate(&mut document, NAMESPACE, ours()).unwrap_err()
+        let err = annotate(&mut document, NAMESPACE, ours()).unwrap_err();
+        assert!(
+            matches!(&err, Error::DeletesAnnotated { namespace } if namespace == NAMESPACE),
+            "{err}"
         );
-        assert!(err.contains("KubeNodeConfig"), "{err}");
     }
 
     #[test]
     fn a_document_that_sets_an_annotation_in_the_namespace_takes_none() {
         let mut document = yaml("kind: KubeNodeConfig\nannotations:\n  node-a.example/other: x\n");
-        let err = format!(
-            "{:#}",
-            annotate(&mut document, NAMESPACE, ours()).unwrap_err()
+        let err = annotate(&mut document, NAMESPACE, ours()).unwrap_err();
+        assert!(
+            matches!(&err, Error::SetsGenerated { set, .. } if set == "node-a.example/other"),
+            "{err}"
         );
-        assert!(err.contains("node-a.example/other"), "{err}");
+    }
+
+    #[test]
+    fn annotations_that_are_not_a_mapping_take_none() {
+        let mut document = yaml("kind: KubeNodeConfig\nannotations: [x]\n");
+        let err = annotate(&mut document, NAMESPACE, ours()).unwrap_err();
+        assert!(matches!(err, Error::AnnotationsNotAMapping), "{err}");
     }
 }
