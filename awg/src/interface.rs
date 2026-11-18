@@ -324,6 +324,7 @@ fn check(iface: &InterfaceEntry) -> Result<Vec<AmneziaWireguardAttribute>> {
     iface
         .obfuscation
         .validate()
+        .map_err(anyhow::Error::new)
         .and_then(|()| identity_attrs(iface))
         .with_context(|| format!("interface {}", iface.name))
 }

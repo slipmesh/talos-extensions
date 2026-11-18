@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use sliplib_config::mesh_config::missing_defaults;
 use sliplib_config::slipmesh_file::SlipmeshFile;
-use sliplib_mesh::secrets::{MissingSecret, ResolvedSecrets};
+use sliplib_mesh::secrets::ResolvedSecrets;
 use sliplib_yaml::MultiDoc;
 use std::path::{Path, PathBuf};
 use taloscfg::{defaults, patch_file, patches};
@@ -177,7 +177,10 @@ fn render_hosts(
 
 /// `refusal`, with the command that creates the secret when a missing one is what it is about.
 fn with_its_cure(refusal: anyhow::Error) -> anyhow::Error {
-    if refusal.is::<MissingSecret>() {
+    let lacks_a_secret = refusal
+        .downcast_ref::<sliplib_mesh::render::Error>()
+        .is_some_and(|refusal| refusal.missing_secret().is_some());
+    if lacks_a_secret {
         anyhow::anyhow!("{refusal:#} - `slipmesh mint` creates it")
     } else {
         refusal
