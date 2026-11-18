@@ -20,18 +20,18 @@ router = { path = "router", default-features = false }
 nftables = { path = "nftables", default-features = false }
 
 anyhow = "1.0.104"
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.8", features = ["derive"] }
 # Templates read at runtime rather than compiled in: `builtins` for filters such as `join`,
 # `serde` to render from the daemons' own context structs.
 minijinja = { version = "3.1.0", default-features = false, features = ["builtins", "serde"] }
 base64 = "0.23.1"
 # Ours, from a release tag: sliplib is not published to crates.io.
-sliplib-config = { git = "https://github.com/slipmesh/sliplib", rev = "fb8c6bf" }
-sliplib-mesh = { git = "https://github.com/slipmesh/sliplib", rev = "fb8c6bf" }
-sliplib-net = { git = "https://github.com/slipmesh/sliplib", rev = "fb8c6bf" }
-sliplib-runtime = { git = "https://github.com/slipmesh/sliplib", rev = "fb8c6bf" }
-sliplib-secrets = { git = "https://github.com/slipmesh/sliplib", rev = "fb8c6bf" }
-sliplib-yaml = { git = "https://github.com/slipmesh/sliplib", rev = "fb8c6bf" }
+sliplib-config = { git = "https://github.com/slipmesh/sliplib", tag = "v0.19.0" }
+sliplib-mesh = { git = "https://github.com/slipmesh/sliplib", tag = "v0.19.0" }
+sliplib-net = { git = "https://github.com/slipmesh/sliplib", tag = "v0.19.0" }
+sliplib-runtime = { git = "https://github.com/slipmesh/sliplib", tag = "v0.19.0" }
+sliplib-secrets = { git = "https://github.com/slipmesh/sliplib", tag = "v0.19.0" }
+sliplib-yaml = { git = "https://github.com/slipmesh/sliplib", tag = "v0.19.0" }
 futures = "0.3.34"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -47,7 +47,7 @@ hyper = { version = "1.12.0", features = ["server", "http1"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
 http-body-util = "0.1.5"
 # Hyper's own body type; already in the lock graph via the same reqwest dependency.
-bytes = "1.12.1"
+bytes = "1.12.2"
 # Prometheus exposition. Used by building a fresh `Registry` per scrape rather than through the
 # `Collector` trait, whose `encode` is synchronous and so cannot host the async netlink dump the
 # values come from - a per-scrape registry also means a peer removed from the config is simply
@@ -76,7 +76,7 @@ netlink-packet-generic = "0.5.0"
 rtnetlink = "0.24.0"
 # `kill(2)`, for passing SIGTERM on to `bird`: tokio can only SIGKILL a child. Already in the lock graph
 # with `signal` on, via rtnetlink.
-nix = { version = "0.31.3", default-features = false, features = ["signal"] }
+nix = { version = "0.32.0", default-features = false, features = ["signal"] }
 # Deliberately no direct `netlink-packet-route` dependency: rtnetlink re-exports its own pinned
 # version as `rtnetlink::packet_route`, and importing route/link types through that path (not a
 # separate top-level `netlink_packet_route` dependency) avoids two possibly-mismatched copies of
