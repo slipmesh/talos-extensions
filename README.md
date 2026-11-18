@@ -594,8 +594,9 @@ obfuscation. `--check` and `--diff` write no patch file either.
 line, at any depth, shows as `<redacted>` when it is the same on both sides and as
 `<redacted, old>` and `<redacted, new>` where it changed.
 
-In every mode a run prints a line that starts with `warning:` on standard error for each link of
-the nodes it was asked for that loses data packets it should deliver, and fails for none of them.
+In every mode a run prints a line that starts with `warning:` on standard error for each way a
+link of the nodes it was asked for loses data packets it should deliver, one line each, and fails
+for none of them. A file it refuses gets no warning.
 There are two such cases, both on a link with `random_trailers` on: one of `h1` to `h3` is a range,
 which costs up to the share of data packets the line names; and the link has no
 `header_protection_key` while one of `s1` to `s3` stands 1 to 15 bytes above `s4`.
