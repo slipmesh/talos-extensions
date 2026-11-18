@@ -5,4 +5,4 @@ pub mod defaults;
 pub mod patch_file;
 pub mod patches;
 pub mod redact;
-pub mod talos;
+pub(crate) mod talos;

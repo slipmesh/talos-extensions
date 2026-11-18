@@ -14,12 +14,6 @@ const PATCH_KEY: &str = "$patch";
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    #[error("malformed {EXTENSION_SERVICE_CONFIG} {name:?}")]
-    Malformed {
-        name: String,
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
     #[error("serializing a file's contents")]
     Contents(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error(
@@ -70,13 +64,12 @@ impl std::fmt::Display for Identity {
 }
 
 /// The files Talos mounts into the extension service `name`.
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionServiceConfig {
     pub api_version: String,
     pub kind: String,
     pub name: String,
-    #[serde(default)]
     pub config_files: Vec<ConfigFile>,
 }
 
@@ -88,28 +81,6 @@ impl ExtensionServiceConfig {
             name: name.into(),
             config_files,
         }
-    }
-
-    /// The `ExtensionServiceConfig` named `name` among `documents`, if there is one.
-    pub fn find(documents: &[Value], name: &str) -> Result<Option<Self>, Error> {
-        let Some(document) = documents
-            .iter()
-            .find(|document| Identity::of(document).is_extension_service(name))
-        else {
-            return Ok(None);
-        };
-        sliplib_yaml::from_value(document.clone())
-            .map(Some)
-            .map_err(|source| Error::Malformed {
-                name: name.to_owned(),
-                source: source.into(),
-            })
-    }
-
-    pub fn file(&self, mount_path: &str) -> Option<&ConfigFile> {
-        self.config_files
-            .iter()
-            .find(|f| f.mount_path == mount_path)
     }
 }
 
@@ -296,34 +267,6 @@ configFiles:
         )
         .unwrap();
         assert_eq!(to_value(&document).unwrap(), expected);
-    }
-
-    #[test]
-    fn an_extension_service_config_is_found_by_its_name_and_kind() {
-        let documents = documents(PATCH);
-        let router = ExtensionServiceConfig::find(&documents, "router")
-            .unwrap()
-            .unwrap();
-        assert_eq!(router.config_files[0].content, "bgp_as: 64512\n");
-        let awg = ExtensionServiceConfig::find(&documents, "awg")
-            .unwrap()
-            .unwrap();
-        assert_eq!(awg.file("/etc/node-a/extra.conf").unwrap().content, "extra");
-        assert_eq!(awg.file("/etc/node-a/missing.conf"), None);
-        assert_eq!(
-            ExtensionServiceConfig::find(&documents, "nftables").unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn a_malformed_extension_service_config_is_an_error_naming_it() {
-        let documents = documents("kind: ExtensionServiceConfig\nname: awg\nconfigFiles: 1\n");
-        let err = format!(
-            "{:#}",
-            ExtensionServiceConfig::find(&documents, "awg").unwrap_err()
-        );
-        assert!(err.contains("\"awg\""), "{err}");
     }
 
     #[test]
