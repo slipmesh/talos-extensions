@@ -461,6 +461,22 @@ installer:
     }
 
     #[test]
+    fn a_patch_talos_could_not_key_is_refused_in_every_mode_and_nothing_is_written() {
+        for (check, diff) in MODES {
+            let paths =
+                setup("---\nslipmesh:\n  kind: patch\nmachine:\n  install: {disk: /dev/vda}\n");
+            let before = paths.snapshot();
+            let err = format!("{:#}", paths.generate(None, check, diff).unwrap_err());
+            assert!(err.contains("has no Talos `kind`"), "{err}");
+            assert!(
+                err.starts_with(&format!("reading {}", paths.config.display())),
+                "{err}"
+            );
+            assert_eq!(paths.snapshot(), before);
+        }
+    }
+
+    #[test]
     fn a_file_in_which_no_document_sets_a_template_is_refused_in_every_mode_naming_template() {
         let router = defaults::document(defaults::Service::Router);
         let nftables = defaults::document(defaults::Service::Nftables);

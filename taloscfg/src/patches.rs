@@ -9,7 +9,7 @@ use sliplib_yaml::Value;
 /// The `ExtensionServiceConfig`s generated from the network, by name, with the file each one
 /// mounts. Talos keeps `name` unique per `kind`, so a `patch` document of one of these names is
 /// that same document: it may add files to it, and nothing else - not the generated file itself.
-pub const GENERATED: [(&str, &str); 2] = [
+pub(crate) const GENERATED: [(&str, &str); 2] = [
     ("awg", "/etc/talos-extensions/awg.yaml"),
     ("router", "/etc/talos-extensions/router.yaml"),
 ];
@@ -17,7 +17,7 @@ pub const GENERATED: [(&str, &str); 2] = [
 /// One Talos document as it goes into one host's patch file, serialized - its comments stay in
 /// `slipmesh.yaml`.
 #[derive(Debug, PartialEq)]
-pub struct HostDocument {
+pub(crate) struct HostDocument {
     /// `kind`, plus `/name` when the document has one.
     pub identity: String,
     pub text: String,
@@ -74,7 +74,7 @@ fn check_one(patch: &Patch) -> Result<()> {
 ///
 /// Documents of one identity are merged in the order of their rank, so the more specific document
 /// wins wherever it sits in the file.
-pub fn for_host(file: &SlipmeshFile, host: &str) -> Result<Vec<HostDocument>> {
+pub(crate) fn for_host(file: &SlipmeshFile, host: &str) -> Result<Vec<HostDocument>> {
     let reaching = file.patches_for(host)?;
 
     let mut identities: Vec<Identity> = Vec::new();
@@ -114,7 +114,7 @@ pub fn for_host(file: &SlipmeshFile, host: &str) -> Result<Vec<HostDocument>> {
 
 /// Whether a `patch` document, for whichever hosts, sets the file `mount_path` of
 /// `ExtensionServiceConfig` `service`.
-pub fn sets_file(file: &SlipmeshFile, service: &str, mount_path: &str) -> bool {
+pub(crate) fn sets_file(file: &SlipmeshFile, service: &str, mount_path: &str) -> bool {
     file.patches()
         .iter()
         .any(|p| talos::sets_file(p.value(), service, mount_path))
@@ -213,6 +213,31 @@ extraArgs:
         assert_eq!(
             value["extraArgs"]["rotate-server-certificates"].as_str(),
             Some("true")
+        );
+    }
+
+    #[test]
+    fn of_two_patches_of_one_identity_and_one_rank_the_later_in_the_file_wins() {
+        let later = KUBELET.replace("\"true\"", "\"false\"");
+        let parsed = parse(&[NETWORK, KUBELET, &later]);
+        let merged = for_host(&parsed, "node-a").unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(
+            merged[0].value["extraArgs"]["rotate-server-certificates"].as_str(),
+            Some("false")
+        );
+
+        let named = |value: &str| {
+            KUBELET
+                .replace("  kind: patch\n", "  kind: patch\n  include: [node-a]\n")
+                .replace("\"true\"", value)
+        };
+        let parsed = parse(&[NETWORK, &named("\"first\""), &named("\"second\"")]);
+        assert_eq!(
+            for_host(&parsed, "node-a").unwrap()[0].value["extraArgs"]
+                ["rotate-server-certificates"]
+                .as_str(),
+            Some("second")
         );
     }
 
