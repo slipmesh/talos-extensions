@@ -15,7 +15,7 @@ use sliplib_config::slipmesh_file::SlipmeshFile;
 use sliplib_mesh::secrets::{MissingSecret, ResolvedSecrets};
 use sliplib_yaml::MultiDoc;
 use std::path::{Path, PathBuf};
-use taloscfg::{defaults, patch_file};
+use taloscfg::{defaults, patch_file, patches};
 
 #[derive(Parser)]
 #[command(
@@ -71,8 +71,10 @@ fn main() -> Result<()> {
 }
 
 fn read_slipmesh(config_path: &Path) -> Result<SlipmeshFile> {
-    SlipmeshFile::read(&MultiDoc::read(config_path)?)
-        .with_context(|| format!("reading {}", config_path.display()))
+    let reading = || format!("reading {}", config_path.display());
+    let file = SlipmeshFile::read(&MultiDoc::read(config_path)?).with_context(reading)?;
+    patches::check(&file).with_context(reading)?;
+    Ok(file)
 }
 
 /// One host's patch file: what is on disk now, and what it would become.

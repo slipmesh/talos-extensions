@@ -50,7 +50,7 @@ pub fn missing(file: &SlipmeshFile) -> Vec<Service> {
         .into_iter()
         .filter(|service| {
             let default = service.file();
-            !file.sets_file(default.service, default.mount_path)
+            !crate::patches::sets_file(file, default.service, default.mount_path)
         })
         .collect()
 }
@@ -125,7 +125,7 @@ nodes:
             let text = format!("{NETWORK}---\n{}", document(service));
             let file = SlipmeshFile::parse(&text).unwrap();
             for host in ["node-a", "node-b"] {
-                let documents = file.patches_for(host).unwrap();
+                let documents = crate::patches::for_host(&file, host).unwrap();
                 let document = documents
                     .iter()
                     .find(|d| d.identity == format!("ExtensionServiceConfig/{}", default.service))

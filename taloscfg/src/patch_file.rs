@@ -2,8 +2,9 @@
 //! document for each of `awg` and `router`, carrying that daemon's config once the daemon's own
 //! `validate()` accepts it, and any files the `patch` documents add to it.
 
+use crate::patches::{self, GENERATED, HostDocument};
 use anyhow::{Context, Result, bail};
-use sliplib_config::slipmesh_file::{GENERATED, HostDocument, SlipmeshFile};
+use sliplib_config::slipmesh_file::SlipmeshFile;
 use sliplib_config::talos::{self, ConfigFile, ExtensionServiceConfig, Identity};
 use sliplib_mesh::render::{NodeConfigs, node_configs};
 use sliplib_mesh::secrets::ResolvedSecrets;
@@ -169,7 +170,7 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
         router: router_cfg,
     } = node_configs(&model, host, resolved)?;
 
-    let mut patches = file.patches_for(host)?;
+    let mut patches = patches::for_host(file, host)?;
     let awg_files = take_added_files(&mut patches, "awg")?;
     let router_files = take_added_files(&mut patches, "router")?;
     validate_router_template(&router_files, &router_cfg)
