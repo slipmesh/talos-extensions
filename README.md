@@ -110,6 +110,13 @@ roaming client sees one consistent server identity no matter which node it's cur
 to). This is a config-authoring concern, not something `awg` decides. The same applies to
 `header_protection_key`. `taloscfg` (below) is one such config author.
 
+A peer with an `endpoint` is one this node dials, and after a time of silence it is sent a packet,
+so that a NAT on the way keeps the tunnel's mapping. `persistent_keepalive` on the peer sets that
+time in seconds: a number, or a range `lo-hi` that starts at 1 or above, from which the kernel
+module draws at every timer; `0` sends none. Left out, it is 25 on an interface that sets no
+obfuscation and `20-30` on one that sets any. A peer without an `endpoint` is only waited for and
+is sent none, whatever it sets.
+
 **Every AmneziaWG obfuscation parameter is exposed**, through 3.1, not just the original nine
 (jc/jmin/jmax/s1/s2/h1-h4) - confirmed field-by-field against the current kernel module's
 `src/netlink.c` and amneziawg-tools' own config parser (`src/config.c`), since the kernel module's

@@ -19,6 +19,7 @@ use netlink_packet_amneziawg::{
     AmneziaWireguardAttribute, AmneziaWireguardPeer, AmneziaWireguardPeerAttribute,
     AmneziaWireguardPeerFlags,
 };
+use sliplib_config::Range;
 use sliplib_config::awg::{InterfaceEntry, PeerEntry};
 use sliplib_secrets::wireguard::{decode_key, encode_key};
 use std::net::{IpAddr, SocketAddr};
@@ -31,8 +32,6 @@ use std::time::Duration;
 /// interfaces one at a time, every interface *after* it in the config never converges either, and
 /// the process never exits for `restart: always` to get a chance to retry it.
 const ENDPOINT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
-
-const PERSISTENT_KEEPALIVE_SECS: u16 = 25;
 
 fn full_tunnel_allowed_ips() -> Vec<String> {
     vec!["0.0.0.0/0".to_string(), "::/0".to_string()]
@@ -52,25 +51,27 @@ pub struct Peer {
     pub persistent_keepalive: AmneziaWireguardRange<u16>,
 }
 
-/// A peer this node dials gets a keepalive, so that a NAT on the way keeps its mapping.
-fn persistent_keepalive(endpoint: Option<&str>) -> AmneziaWireguardRange<u16> {
-    match endpoint {
-        Some(_) => AmneziaWireguardRange::from(PERSISTENT_KEEPALIVE_SECS),
-        None => AmneziaWireguardRange::default(),
+/// `interval`, the keepalive of a peer as its interface's entry gives it, as the module takes
+/// it: after that long a silence the peer is sent a packet, so that a NAT on the way keeps its
+/// mapping, and `0` sends none.
+fn persistent_keepalive(interval: Range<u16>) -> AmneziaWireguardRange<u16> {
+    AmneziaWireguardRange {
+        lo: interval.lo(),
+        hi: interval.hi(),
     }
 }
 
 /// `existing` as the kernel holds it, for a peer whose endpoint could not be resolved this pass.
-/// Its keepalive is the one `entry` calls for, whatever the kernel holds: the kernel may have no
-/// endpoint for the peer yet.
-fn last_known_good(existing: &Peer, entry: &PeerEntry) -> Peer {
+/// Its keepalive is `interval`, the one its entry calls for, whatever the kernel holds: the
+/// kernel may have no endpoint for the peer yet.
+fn last_known_good(existing: &Peer, interval: Range<u16>) -> Peer {
     Peer {
-        persistent_keepalive: persistent_keepalive(entry.endpoint.as_deref()),
+        persistent_keepalive: persistent_keepalive(interval),
         ..existing.clone()
     }
 }
 
-async fn resolve_peer(entry: &PeerEntry) -> Result<Peer> {
+async fn resolve_peer(entry: &PeerEntry, interval: Range<u16>) -> Result<Peer> {
     let allowed_ips = entry
         .allowed_ips
         .clone()
@@ -82,7 +83,7 @@ async fn resolve_peer(entry: &PeerEntry) -> Result<Peer> {
     Ok(Peer {
         public_key: entry.public_key.clone(),
         allowed_ips,
-        persistent_keepalive: persistent_keepalive(endpoint.as_deref()),
+        persistent_keepalive: persistent_keepalive(interval),
         endpoint,
     })
 }
@@ -374,7 +375,8 @@ pub async fn ensure_interface(
         // this peer's already-live state (if any) rather than dropping it from `desired` matters:
         // dropping it would make `diff_peers` see a "removed" peer and tear down its live session
         // over what might be a one-off resolver hiccup, not an actual config change.
-        match resolve_peer(peer).await {
+        let interval = iface.keepalive_of(peer);
+        match resolve_peer(peer, interval).await {
             Ok(resolved) => desired.push(resolved),
             Err(e) => match previous.iter().find(|p| p.public_key == peer.public_key) {
                 Some(existing) => {
@@ -382,7 +384,7 @@ pub async fn ensure_interface(
                         interface = %iface.name, peer = %peer.public_key, error = %e,
                         "failed to resolve peer, keeping its last-known-good state this pass"
                     );
-                    desired.push(last_known_good(existing, peer));
+                    desired.push(last_known_good(existing, interval));
                 }
                 None => tracing::warn!(
                     interface = %iface.name, peer = %peer.public_key, error = %e,
@@ -401,13 +403,17 @@ pub async fn ensure_interface(
 mod tests {
     use super::*;
     use sliplib_config::Obfuscation;
+    use sliplib_config::awg::{NO_KEEPALIVE, OBFUSCATED_KEEPALIVE, PLAIN_KEEPALIVE};
 
     fn peer(public_key: &str, allowed_ips: &[&str], endpoint: Option<&str>) -> Peer {
         Peer {
             public_key: public_key.to_string(),
             allowed_ips: allowed_ips.iter().map(|s| s.to_string()).collect(),
             endpoint: endpoint.map(str::to_string),
-            persistent_keepalive: persistent_keepalive(endpoint),
+            persistent_keepalive: persistent_keepalive(match endpoint {
+                Some(_) => PLAIN_KEEPALIVE,
+                None => NO_KEEPALIVE,
+            }),
         }
     }
 
@@ -530,6 +536,31 @@ mod tests {
         assert_eq!(keepalive_sent(&peer), Some(KEEPALIVE));
     }
 
+    #[test]
+    fn a_dialed_peer_is_sent_the_interval_called_for_range_or_number() {
+        for (interval, sent) in [
+            (
+                OBFUSCATED_KEEPALIVE,
+                AmneziaWireguardRange { lo: 20, hi: 30 },
+            ),
+            (Range::from(7), AmneziaWireguardRange { lo: 7, hi: 7 }),
+            (Range::from(0), AmneziaWireguardRange::default()),
+        ] {
+            assert_eq!(persistent_keepalive(interval), sent);
+        }
+    }
+
+    #[test]
+    fn a_peer_that_is_only_waited_for_is_sent_none_whatever_its_entry_sets() {
+        let mut waited_for = entry(None);
+        waited_for.persistent_keepalive = Some(OBFUSCATED_KEEPALIVE);
+        let interval = interface("mesh-a", Obfuscation::default()).keepalive_of(&waited_for);
+        assert_eq!(
+            persistent_keepalive(interval),
+            AmneziaWireguardRange::default()
+        );
+    }
+
     // Sent rather than left out: an omitted attribute keeps what the kernel holds.
     #[test]
     fn a_peer_without_an_endpoint_is_sent_a_zero_keepalive() {
@@ -641,7 +672,7 @@ mod tests {
             ..peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"))
         };
         assert_eq!(
-            last_known_good(&held, &entry(Some("node-b.example.net:51820"))),
+            last_known_good(&held, PLAIN_KEEPALIVE),
             peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"))
         );
     }
@@ -652,9 +683,9 @@ mod tests {
     fn a_peer_the_kernel_holds_without_an_endpoint_is_kept_with_its_entrys_keepalive() {
         let held = peer("k1", &["0.0.0.0/0"], None);
         assert_eq!(
-            last_known_good(&held, &entry(Some("node-b.example.net:51820"))),
+            last_known_good(&held, OBFUSCATED_KEEPALIVE),
             Peer {
-                persistent_keepalive: KEEPALIVE,
+                persistent_keepalive: AmneziaWireguardRange { lo: 20, hi: 30 },
                 ..held.clone()
             }
         );
