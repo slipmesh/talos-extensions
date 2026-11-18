@@ -113,7 +113,8 @@ pub fn push_obfuscation_attrs(
     Ok(())
 }
 
-fn wire<T: sliplib_config::End>(range: sliplib_config::Range<T>) -> AmneziaWireguardRange<T> {
+/// `range` as the module takes it.
+pub fn wire<T: sliplib_config::End>(range: sliplib_config::Range<T>) -> AmneziaWireguardRange<T> {
     AmneziaWireguardRange {
         lo: range.lo(),
         hi: range.hi(),
