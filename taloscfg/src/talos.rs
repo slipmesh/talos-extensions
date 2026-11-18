@@ -1,4 +1,4 @@
-//! Talos machine-config documents, as far as the slipmesh components read and write them.
+//! Talos machine-config documents, as far as the generator reads and writes them.
 
 use serde::{Deserialize, Serialize};
 use sliplib_yaml::{Mapping, Value};
@@ -12,7 +12,6 @@ const PATCH_KEY: &str = "$patch";
 
 /// What is wrong with a Talos document these functions were given.
 #[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
 pub enum Error {
     #[error("serializing a file's contents")]
     Contents(#[source] Box<dyn std::error::Error + Send + Sync>),
@@ -31,7 +30,7 @@ pub enum Error {
 }
 
 /// What Talos keys a document by: two documents of one identity are one document.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Identity {
     pub api_version: Option<String>,
     pub kind: Option<String>,
@@ -64,7 +63,7 @@ impl std::fmt::Display for Identity {
 }
 
 /// The files Talos mounts into the extension service `name`.
-#[derive(Serialize, Debug, PartialEq)]
+#[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtensionServiceConfig {
     pub api_version: String,
@@ -84,7 +83,7 @@ impl ExtensionServiceConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFile {
     pub mount_path: String,
@@ -263,7 +262,7 @@ configFiles:
         );
         let expected: Value = from_str(
             "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles:\n  - \
-         mountPath: /etc/node-a/awg.yaml\n    content: \"interfaces: []\\n\"\n",
+             mountPath: /etc/node-a/awg.yaml\n    content: \"interfaces: []\\n\"\n",
         )
         .unwrap();
         assert_eq!(to_value(&document).unwrap(), expected);
@@ -289,10 +288,10 @@ configFiles:
     #[test]
     fn a_content_written_as_yaml_becomes_its_text() {
         let mut document: Value = from_str(
-        "kind: ExtensionServiceConfig\nconfigFiles:\n  - content:\n      a: 1\n  - content:\n      - \
-         b\n  - content: plain\n",
-    )
-    .unwrap();
+            "kind: ExtensionServiceConfig\nconfigFiles:\n  - content:\n      a: 1\n  \
+             - content:\n      - b\n  - content: plain\n",
+        )
+        .unwrap();
         contents_as_text(&mut document).unwrap();
         let contents: Vec<&str> = document["configFiles"]
             .as_sequence()
@@ -366,14 +365,14 @@ configFiles:
     fn annotations_join_those_the_document_sets() {
         let mut document = yaml(
             "kind: KubeNodeConfig\nnodeIP: {validSubnets: [192.0.2.0/24]}\nannotations:\n  \
-         example.com/rack: r1\n",
+             example.com/rack: r1\n",
         );
         annotate(&mut document, NAMESPACE, ours()).unwrap();
         assert_eq!(
             document,
             yaml(
                 "kind: KubeNodeConfig\nnodeIP: {validSubnets: [192.0.2.0/24]}\nannotations:\n  \
-             example.com/rack: r1\n  node-a.example/endpoint: 192.0.2.10\n"
+                 example.com/rack: r1\n  node-a.example/endpoint: 192.0.2.10\n"
             )
         );
     }
