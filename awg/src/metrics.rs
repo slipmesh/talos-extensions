@@ -421,6 +421,7 @@ mod tests {
             name: name.map(str::to_string),
             endpoint: Some("192.0.2.7:51820".to_string()),
             allowed_ips: allowed_ips.map(|cidrs| cidrs.iter().map(|c| (*c).to_string()).collect()),
+            persistent_keepalive: None,
         }
     }
 
