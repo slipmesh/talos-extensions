@@ -26,7 +26,7 @@ serde.workspace = true
 sha2 = "0.11.1"
 similar = "3.2.1"
 x25519-dalek = { version = "3.0.0", features = ["static_secrets", "getrandom"] }
-rand = "0.10.3"
+rand = "0.10.4"
 yaml_serde.workspace = true
 qrcode.workspace = true
 anstream = "1.0.0"
