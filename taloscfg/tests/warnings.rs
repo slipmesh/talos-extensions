@@ -44,22 +44,43 @@ nodes:
     )
 }
 
+/// What a run of `generate` with `args` on `text` gave: its exit status, stdout and stderr. The
+/// patch files go to `patches` beside the file.
+struct Run {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+fn generate(dir: &std::path::Path, text: &str, args: &[&str]) -> Run {
+    let config = dir.join("slipmesh.yaml");
+    std::fs::write(&config, text).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_slipmesh-taloscfg"))
+        .arg("generate")
+        .args(args)
+        .arg("--config")
+        .arg(&config)
+        .arg("--patches-dir")
+        .arg(dir.join("patches"))
+        .output()
+        .unwrap();
+    Run {
+        success: output.status.success(),
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+    }
+}
+
 /// The lines `generate --check` writes to stderr for `node`, or for every node.
 fn warned(node: Option<&str>) -> Vec<String> {
     let dir = tempfile::tempdir().unwrap();
-    let config = dir.path().join("slipmesh.yaml");
-    std::fs::write(&config, network()).unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_slipmesh-taloscfg"));
-    command
-        .args(["generate", "--check", "--config"])
-        .arg(&config);
+    let mut args = vec!["--check"];
     if let Some(node) = node {
-        command.args(["--node", node]);
+        args.extend(["--node", node]);
     }
-    let output = command.output().unwrap();
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(output.status.success(), "{stderr}");
-    stderr.lines().map(str::to_owned).collect()
+    let run = generate(dir.path(), &network(), &args);
+    assert!(run.success, "{}", run.stderr);
+    run.stderr.lines().map(str::to_owned).collect()
 }
 
 #[test]
@@ -76,4 +97,53 @@ fn a_link_that_loses_packets_is_warned_about_once_and_the_run_still_passes() {
 fn a_run_for_one_node_warns_about_that_nodes_links_alone() {
     assert_eq!(warned(Some("b")).len(), 1);
     assert_eq!(warned(Some("c")), [] as [String; 0]);
+}
+
+#[test]
+fn a_run_that_writes_or_shows_a_diff_warns_too_and_writes_what_it_would_without() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = network();
+    let written = generate(dir.path(), &text, &[]);
+    assert!(written.success, "{}", written.stderr);
+    assert!(
+        written.stderr.starts_with("warning: mesh link a-b: "),
+        "{}",
+        written.stderr
+    );
+    for node in ["a", "b", "c", "d"] {
+        let patch = dir.path().join("patches").join(format!("{node}.yaml"));
+        assert!(
+            written
+                .stdout
+                .contains(&format!("wrote {}", patch.display())),
+            "{}",
+            written.stdout
+        );
+    }
+    // What was written is what the file gives, warning or not: a diff shows nothing to change.
+    let diffed = generate(dir.path(), &text, &["--diff"]);
+    assert!(diffed.success, "{}", diffed.stderr);
+    assert!(
+        diffed.stderr.starts_with("warning: mesh link a-b: "),
+        "{}",
+        diffed.stderr
+    );
+    for node in ["a", "b", "c", "d"] {
+        assert!(
+            diffed.stdout.contains(&format!("{node}: no changes")),
+            "{}",
+            diffed.stdout
+        );
+    }
+}
+
+#[test]
+fn a_refused_file_gets_no_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    // A key that does not decode refuses the node, and every node linked with it.
+    let text = network().replacen("mesh_private_key: \"", "mesh_private_key: \"not a key", 1);
+    let refused = generate(dir.path(), &text, &["--check"]);
+    assert!(!refused.success);
+    assert!(!refused.stderr.contains("warning:"), "{}", refused.stderr);
+    assert!(!dir.path().join("patches").exists());
 }
