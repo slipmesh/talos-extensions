@@ -21,7 +21,7 @@ router = { path = "router", default-features = false }
 nftables = { path = "nftables", default-features = false }
 
 anyhow = "1.0.104"
-clap = { version = "4.6.8", features = ["derive"] }
+clap = { version = "4.6.9", features = ["derive"] }
 # Templates read at runtime rather than compiled in: `builtins` for filters such as `join`,
 # `serde` to render from the daemons' own context structs.
 minijinja = { version = "3.0.5", default-features = false, features = ["builtins", "serde"] }
