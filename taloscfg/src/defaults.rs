@@ -1,6 +1,7 @@
 //! The reference template of each service that takes one. A template reaches a node only as a
 //! `patch` document of `slipmesh.yaml`; the reference is what such a document starts from.
 
+use sha2::{Digest, Sha256};
 use sliplib_config::slipmesh_file::SlipmeshFile;
 
 struct DefaultFile {
@@ -32,6 +33,37 @@ impl Service {
             },
         }
     }
+}
+
+impl Service {
+    /// The text of the current reference template.
+    pub fn reference(self) -> &'static str {
+        self.file().content
+    }
+
+    /// What a template made from the current reference names as its `base`: `sha256:` and the
+    /// 64 lower-case hexadecimal digits of the SHA-256 of the reference's text.
+    pub fn base(self) -> String {
+        format!("sha256:{}", digest(self.reference()))
+    }
+
+    /// A unified diff from `text` to the current reference, `None` when they are the same.
+    pub fn differences_from_reference(self, text: &str) -> Option<String> {
+        (text != self.reference()).then(|| {
+            similar::TextDiff::from_lines(text, self.reference())
+                .unified_diff()
+                .header("the template in the files", "the current reference")
+                .to_string()
+        })
+    }
+}
+
+/// The SHA-256 of `text`, as 64 lower-case hexadecimal digits.
+fn digest(text: &str) -> String {
+    Sha256::digest(text)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 impl std::fmt::Display for Service {
@@ -138,5 +170,43 @@ nodes:
                 );
             }
         }
+    }
+
+    // The text's bytes as they are, digested and written in lower case.
+    #[test]
+    fn a_digest_is_the_sha_256_of_the_text_in_lower_case_hexadecimal() {
+        assert_eq!(
+            digest("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn the_base_of_a_reference_is_sha_256_and_its_64_digits() {
+        for service in [Service::Router, Service::Nftables] {
+            let base = service.base();
+            let digits = base
+                .strip_prefix("sha256:")
+                .unwrap_or_else(|| panic!("{base}"));
+            assert_eq!(digits, digest(service.reference()), "{service}");
+        }
+        assert_ne!(Service::Router.base(), Service::Nftables.base());
+    }
+
+    #[test]
+    fn a_text_differs_from_the_reference_by_the_lines_it_changes() {
+        let reference = Service::Router.reference();
+        assert_eq!(Service::Router.differences_from_reference(reference), None);
+        let edited = format!("{reference}# added by hand\n");
+        let diff = Service::Router.differences_from_reference(&edited).unwrap();
+        assert!(diff.contains("--- the template in the files"), "{diff}");
+        assert!(diff.contains("+++ the current reference"), "{diff}");
+        assert!(diff.contains("\n-# added by hand\n"), "{diff}");
+        assert!(
+            !diff
+                .lines()
+                .any(|line| line.starts_with('+') && !line.starts_with("+++")),
+            "{diff}"
+        );
     }
 }
