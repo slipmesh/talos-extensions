@@ -79,15 +79,39 @@ fn validate_nftables_template(patches: &[HostDocument]) -> Result<()> {
     Ok(())
 }
 
-/// Adds the ruleset as `nftables.yaml` as well, the file the daemon read before it took a
-/// template. A node that falls back to its previous boot slot runs that daemon against this config,
-/// and without the file it would apply no ruleset at all. Remove once no node can fall back to a
-/// release older than the template.
-fn add_legacy_nftables_file(patches: &mut [HostDocument]) -> Result<()> {
+/// `ruleset` as `nftables.yaml`, the file the daemon read before it took a template. A node that
+/// falls back to its previous boot slot runs that daemon against this config, and without the file
+/// it would apply no ruleset at all. Remove once no node can fall back to a release older than the
+/// template.
+fn legacy_nftables_file(ruleset: String) -> Result<ConfigFile> {
     #[derive(serde::Serialize)]
     struct LegacyConfig {
         ruleset: String,
     }
+    Ok(ConfigFile {
+        mount_path: LEGACY_NFTABLES_PATH.to_string(),
+        content: sliplib_yaml::to_string(&LegacyConfig { ruleset })?,
+    })
+}
+
+/// The `nftables` document of a node whose ruleset template is `template`: the template, the files
+/// `added` beside it, and the ruleset as [`legacy_nftables_file`] gives it.
+pub fn nftables_document(template: &str, added: Vec<ConfigFile>) -> Result<String> {
+    let template_file = ConfigFile {
+        mount_path: nftables::template::TEMPLATE_PATH.to_string(),
+        content: template.to_owned(),
+    };
+    let files = std::iter::once(template_file)
+        .chain(added)
+        .chain([legacy_nftables_file(template.to_owned())?])
+        .collect();
+    sliplib_yaml::to_string(&ExtensionServiceConfig::new("nftables", files))
+        .context("serializing the nftables document")
+}
+
+/// Adds the ruleset of every `nftables` document that sets a template as
+/// [`legacy_nftables_file`] gives it.
+fn add_legacy_nftables_file(patches: &mut [HostDocument]) -> Result<()> {
     for document in patches
         .iter_mut()
         .filter(|p| p.identity == NFTABLES_IDENTITY)
@@ -95,10 +119,7 @@ fn add_legacy_nftables_file(patches: &mut [HostDocument]) -> Result<()> {
         let Some(ruleset) = nftables_template(&document.value) else {
             continue;
         };
-        let legacy = sliplib_yaml::to_value(ConfigFile {
-            mount_path: LEGACY_NFTABLES_PATH.to_string(),
-            content: sliplib_yaml::to_string(&LegacyConfig { ruleset })?,
-        })?;
+        let legacy = sliplib_yaml::to_value(legacy_nftables_file(ruleset)?)?;
         document
             .value
             .get_mut("configFiles")
@@ -466,5 +487,35 @@ configFiles:
         );
         let legacy: sliplib_yaml::Value = sliplib_yaml::from_str(files[1].1).unwrap();
         assert_eq!(legacy["ruleset"].as_str(), Some(files[0].1));
+    }
+
+    #[test]
+    fn an_nftables_document_carries_its_template_the_files_added_and_the_ruleset_as_before() {
+        let template = "table ip example {\n}\n";
+        let added = ConfigFile {
+            mount_path: "/etc/talos-extensions/extra.conf".to_owned(),
+            content: "extra\n".to_owned(),
+        };
+        let text = nftables_document(template, vec![added]).unwrap();
+        let [document] = documents(&text).try_into().unwrap();
+        assert_eq!(document["kind"], "ExtensionServiceConfig");
+        assert_eq!(document["name"], "nftables");
+        let files = document["configFiles"].as_sequence().unwrap();
+        let paths: Vec<&str> = files
+            .iter()
+            .map(|file| file["mountPath"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                nftables::template::TEMPLATE_PATH,
+                "/etc/talos-extensions/extra.conf",
+                LEGACY_NFTABLES_PATH,
+            ]
+        );
+        assert_eq!(files[0]["content"], template);
+        let legacy: sliplib_yaml::Value =
+            sliplib_yaml::from_str(files[2]["content"].as_str().unwrap()).unwrap();
+        assert_eq!(legacy["ruleset"], template);
     }
 }
