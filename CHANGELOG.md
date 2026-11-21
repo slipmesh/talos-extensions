@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-beta.0+sm.5] - 2026-11-21
+
+### Breaking changes 💥
+
+- Take a peer's keepalive from its config entry (#138)
+
+### Added ✨
+
+- Warn about a link that loses data packets to random trailers (#137)
+
+### Build system 🛠️
+
+- Update rust crate nix to 0.32.0 (main) (#116)
+- Update non-major (main) (#117)
+- Raise the minor version for a breaking change before 1.0 (#139)
+- Update rust crate clap to 4.6.9 (main) (#143)
+
+### CI/CD ⚙️
+
+- Open the release PR as the organisation's ci app (#133)
+- Move the shared workflows to v4.0.2 (#140)
+
+### Changed 🔧
+
+- Take over the Talos documents from sliplib (#136)
+- Move the netlink module into netlink.rs (#142)
+
+### Tests ✅
+
+- Pin the patch files of a version 1 file (#135)
+
 ## [1.15.0-beta.0+sm.4] - 2026-11-17
 
 ### Breaking changes 💥
