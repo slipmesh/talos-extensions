@@ -16,7 +16,7 @@ pub struct Values<'a> {
     pub interface_prefix: &'a str,
     /// Each route class by its name, with its protocol number, in the order written.
     pub classes: &'a [(String, u8)],
-    /// The address or host name the node's peers dial it at, as the files write it.
+    /// The node's endpoint as the files give it, with a port where they write one.
     pub endpoint: Option<&'a str>,
     /// The one MTU of every mesh interface: the largest at which a full-size packet crosses every
     /// link's underlay unfragmented.
@@ -60,7 +60,8 @@ mod tests {
 
     #[test]
     fn a_node_publishes_each_value_under_the_namespace_in_order() {
-        let classes = [("egress".to_owned(), 152), ("transit".to_owned(), 153)];
+        // Neither sorted by name nor by number: the order they are given in.
+        let classes = [("transit".to_owned(), 153), ("egress".to_owned(), 152)];
         let annotations = for_node(&Values {
             interface_prefix: "wg-",
             classes: &classes,
@@ -71,8 +72,8 @@ mod tests {
             names_and_values(&annotations),
             [
                 ("slipmesh.net/interface_prefix.mesh", "wg-"),
-                ("slipmesh.net/route_proto_id.egress", "152"),
                 ("slipmesh.net/route_proto_id.transit", "153"),
+                ("slipmesh.net/route_proto_id.egress", "152"),
                 ("slipmesh.net/endpoint", "node-a.example.com"),
                 ("slipmesh.net/mesh_mtu", "1420"),
             ]
