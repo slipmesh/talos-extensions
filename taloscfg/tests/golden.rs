@@ -95,7 +95,11 @@ where
 {
     let index = position(documents, name).unwrap();
     let content = &mut documents[index]["configFiles"][0]["content"];
-    let mut config: T = sliplib_yaml::from_str(content.as_str().unwrap()).unwrap();
+    let text = content.as_str().unwrap();
+    let mut config: T = sliplib_yaml::from_str(text).unwrap();
+    // Read and written back, the config is the text it holds: a key `T` does not know would
+    // otherwise vanish from the expected side unseen.
+    assert_eq!(sliplib_yaml::to_string(&config).unwrap(), text, "{name}");
     edit(&mut config);
     *content = sliplib_yaml::to_string(&config).unwrap().into();
 }
@@ -198,11 +202,7 @@ fn every_node_gets_what_version_1_gave_it_but_for_the_conversion(twin: &Twin) {
         let got = public_keys
             .iter()
             .fold(got, |text, (key, whose)| text.replace(key, whose));
-        assert_eq!(
-            patch_file(&documents(&got)),
-            converted(twin, &file),
-            "{host}"
-        );
+        assert_eq!(got, converted(twin, &file), "{host}");
     }
 }
 
