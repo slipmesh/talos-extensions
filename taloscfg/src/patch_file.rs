@@ -33,18 +33,29 @@ fn config_file(name: &str, inner_yaml: String) -> ConfigFile {
     }
 }
 
-/// The files the `patch` documents in `patches` add to the generated document `name` - taken out
-/// of `patches`, since Talos takes one document per name and the generated one carries them.
-fn take_added_files(patches: &mut Vec<HostDocument>, name: &str) -> Result<Vec<ConfigFile>> {
+/// The `patch` documents in `patches` that add to the generated document `name`, merged - taken
+/// out of `patches`, since Talos takes one document per name and the generated one carries them.
+fn take_added(patches: &mut Vec<HostDocument>, name: &str) -> Option<HostDocument> {
     let identity = format!("ExtensionServiceConfig/{name}");
-    let Some(index) = patches.iter().position(|p| p.identity == identity) else {
+    let index = patches.iter().position(|p| p.identity == identity)?;
+    Some(patches.remove(index))
+}
+
+/// The files `added` adds to the generated document `name`.
+fn added_files(added: Option<&HostDocument>, name: &str) -> Result<Vec<ConfigFile>> {
+    let Some(added) = added else {
         return Ok(Vec::new());
     };
-    match patches.remove(index).value.get("configFiles") {
+    match added.value.get("configFiles") {
         Some(files) => sliplib_yaml::from_value(files.clone())
-            .with_context(|| format!("the `configFiles` slipmesh.yaml adds to {name:?}")),
+            .with_context(|| format!("{}: its `configFiles` for {name:?}", added.origin)),
         None => Ok(Vec::new()),
     }
+}
+
+/// [`take_added`], then [`added_files`].
+fn take_added_files(patches: &mut Vec<HostDocument>, name: &str) -> Result<Vec<ConfigFile>> {
+    added_files(take_added(patches, name).as_ref(), name)
 }
 
 /// `ruleset` as `nftables.yaml`, the file the daemon read before it took a template. A node that
@@ -100,6 +111,7 @@ fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) ->
             let value = talos::kube_node_config();
             patches.push(HostDocument {
                 identity: Identity::of(&value).to_string(),
+                origin: "the KubeNodeConfig the generator adds".to_owned(),
                 text: String::new(),
                 value,
             });
@@ -111,7 +123,8 @@ fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) ->
         &mut document.value,
         crate::annotations::NAMESPACE,
         annotations,
-    )?;
+    )
+    .with_context(|| document.origin.clone())?;
     document.text =
         sliplib_yaml::to_string(&document.value).context("serializing the KubeNodeConfig")?;
     Ok(())
@@ -133,12 +146,7 @@ impl Templates {
         for document in files.templates_for(host) {
             let template = document.read()?;
             let service = Service::of(template.daemon);
-            let invalid = || {
-                format!(
-                    "{}: the {service} template is invalid for node {host:?}",
-                    document.aim()
-                )
-            };
+            let invalid = || format!("{}: the {service} template is invalid", document.aim());
             match service {
                 Service::Router => {
                     validate_router_template(&template.content, router).with_context(invalid)?;
@@ -154,22 +162,33 @@ impl Templates {
     }
 }
 
-/// The patch file of `host`, a node of `talos`, as the text written to disk.
+/// The patch file of `host`, a node of `talos`, as the text written to disk. A refusal names the
+/// node: one of computing its configs does already.
 pub fn render(
     files: &File,
     network: &Network,
     resolved: &ResolvedSecrets,
     host: &str,
 ) -> Result<String> {
-    let NodeConfigs {
+    let configs = node_configs(network, host, resolved)?;
+    render_node(files, network, resolved, host, configs).with_context(|| format!("node {host:?}"))
+}
+
+fn render_node(
+    files: &File,
+    network: &Network,
+    resolved: &ResolvedSecrets,
+    host: &str,
+    NodeConfigs {
         awg: awg_cfg,
         router: router_cfg,
-    } = node_configs(network, host, resolved)?;
+    }: NodeConfigs,
+) -> Result<String> {
     let templates = Templates::of(files, host, &router_cfg)?;
     let Some(router_template) = templates.router else {
         bail!(
-            "no `template` document for the router reaches node {host:?}, and its routing daemon \
-             does not run without one - aim one at it; `slipmesh-taloscfg template router` prints \
+            "no `template` document for the router reaches it, and its routing daemon does not \
+             run without one - aim one at it; `slipmesh-taloscfg template router` prints \
              one holding the reference template"
         );
     };
@@ -195,15 +214,17 @@ pub fn render(
         render_extension_service_document("awg", awg)?,
         render_extension_service_document(Service::Router.name(), router)?,
     ];
-    let nftables_files = take_added_files(&mut patches, Service::Firewall.name())?;
-    match templates.firewall {
-        Some(ruleset) => generated.push(nftables_document(&ruleset, nftables_files)?),
-        None if nftables_files.is_empty() => {}
-        None => bail!(
-            "a `patch` adds files to `nftables` on node {host:?}, which no `template` document \
-             for the firewall reaches, so it gets no `nftables` document - aim the `patch` or a \
-             template so that both reach the node or neither"
+    let nftables_added = take_added(&mut patches, Service::Firewall.name());
+    let nftables_files = added_files(nftables_added.as_ref(), Service::Firewall.name())?;
+    match (templates.firewall, nftables_added) {
+        (Some(ruleset), _) => generated.push(nftables_document(&ruleset, nftables_files)?),
+        (None, Some(added)) if !nftables_files.is_empty() => bail!(
+            "{}: adds files to `nftables`, which no `template` document for the firewall reaches \
+             on this node, so it gets no `nftables` document - aim the `patch` or a template so \
+             that both reach the node or neither",
+            added.origin
         ),
+        (None, _) => {}
     }
 
     let node = network.node(host)?;
@@ -218,8 +239,7 @@ pub fn render(
                 .map(|endpoint| endpoint.written.as_str()),
             mesh_mtu: sliplib_mesh::mtu::mesh_mtu(network, resolved)?,
         }),
-    )
-    .with_context(|| format!("the KubeNodeConfig of node {host:?}"))?;
+    )?;
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
 
     Ok(format!(

@@ -44,6 +44,8 @@ pub(crate) fn config_path(name: &str) -> &'static str {
 pub(crate) struct HostDocument {
     /// `kind`, plus `/name` when the document has one.
     pub identity: String,
+    /// Where the documents merged into it stand in the files, for a refusal to name.
+    pub origin: String,
     pub text: String,
     /// What `text` serializes - for a caller that reads its fields.
     pub value: Value,
@@ -132,14 +134,20 @@ pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
             let [first, rest @ ..] = sources.as_slice() else {
                 unreachable!("every identity comes from at least one document")
             };
+            let origin = sources
+                .iter()
+                .map(|patch| patch.aim().to_string())
+                .collect::<Vec<_>>()
+                .join(" and ");
             let mut document = rest.iter().fold(first.value().clone(), |base, patch| {
                 talos::merge(base, patch.value())
             });
-            talos::contents_as_text(&mut document)?;
+            talos::contents_as_text(&mut document).with_context(|| origin.clone())?;
             let text =
                 sliplib_yaml::to_string(&document).context("serializing a patch document")?;
             Ok(HostDocument {
                 identity: identity.to_string(),
+                origin,
                 text,
                 value: document,
             })

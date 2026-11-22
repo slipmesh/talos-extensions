@@ -581,6 +581,40 @@ installer:
     }
 
     #[test]
+    fn a_refusal_of_one_node_names_it_and_its_document_and_changes_no_patch_file() {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
+        let router = defaults::document(defaults::Service::Router);
+        let firewall = defaults::document(defaults::Service::Firewall)
+            .replace("  platform: talos\n", "  platform: talos\n  exclude: [b]\n");
+        let head = format!("{}---\n{router}---\n{firewall}", *SLIPMESH);
+        let line = head.lines().count() + 2;
+        std::fs::write(
+            &paths.config,
+            format!(
+                "{head}---\nslipmesh: {{kind: patch, platform: talos}}\napiVersion: v1alpha1\nkind: \
+                 ExtensionServiceConfig\nname: nftables\nconfigFiles:\n  - mountPath: \
+                 /etc/talos-extensions/extra.conf\n    content: x\n"
+            ),
+        )
+        .unwrap();
+        for (check, diff) in MODES {
+            let before = paths.snapshot();
+            let err = paths.generate(None, check, diff).unwrap_err();
+            assert_eq!(
+                format!("{err:#}"),
+                format!(
+                    "node \"b\": the `kind: patch` document at line {line}: adds files to \
+                     `nftables`, which no `template` document for the firewall reaches on this \
+                     node, so it gets no `nftables` document - aim the `patch` or a template so \
+                     that both reach the node or neither"
+                )
+            );
+            assert_eq!(paths.snapshot(), before);
+        }
+    }
+
+    #[test]
     fn a_full_run_leaves_slipmesh_yaml_as_it_is() {
         let paths = setup("");
         let before = std::fs::read(&paths.config).unwrap();
