@@ -208,13 +208,15 @@ pub fn render(file: &SlipmeshFile, resolved: &ResolvedSecrets, host: &str) -> Re
     validate_nftables_template(&patches)
         .with_context(|| format!("the nftables ruleset for node {host:?} is invalid"))?;
     add_legacy_nftables_file(&mut patches)?;
+    let classes = [("egress".to_owned(), model.cluster.egress_route_proto_id())];
     publish_annotations(
         &mut patches,
-        crate::annotations::for_node(
-            &model.cluster,
-            model.node(host)?,
-            sliplib_mesh::mtu::mesh_mtu(&model, resolved)?,
-        ),
+        crate::annotations::for_node(&crate::annotations::Values {
+            interface_prefix: model.cluster.mesh_interface_prefix(),
+            classes: &classes,
+            endpoint: model.node(host)?.endpoint.as_deref(),
+            mesh_mtu: sliplib_mesh::mtu::mesh_mtu(&model, resolved)?,
+        }),
     )
     .with_context(|| format!("the KubeNodeConfig of node {host:?}"))?;
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
