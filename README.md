@@ -614,10 +614,9 @@ Under [`taloscfg/tests/golden/`](taloscfg/tests/golden), `v1` and `v1-alternate`
 files two networks of format version 1 gave every node of `talos`, with derived public keys named
 by their owner. `v2` and `v2-alternate` are the same networks converted by hand. Every node of each
 gets those files, but for what a conversion changes, which the test lists and applies to the files
-it reads. Each file is also read and written
-back, and has to come out the same text. A change of what a node gets fails the test; a change of
-how a patch file is written fails the read-back until the files are rewritten, which the pull
-request then shows.
+it reads. Each file is also read and written back, and has to come out the same text. A change of
+what a node gets fails the test; a change of how a patch file is written fails the read-back until
+the files are rewritten, which the pull request then shows.
 
 Exercising a daemon end to end needs a Linux host with `CAP_NET_ADMIN`, and for `awg` the
 `amneziawg` kernel module loaded. Each daemon reads its config from the fixed path its
