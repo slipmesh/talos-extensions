@@ -125,13 +125,29 @@ struct Templates {
 }
 
 impl Templates {
-    fn of(files: &File, host: &str) -> Result<Self> {
+    /// Refuses any template reaching `host` that its daemon would fail on, the ones another
+    /// overrides there included: narrowing that other one hands the node this text. A router
+    /// template is rendered with `router`, the node's config.
+    fn of(files: &File, host: &str, router: &RouterConfig) -> Result<Self> {
         let mut templates = Self::default();
         for document in files.templates_for(host) {
             let template = document.read()?;
-            match Service::of(template.daemon) {
-                Service::Router => templates.router = Some(template.content),
-                Service::Firewall => templates.firewall = Some(template.content),
+            let service = Service::of(template.daemon);
+            let invalid = || {
+                format!(
+                    "{}: the {service} template is invalid for node {host:?}",
+                    document.aim()
+                )
+            };
+            match service {
+                Service::Router => {
+                    validate_router_template(&template.content, router).with_context(invalid)?;
+                    templates.router = Some(template.content);
+                }
+                Service::Firewall => {
+                    nftables::template::compile(template.content.clone()).with_context(invalid)?;
+                    templates.firewall = Some(template.content);
+                }
             }
         }
         Ok(templates)
@@ -149,7 +165,7 @@ pub fn render(
         awg: awg_cfg,
         router: router_cfg,
     } = node_configs(network, host, resolved)?;
-    let templates = Templates::of(files, host)?;
+    let templates = Templates::of(files, host, &router_cfg)?;
     let Some(router_template) = templates.router else {
         bail!(
             "no `template` document for the router reaches node {host:?}, and its routing daemon \
@@ -157,8 +173,6 @@ pub fn render(
              one holding the reference template"
         );
     };
-    validate_router_template(&router_template, &router_cfg)
-        .with_context(|| format!("the router template for node {host:?} is invalid"))?;
 
     let mut patches = patches::for_host(files, host)?;
     let awg = std::iter::once(config_file("awg", sliplib_yaml::to_string(&awg_cfg)?))
@@ -183,11 +197,7 @@ pub fn render(
     ];
     let nftables_files = take_added_files(&mut patches, Service::Firewall.name())?;
     match templates.firewall {
-        Some(ruleset) => {
-            nftables::template::compile(ruleset.clone())
-                .with_context(|| format!("the nftables ruleset for node {host:?} is invalid"))?;
-            generated.push(nftables_document(&ruleset, nftables_files)?);
-        }
+        Some(ruleset) => generated.push(nftables_document(&ruleset, nftables_files)?),
         None if nftables_files.is_empty() => {}
         None => bail!(
             "a `patch` adds files to `nftables` on node {host:?}, which no `template` document \
@@ -480,6 +490,53 @@ content: "table inet x {{}}"
         assert!(format!("{err:#}").contains("lopback"), "{err:#}");
     }
 
+    /// The line at which the `n`th document appended to `SLIPMESH` starts, counting from 0.
+    fn appended_line(raw: &str, n: usize) -> usize {
+        let start = SLIPMESH.len();
+        let separators: Vec<usize> = raw[start..]
+            .match_indices("---\n")
+            .map(|(at, _)| start + at)
+            .collect();
+        raw[..separators[n]].lines().count() + 2
+    }
+
+    #[test]
+    fn a_router_template_another_overrides_everywhere_is_still_checked() {
+        let raw = with_router_files(&[
+            ("", "{% if false %}{{ lopback }}{% endif %}\n"),
+            ("  include: [a, b]\n", TEMPLATE),
+        ]);
+        let err = format!("{:#}", render_raw(&raw, "a").unwrap_err());
+        let place = format!(
+            "`kind: template` document at line {}",
+            appended_line(&raw, 0)
+        );
+        assert!(
+            err.contains(&place) && err.contains("router template") && err.contains("lopback"),
+            "{place}: {err}"
+        );
+    }
+
+    #[test]
+    fn a_firewall_template_another_overrides_everywhere_is_still_checked() {
+        let raw = format!(
+            "{}---\nslipmesh: {{kind: template, platform: talos}}\ndaemon: firewall\nbase: \
+             {BASE}\ncontent: \"table inet t {{ {{{{ bogus }}}} }}\"\n---\nslipmesh: {{kind: \
+             template, platform: talos, include: [a, b]}}\ndaemon: firewall\nbase: {BASE}\n\
+             content: \"table inet y {{}}\"\n",
+            with_router_files(&[("", TEMPLATE)])
+        );
+        let err = format!("{:#}", render_raw(&raw, "a").unwrap_err());
+        let place = format!(
+            "`kind: template` document at line {}",
+            appended_line(&raw, 1)
+        );
+        assert!(
+            err.contains(&place) && err.contains("firewall template"),
+            "{place}: {err}"
+        );
+    }
+
     #[test]
     fn a_router_template_that_fails_to_render_is_not_rendered() {
         let raw = with_router_files(&[("", "{{ bfd.min_rx_ms }}\n")]);
@@ -488,11 +545,11 @@ content: "table inet x {{}}"
     }
 
     #[test]
-    fn a_config_the_daemon_rejects_is_not_rendered() {
+    fn a_firewall_template_the_daemon_rejects_is_not_rendered() {
         let raw = with_router_files(&[("", TEMPLATE)])
             .replace("table inet x {}", "table inet t { {{ bogus }} }");
         let err = render_raw(&raw, "a").unwrap_err();
-        assert!(format!("{err:#}").contains("nftables"), "{err:#}");
+        assert!(format!("{err:#}").contains("firewall template"), "{err:#}");
     }
 
     #[test]
