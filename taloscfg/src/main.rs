@@ -202,12 +202,12 @@ fn diff_text(host: &str, before: &str, after: &str) -> Option<String> {
         return None;
     }
     let (before, after) = taloscfg::redact::mask_pair(before, after);
-    Some(
-        similar::TextDiff::from_lines(&before, &after)
-            .unified_diff()
-            .header(&format!("{host} (current)"), &format!("{host} (generated)"))
-            .to_string(),
-    )
+    Some(taloscfg::text::unified_diff(
+        &before,
+        &after,
+        &format!("{host} (current)"),
+        &format!("{host} (generated)"),
+    ))
 }
 
 /// Prints `diff_text` in colour where the output takes it - `anstream` leaves the colour out when
