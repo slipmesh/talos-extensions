@@ -94,16 +94,22 @@ fn base_warnings(files: &File, targets: &[&str]) -> Result<Vec<String>> {
         if template.base.digest() == service.digest() {
             continue;
         }
-        let differences = service
-            .differences_from_reference(&template.content)
-            .unwrap_or_default();
-        warnings.push(format!(
-            "{}: its `base` is not the hash of the current reference {service} template, which its \
-             text differs from as follows - once it is brought up to it, set `base` to {}\n{}",
-            document.aim(),
-            service.base(),
-            differences.trim_end()
-        ));
+        warnings.push(match service.differences_from_reference(&template.content) {
+            Some(differences) => format!(
+                "{}: its `base` is not the hash of the current reference {service} template, \
+                 which its text differs from as follows - once it is brought up to it, set `base` \
+                 to {}\n{}",
+                document.aim(),
+                service.base(),
+                differences.trim_end()
+            ),
+            None => format!(
+                "{}: its text is the current reference {service} template, and its `base` is not \
+                 that template's hash - set `base` to {}",
+                document.aim(),
+                service.base(),
+            ),
+        });
     }
     Ok(warnings)
 }

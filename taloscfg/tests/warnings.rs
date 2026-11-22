@@ -131,6 +131,42 @@ fn a_template_of_another_base_is_warned_about_with_how_it_differs_from_the_refer
 }
 
 #[test]
+fn a_reference_template_of_another_base_is_told_to_set_its_base_alone() {
+    let firewall = document(Service::Firewall);
+    let text = network().replace(
+        &firewall,
+        &firewall.replace(
+            &Service::Firewall.base(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        ),
+    );
+    let line = text[..text
+        .find("  kind: template\n  platform: talos\ndaemon: firewall")
+        .unwrap()]
+        .lines()
+        .count();
+    let dir = tempfile::tempdir().unwrap();
+    let run = generate(dir.path(), &text, &["--check"]);
+    assert!(run.success, "{}", run.stderr);
+    let warnings: Vec<&str> = run
+        .stderr
+        .lines()
+        .filter(|line| line.contains("kind: template"))
+        .collect();
+    assert_eq!(
+        warnings,
+        [format!(
+            "warning: the `kind: template` document at line {line}: its text is the current \
+             reference firewall template, and its `base` is not that template's hash - set `base` \
+             to {}",
+            Service::Firewall.base()
+        )],
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
 fn a_template_of_another_base_is_not_told_of_to_a_run_for_a_node_it_does_not_reach() {
     let dir = tempfile::tempdir().unwrap();
     let run = generate(
