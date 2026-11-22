@@ -96,7 +96,14 @@ fn legacy_nftables_file(ruleset: String) -> Result<ConfigFile> {
 
 /// The `nftables` document of a node whose ruleset template is `template`: the template, the files
 /// `added` beside it, and the ruleset as [`legacy_nftables_file`] gives it.
-pub fn nftables_document(template: &str, added: Vec<ConfigFile>) -> Result<String> {
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the generator writes the document from a `template` once it reads files of format version 2"
+    )
+)]
+pub(crate) fn nftables_document(template: &str, added: Vec<ConfigFile>) -> Result<String> {
     let template_file = ConfigFile {
         mount_path: nftables::template::TEMPLATE_PATH.to_string(),
         content: template.to_owned(),
@@ -109,8 +116,10 @@ pub fn nftables_document(template: &str, added: Vec<ConfigFile>) -> Result<Strin
         .context("serializing the nftables document")
 }
 
-/// Adds the ruleset of every `nftables` document that sets a template as
-/// [`legacy_nftables_file`] gives it.
+/// Appends to every `nftables` document that sets a template the copy of its ruleset
+/// [`legacy_nftables_file`] makes. The document stays as the `patch` wrote it, not rebuilt by
+/// [`nftables_document`]: a `patch` of `nftables` may set keys besides `configFiles`, which a
+/// rebuilt document would drop.
 fn add_legacy_nftables_file(patches: &mut [HostDocument]) -> Result<()> {
     for document in patches
         .iter_mut()
@@ -489,31 +498,30 @@ configFiles:
 
     #[test]
     fn an_nftables_document_carries_its_template_the_files_added_and_the_ruleset_as_before() {
-        let template = "table ip example {\n}\n";
         let added = ConfigFile {
             mount_path: "/etc/talos-extensions/extra.conf".to_owned(),
             content: "extra\n".to_owned(),
         };
-        let text = nftables_document(template, vec![added]).unwrap();
-        let [document] = documents(&text).try_into().unwrap();
-        assert_eq!(document["kind"], "ExtensionServiceConfig");
-        assert_eq!(document["name"], "nftables");
-        let files = document["configFiles"].as_sequence().unwrap();
-        let paths: Vec<&str> = files
-            .iter()
-            .map(|file| file["mountPath"].as_str().unwrap())
-            .collect();
+        let text = nftables_document("table ip example {\n}\n", vec![added]).unwrap();
         assert_eq!(
-            paths,
-            [
-                nftables::template::TEMPLATE_PATH,
-                "/etc/talos-extensions/extra.conf",
-                LEGACY_NFTABLES_PATH,
-            ]
+            text,
+            "apiVersion: v1alpha1
+kind: ExtensionServiceConfig
+name: nftables
+configFiles:
+- mountPath: /etc/talos-extensions/nftables.conf.j2
+  content: |
+    table ip example {
+    }
+- mountPath: /etc/talos-extensions/extra.conf
+  content: |
+    extra
+- mountPath: /etc/talos-extensions/nftables.yaml
+  content: |
+    ruleset: |
+      table ip example {
+      }
+"
         );
-        assert_eq!(files[0]["content"], template);
-        let legacy: sliplib_yaml::Value =
-            sliplib_yaml::from_str(files[2]["content"].as_str().unwrap()).unwrap();
-        assert_eq!(legacy["ruleset"], template);
     }
 }
