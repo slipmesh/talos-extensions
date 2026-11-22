@@ -342,15 +342,20 @@ nodes:
 
     #[test]
     fn a_patch_setting_a_file_the_generator_writes_is_refused_naming_it() {
-        for (name, paths) in GENERATED {
-            for path in paths {
-                let patch = generated_with(
-                    name,
-                    &format!("configFiles:\n  - mountPath: {path}\n    content: x\n"),
-                );
-                let err = error(&[NETWORK, &patch]);
-                assert!(err.contains(path), "{err}");
-            }
+        let written = [
+            ("awg", "/etc/talos-extensions/awg.yaml"),
+            ("router", "/etc/talos-extensions/router.yaml"),
+            ("router", "/etc/talos-extensions/router.conf.j2"),
+            ("nftables", "/etc/talos-extensions/nftables.conf.j2"),
+            ("nftables", "/etc/talos-extensions/nftables.yaml"),
+        ];
+        for (name, path) in written {
+            let patch = generated_with(
+                name,
+                &format!("configFiles:\n  - mountPath: {path}\n    content: x\n"),
+            );
+            let err = error(&[NETWORK, &patch]);
+            assert!(err.contains(path), "{err}");
         }
     }
 
