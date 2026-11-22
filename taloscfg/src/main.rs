@@ -594,7 +594,18 @@ installer:
             "---\nslipmesh: {kind: platform, platform: talos}\nmetrics: {mesh: {port: 0}}\n";
         let err = setup(metrics).generate(None, true, false).unwrap_err();
         let err = format!("{err:#}");
-        assert!(err.contains("port"), "{err}");
+        let router = defaults::document(defaults::Service::Router);
+        let firewall = defaults::document(defaults::Service::Firewall);
+        let line = format!("{}---\n{router}---\n{firewall}", *SLIPMESH)
+            .lines()
+            .count()
+            + 2;
+        assert!(
+            err.contains(&format!(
+                "the `kind: platform` document at line {line}: metrics.mesh.port: invalid value"
+            )),
+            "{line}: {err}"
+        );
         assert!(!err.contains("slipmesh mint"), "{err}");
     }
 
@@ -703,6 +714,9 @@ installer:
     #[test]
     fn generate_rejects_an_unknown_node() {
         let paths = setup("");
-        assert!(paths.generate(Some("nonexistent"), false, false).is_err());
+        let err = paths
+            .generate(Some("nonexistent"), false, false)
+            .unwrap_err();
+        assert_eq!(format!("{err:#}"), "unknown node \"nonexistent\"");
     }
 }
