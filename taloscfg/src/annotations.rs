@@ -16,7 +16,7 @@ pub struct Values<'a> {
     pub interface_prefix: &'a str,
     /// Each route class by its name, with its protocol number, in the order written.
     pub classes: &'a [(String, u8)],
-    /// The node's endpoint as the files give it, with a port where they write one.
+    /// The node's endpoint as the files give it: an address or a name.
     pub endpoint: Option<&'a str>,
     /// The one MTU of every mesh interface: the largest at which a full-size packet crosses every
     /// link's underlay unfragmented.

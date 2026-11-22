@@ -9,7 +9,7 @@ their config.
 | `awg` | `awg` | on the node, as `ext-awg` | brings up AmneziaWG interfaces and peers over netlink |
 | `router` | `router` | on the node, as `ext-router` | renders BIRD config (OSPFv3 + iBGP), supervises `bird` |
 | `nftables` | `nftables` | on the node, as `ext-nftables` | applies an nftables ruleset and keeps it applied |
-| `taloscfg` | `slipmesh-taloscfg` | on your workstation | renders every node's patch from one `slipmesh.yaml` |
+| `taloscfg` | `slipmesh-taloscfg` | on your workstation | renders every `talos` node's patch from one `slipmesh.yaml` |
 | `common` | — | — | netlink, obfuscation types, shared route tagging |
 
 This repository produces plain binaries and nothing else. They ship in the
@@ -192,10 +192,9 @@ opens nothing, because a node not set up for scraping should not open a port on 
 `taloscfg` (below) renders the section from the `talos` `platform` document's `metrics.mesh.port`,
 binding it to the node's own v4 mesh loopback - the address kubelet reports as `InternalIP`, so
 Prometheus reaches it through node discovery plus a port relabel, exactly the way node-exporter is
-reached. That address belongs to
-`ext-router`, and Talos does not order extension startup, so the socket is bound with `IP_FREEBIND`
-and starts answering once the address appears; until then the scrape fails, which is the honest
-reading rather than a fault to paper over.
+reached. That address belongs to `ext-router`, and Talos does not order extension startup, so the
+socket is bound with `IP_FREEBIND` and starts answering once the address appears; until then the
+scrape fails, which is the honest reading rather than a fault to paper over.
 
 What it answers is the one thing per-interface counters cannot: whether a link is quiet or dead.
 Both read as zero bytes, the last handshake separates them, and that lives only in the `amneziawg`
@@ -288,7 +287,7 @@ Whoever authors `router.yaml` is responsible for `bypass.exclude` covering this 
 every peer's) public endpoint - a blackholed endpoint takes the mesh link down with it. There is no
 cluster-wide node list a static per-node file could consult, so this is the same
 config-authoring-is-a-human-responsibility pattern documented above for `awg`'s private keys.
-`taloscfg` handles it for you when the topology comes from `slipmesh.yaml`.
+`taloscfg` writes no `bypass`, so a `router.yaml` it generates blackholes nothing.
 
 ### The `bird.conf` template
 
@@ -321,8 +320,9 @@ is on.
 
 ### BIRD metrics
 
-The `talos` `platform` document's `metrics.router.port` makes `ext-router` run [`bird_exporter`] beside BIRD, reading the
-same control socket for protocol state - session up/down, uptime, prefix counts, BFD sessions.
+The `talos` `platform` document's `metrics.router.port` makes `ext-router` run
+[`bird_exporter`] beside BIRD, reading the same control socket for protocol state - session
+up/down, uptime, prefix counts, BFD sessions.
 The address is derived the same way `awg`'s is, from the node's own v4 loopback, so the two
 cannot drift; unset means no node runs it. It needs no `IP_FREEBIND` counterpart, because
 `ext-router` brings that address up itself before it starts either child.
@@ -568,36 +568,17 @@ Since v1.15.0-beta.0+sm.4, a tuning value taken out of the config is taken off t
 back to the module's own value; it used to stay as the earlier config set it.
 
 Since `slipmesh` 0.17.0, a pool with `header_protection_key`, `s3`, `s4` or `random_trailers` gets
-them into its client configs. Export the client configs of such a pool again, each with
-`slipmesh rw inspect --if <pool> --name <client>`: a client without the key or without
-`RandomTrailers` completes no handshake, without `S4` sends no data the pool takes, and without
-`S3` reads no cookie reply. For a client whose private key the file does not keep, the exported
-config carries a placeholder for it, so add the new lines to the client's own config by hand.
+them into its client configs: a client config exported before then, without the key or without
+`RandomTrailers`, completes no handshake, without `S4` sends no data the pool takes, and without
+`S3` reads no cookie reply. A file of format version 2 holds no pools.
 
-The top of the `network` document, its `cluster:` block and every pool refuse a field they do not
-know, so a name that changed fails where it is written rather than being ignored into a listener
-that silently stops being rendered:
-
-```text
-the `kind: network` document at line 1: cluster: unknown field `metrics_port`, expected one of
-`bgp_as`, `loopback_networks`, `bypass_refresh_interval_secs`, `awg_metrics_port`, ... at line 6
-column 3
-```
-
-Renamed so far, each needing the same edit in `slipmesh.yaml` and nothing else:
-
-| was | is | since |
-| --- | --- | --- |
-| `cluster.metrics_port` | `cluster.awg_metrics_port` | v0.2.0 |
-
-No aliases are kept. A rename lands only with a new Talos line (see
-[docs/RELEASING.md](docs/RELEASING.md)), and a name that means one thing in the tool and another in
-the file is worse than a build that stops.
-
-A `kind: nftables` document is refused, with where its ruleset went: into the file
-`/etc/talos-extensions/nftables.conf.j2` of a `kind: patch` document holding
-`ExtensionServiceConfig` `nftables`, with the same `include`/`exclude`. A `{{ name }}` in the
-ruleset is already template syntax; a `{%` or `{#` in it now opens a tag or a comment.
+A file of format version 1 is refused, naming the document that converts it. What the entries
+before format version 2 said of its keys - the `cluster:` block and the pools refusing a field they
+do not know, `cluster.metrics_port` renamed `cluster.awg_metrics_port` in v0.2.0, the ruleset of a
+`kind: nftables` document moved into a `kind: patch` one - is the conversion's now, step by step in
+sliplib's `docs/slipmesh-yaml-v1-to-v2.md`. A key renamed in a later format keeps no alias either: a
+rename lands only with a new Talos line (see [docs/RELEASING.md](docs/RELEASING.md)), and a name
+that means one thing in the tool and another in the file is worse than a build that stops.
 
 `generate` no longer writes into `slipmesh.yaml`, and `rw-add`, `rw-del` and `rw-inspect` are gone.
 What wrote is now [`slipmesh`](https://github.com/slipmesh/sliplib#slipmesh), installed from the
@@ -606,8 +587,8 @@ release assets of its repository or with `cargo install` from a checkout of it:
 | was | is |
 | --- | --- |
 | `generate` creating missing keys and obfuscation, and writing unset network defaults | `slipmesh mint` |
-| `generate` writing the reference templates into a file that sets none | `generate` refuses the file and names `slipmesh-taloscfg template <service>`, whose output is added by hand |
-| `rw-add`, `rw-del`, `rw-inspect` | `slipmesh rw add`, `rw del`, `rw inspect` |
+| `generate` writing the reference templates into a file that sets none | `generate` refuses the file and names `slipmesh-taloscfg template router` or `template firewall`, whose output is added by hand |
+| `rw-add`, `rw-del`, `rw-inspect` | none: a file of format version 2 holds no pools |
 
 Install it with `cargo install --path taloscfg`.
 
@@ -631,9 +612,9 @@ netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`
 [`taloscfg/tests/golden.rs`](taloscfg/tests/golden.rs) pins what `slipmesh-taloscfg generate` writes.
 Under [`taloscfg/tests/golden/`](taloscfg/tests/golden), `v1` and `v1-alternate` hold the patch
 files two networks of format version 1 gave every node of `talos`, with derived public keys named
-by their owner. `v2` and `v2-alternate` are the same networks converted by hand, the network as
-`sliplib-mesh`'s own twins of them. Every node of each gets those files, but for what a conversion
-changes, which the test lists and applies to the files it reads. Each file is also read and written
+by their owner. `v2` and `v2-alternate` are the same networks converted by hand. Every node of each
+gets those files, but for what a conversion changes, which the test lists and applies to the files
+it reads. Each file is also read and written
 back, and has to come out the same text. A change of what a node gets fails the test; a change of
 how a patch file is written fails the read-back until the files are rewritten, which the pull
 request then shows.
