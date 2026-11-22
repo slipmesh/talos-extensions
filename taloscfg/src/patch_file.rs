@@ -479,6 +479,17 @@ content: "table inet x {{}}"
     }
 
     #[test]
+    fn a_patch_of_nftables_adding_no_file_needs_no_firewall_template() {
+        let raw = format!(
+            "{}---\nslipmesh: {{kind: patch, platform: talos}}\napiVersion: v1alpha1\nkind: \
+             ExtensionServiceConfig\nname: nftables\nconfigFiles: []\n",
+            with_router_files(&[("", TEMPLATE)])
+        );
+        let b = render_raw(&raw, "b").unwrap();
+        assert!(generated_document(&b, "nftables").is_none(), "{b}");
+    }
+
+    #[test]
     fn a_template_for_one_host_replaces_the_default_there_only() {
         let raw = with_router_files(&[
             ("", TEMPLATE),
