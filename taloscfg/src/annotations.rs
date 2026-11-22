@@ -1,9 +1,9 @@
 //! What every node publishes about the mesh as annotations on its Node object, for whatever runs in
 //! the cluster and needs the same facts: one source, `slipmesh.yaml`, and nothing entered twice.
 //!
-//! An annotation is named after the key of its value in `slipmesh.yaml`. Talos keeps the annotations
-//! it sets in step with the config: a changed value is rewritten, a value no longer given is taken
-//! off the Node.
+//! The names are those the specification of `slipmesh.yaml` lists, each with the value it carries.
+//! Talos keeps the annotations it sets in step with the config: a changed value is rewritten, a
+//! value no longer given is taken off the Node.
 
 use sliplib_yaml::Mapping;
 
@@ -16,7 +16,7 @@ pub struct Values<'a> {
     pub interface_prefix: &'a str,
     /// Each route class by its name, with its protocol number, in the order written.
     pub classes: &'a [(String, u8)],
-    /// The node's endpoint as the files give it, with a port where they write one.
+    /// The node's endpoint as the files give it: an address or a name.
     pub endpoint: Option<&'a str>,
     /// The one MTU of every mesh interface: the largest at which a full-size packet crosses every
     /// link's underlay unfragmented.

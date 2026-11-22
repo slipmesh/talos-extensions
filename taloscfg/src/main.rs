@@ -10,8 +10,8 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use sliplib_config::mesh_config::missing_defaults;
-use sliplib_config::slipmesh_file::SlipmeshFile;
+use sliplib_config::v2::{File, Platform};
+use sliplib_mesh::model::{MetricsPorts, Network};
 use sliplib_mesh::secrets::ResolvedSecrets;
 use sliplib_yaml::MultiDoc;
 use std::path::{Path, PathBuf};
@@ -31,10 +31,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Compute and write patches/<node>.yaml for one or every node in slipmesh.yaml.
+    /// Compute and write patches/<node>.yaml for one or every node of `talos` in slipmesh.yaml.
     Generate {
-        /// Only this node's patch file, instead of every node's. Only the secrets this node's
-        /// config needs have to be written in slipmesh.yaml.
+        /// Only this node's patch file, instead of every node's; a node of `talos`. Only the
+        /// secrets this node's config needs have to be written in slipmesh.yaml.
         #[arg(long)]
         node: Option<String>,
         /// Validate only, don't write anything to disk.
@@ -48,9 +48,9 @@ enum Command {
         #[arg(long, default_value = "patches")]
         patches_dir: PathBuf,
     },
-    /// Print the `patch` document holding a service's reference template, to add to
+    /// Print the `template` document holding a daemon's reference template, to add to
     /// slipmesh.yaml.
-    Template { service: defaults::Service },
+    Template { daemon: defaults::Service },
 }
 
 fn main() -> Result<()> {
@@ -63,18 +63,55 @@ fn main() -> Result<()> {
             config,
             patches_dir,
         } => generate(node.as_deref(), check, diff, &config, &patches_dir),
-        Command::Template { service } => {
-            print!("{}", defaults::document(service));
+        Command::Template { daemon } => {
+            print!("{}", defaults::document(daemon));
             Ok(())
         }
     }
 }
 
-fn read_slipmesh(config_path: &Path) -> Result<SlipmeshFile> {
+/// The files at `config_path`, read and checked as far as this generator reads them, and the
+/// network they give, with the metrics ports of `talos`.
+fn read_slipmesh(config_path: &Path) -> Result<(File, Network)> {
     let reading = || format!("reading {}", config_path.display());
-    let file = SlipmeshFile::read(&MultiDoc::read(config_path)?).with_context(reading)?;
-    patches::check(&file).with_context(reading)?;
-    Ok(file)
+    let files = File::read(&MultiDoc::read(config_path)?).with_context(reading)?;
+    patches::check(&files).with_context(reading)?;
+    let mut network = sliplib_mesh::v2::lower(&files).with_context(reading)?;
+    network.metrics = MetricsPorts::from(&files.talos_settings().with_context(reading)?);
+    Ok((files, network))
+}
+
+/// A warning for every `template` document reaching one of `targets` whose `base` is not the hash
+/// of its daemon's current reference template, with how its text differs from that reference.
+fn base_warnings(files: &File, targets: &[&str]) -> Result<Vec<String>> {
+    let mut warnings = Vec::new();
+    for document in files.templates() {
+        if !targets.iter().any(|target| document.aim().reaches(target)) {
+            continue;
+        }
+        let template = document.read()?;
+        let service = defaults::Service::of(template.daemon);
+        if template.base.digest() == service.digest() {
+            continue;
+        }
+        warnings.push(match service.differences_from_reference(&template.content) {
+            Some(differences) => format!(
+                "{}: its `base` is not the hash of the current reference {service} template, \
+                 which its text differs from as follows - once it is brought up to it, set `base` \
+                 to {}\n{}",
+                document.aim(),
+                service.base(),
+                differences.trim_end()
+            ),
+            None => format!(
+                "{}: its text is the current reference {service} template, and its `base` is not \
+                 that template's hash - set `base` to {}",
+                document.aim(),
+                service.base(),
+            ),
+        });
+    }
+    Ok(warnings)
 }
 
 /// One host's patch file: what is on disk now, and what it would become.
@@ -92,48 +129,51 @@ fn generate(
     config_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
-    let file = read_slipmesh(config_path)?;
+    let (files, network) = read_slipmesh(config_path)?;
     if let Some(n) = node {
-        anyhow::ensure!(file.hosts().contains(&n), "unknown node {n:?}");
+        let platform = network.node(n)?.platform;
+        anyhow::ensure!(
+            platform == Platform::Talos,
+            "node {n:?} is a `{platform}` node, which this generator does not configure"
+        );
     }
-    // The nodes are told these, so a default the file does not show is refused rather than sent.
-    let unset: Vec<&str> = missing_defaults(file.topology())
-        .into_iter()
-        .map(|(key, _)| key)
-        .collect();
-    anyhow::ensure!(
-        unset.is_empty(),
-        "{} lacks {} - `slipmesh mint` writes their defaults",
-        config_path.display(),
-        unset.join(", ")
-    );
-    // A node a template does not reach was aimed past; a template no document sets at all was
-    // left out, and its service would start on every node without one.
-    let untemplated: Vec<String> = defaults::missing(&file)
+    // A node a template does not reach was aimed past; a daemon no document gives a template at
+    // all was left out, and would start on every node without one.
+    let untemplated: Vec<String> = defaults::missing(&files)
+        .with_context(|| format!("reading {}", config_path.display()))?
         .iter()
         .map(|service| format!("`slipmesh-taloscfg template {service}`"))
         .collect();
     anyhow::ensure!(
         untemplated.is_empty(),
-        "{} gives no node a template for a service that takes one - {} prints the document to add",
+        "{} gives no node a template for a daemon that takes one - {} prints the document to add",
         config_path.display(),
         untemplated.join(" and ")
     );
-    let resolved = sliplib_mesh::secrets::read(file.topology());
-    let targets = match node {
+    let resolved = sliplib_mesh::secrets::read(&network);
+    let targets: Vec<&str> = match node {
         Some(n) => vec![n],
-        None => file.hosts(),
+        None => network
+            .nodes
+            .iter()
+            .filter(|node| node.platform == Platform::Talos)
+            .map(|node| node.name.as_str())
+            .collect(),
     };
 
     // Every host is rendered and validated before anything is written, so a host that fails
     // leaves the patch files as they were rather than half of them new.
-    let hosts = render_hosts(&file, &resolved, &targets, patches_dir)?;
+    let hosts = render_hosts(&files, &network, &resolved, &targets, patches_dir)?;
 
-    // Told in every mode, and failing none: the file is valid, and its writer should still know.
-    for warning in sliplib_mesh::warnings::warnings(file.topology(), &resolved)
+    // Told in every mode, and failing none: the files are valid, and their writer should still
+    // know.
+    for warning in sliplib_mesh::warnings::warnings(&network, &resolved)
         .iter()
         .filter(|warning| targets.iter().any(|target| warning.concerns(target)))
     {
+        eprintln!("warning: {warning}");
+    }
+    for warning in base_warnings(&files, &targets)? {
         eprintln!("warning: {warning}");
     }
 
@@ -160,7 +200,8 @@ fn generate(
 
 /// Every target host's patch file, rendered and validated in memory.
 fn render_hosts(
-    file: &SlipmeshFile,
+    files: &File,
+    network: &Network,
     resolved: &ResolvedSecrets,
     targets: &[&str],
     patches_dir: &Path,
@@ -168,7 +209,8 @@ fn render_hosts(
     targets
         .iter()
         .map(|&host| {
-            let after = patch_file::render(file, resolved, host).map_err(with_its_cure)?;
+            let after =
+                patch_file::render(files, network, resolved, host).map_err(with_its_cure)?;
             let path = patches_dir.join(format!("{host}.yaml"));
             // A missing file is the from-scratch case; anything else must not read as "there was
             // nothing here", or the diff would show a whole file where one line changed.
@@ -218,13 +260,17 @@ fn print_diff(host: &str, before: &str, after: &str) {
         return;
     };
     for line in text.lines() {
-        let style = match line.as_bytes().first() {
-            Some(b'-') => anstyle::AnsiColor::Red.on_default(),
-            Some(b'+') => anstyle::AnsiColor::Green.on_default(),
-            Some(b'@') => anstyle::AnsiColor::Cyan.on_default(),
-            _ => anstyle::Style::new(),
-        };
+        let style = style_of(line);
         anstream::println!("{style}{line}{style:#}");
+    }
+}
+
+fn style_of(line: &str) -> anstyle::Style {
+    match line.as_bytes().first() {
+        Some(b'-') => anstyle::AnsiColor::Red.on_default(),
+        Some(b'+') => anstyle::AnsiColor::Green.on_default(),
+        Some(b'@') => anstyle::AnsiColor::Cyan.on_default(),
+        _ => anstyle::Style::new(),
     }
 }
 
@@ -234,6 +280,16 @@ mod tests {
     use sliplib_secrets::wireguard::PrivateKey;
     use std::sync::LazyLock;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn a_diff_line_is_coloured_by_its_first_character() {
+        use anstyle::{AnsiColor, Style};
+        assert_eq!(style_of("-  mtu: 1400"), AnsiColor::Red.on_default());
+        assert_eq!(style_of("+  mtu: 1420"), AnsiColor::Green.on_default());
+        assert_eq!(style_of("@@ -1,3 +1,3 @@"), AnsiColor::Cyan.on_default());
+        assert_eq!(style_of("   mtu: 1400"), Style::new());
+        assert_eq!(style_of(""), Style::new());
+    }
 
     #[test]
     fn a_diff_shows_that_a_key_changed_and_never_a_key() {
@@ -279,8 +335,8 @@ mod tests {
         dir
     }
 
-    const OBFUSCATION: &str =
-        ", obfuscation: {jc: 4, jmin: 10, jmax: 50, s1: 15, s2: 16, h1: 5, h2: 6, h3: 7, h4: 8}";
+    /// The obfuscation of `a-b`, every field `slipmesh mint` writes.
+    const OBFUSCATION: &str = "\n        obfuscation: {jc: 4, jmin: 10, jmax: 50, s1: 15, s2: 16, h1: 5, h2: 6, h3: 7, h4: 8}";
 
     /// A key generated for these tests alone.
     fn key() -> String {
@@ -290,28 +346,47 @@ mod tests {
     /// The key of node `a` in `SLIPMESH`.
     static KEY_OF_A: LazyLock<String> = LazyLock::new(key);
 
-    /// A file with everything `slipmesh mint` writes.
+    /// The key of node `d` in `SLIPMESH`.
+    static KEY_OF_D: LazyLock<String> = LazyLock::new(key);
+
+    /// Files with everything `slipmesh mint` writes: four nodes of `talos`, `a-b` and `c-d`
+    /// between them, `router1` of `routeros` on a link to `a`, and a `patch` for `a`.
     static SLIPMESH: LazyLock<String> = LazyLock::new(|| {
         format!(
-            r#"slipmesh:
-  kind: network
-cluster:
-  bgp_as: 64512
-  loopback_networks: {{ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}}
-  interface_prefix: {{mesh: mesh-}}
-  route_proto_id: {{egress: 152}}
-nodes:
-  - {{name: a, node_id: "198.51.100.1", endpoint: "192.0.2.10", mesh_private_key: "{a}"}}
-  - {{name: b, node_id: "198.51.100.2", endpoint: "192.0.2.11", mesh_private_key: "{b}"}}
-  - {{name: c, node_id: "198.51.100.3", mesh_private_key: "{c}"}}
-  - {{name: d, node_id: "198.51.100.4", mesh_private_key: "{d}"}}
+            r#"slipmesh: {{kind: network, version: 2, revision: 1}}
+addressing: {{loopback: {{ipv4: 198.51.100.0/25, ipv6: "3fff::/64"}}}}
+routing:
+  bgp: {{as: 64512}}
+  classes: {{egress: {{protocol: 152}}}}
 mesh:
+  interface_prefix: mesh-
   links:
-    - {{pair: [a, b], port: 51820{OBFUSCATION}}}
+    a-b:
+      type: amneziawg
+      ends: {{a: {{}}, b: {{}}}}
+      amneziawg:
+        port: 51820{OBFUSCATION}
+    c-d:
+      type: wireguard
+      ends: {{c: {{}}, d: {{}}}}
+      wireguard: {{port: 51821}}
+    a-r1:
+      type: wireguard
+      ends: {{a: {{}}, router1: {{}}}}
+      wireguard: {{port: 51822}}
+nodes:
+  a: {{platform: talos, node_id: 0.0.0.1, underlay: {{wan: {{endpoint: {{ipv4: 192.0.2.10}}}}}}, wireguard: {{private_key: "{a}"}}}}
+  b: {{platform: talos, node_id: 0.0.0.2, underlay: {{wan: {{endpoint: {{ipv4: 192.0.2.11}}}}}}, wireguard: {{private_key: "{b}"}}}}
+  c: {{platform: talos, node_id: 0.0.0.3, underlay: {{wan: {{endpoint: {{ipv4: 192.0.2.12}}}}}}, wireguard: {{private_key: "{c}"}}}}
+  d: {{platform: talos, node_id: 0.0.0.4, underlay: {{wan: {{}}}}, wireguard: {{private_key: "{d}"}}}}
+  router1:
+    platform: routeros
+    node_id: 0.0.0.5
+    underlay: {{wan: {{}}}}
+    wireguard: {{private_key: "{r}"}}
+    routing: {{learn: [], announce: []}}
 ---
-slipmesh:
-  kind: patch
-  include: [a]
+slipmesh: {{kind: patch, platform: talos, include: [a]}}
 apiVersion: v1alpha1
 kind: UnattendedInstallConfig
 installer:
@@ -320,7 +395,8 @@ installer:
             a = *KEY_OF_A,
             b = key(),
             c = key(),
-            d = key(),
+            d = *KEY_OF_D,
+            r = key(),
         )
     });
 
@@ -341,7 +417,9 @@ installer:
         /// Every file a run could have written, with what it holds.
         fn snapshot(&self) -> Vec<(PathBuf, Option<String>)> {
             let mut paths = vec![self.config.clone()];
-            paths.extend(["a", "b", "c", "d"].map(|h| self.patches.join(format!("{h}.yaml"))));
+            paths.extend(
+                ["a", "b", "c", "d", "router1"].map(|h| self.patches.join(format!("{h}.yaml"))),
+            );
             paths
                 .into_iter()
                 .map(|p| {
@@ -367,9 +445,9 @@ installer:
     /// host and then `extra_documents`.
     fn setup_from(network: &str, extra_documents: &str) -> Paths {
         let router = defaults::document(defaults::Service::Router);
-        let nftables = defaults::document(defaults::Service::Nftables);
+        let firewall = defaults::document(defaults::Service::Firewall);
         holding(&format!(
-            "{network}---\n{router}---\n{nftables}{extra_documents}"
+            "{network}---\n{router}---\n{firewall}{extra_documents}"
         ))
     }
 
@@ -391,47 +469,34 @@ installer:
         }
     }
 
-    /// A pool on node `a`, with `settings` after its required ones.
-    fn pool(settings: &str) -> String {
-        format!(
-            "---\nslipmesh:\n  kind: roadwarriors\nname: north\nnode_hostnames: [a]\naddress: \"203.0.113.1/27\"\nlisten_port: 51900\n{settings}"
-        )
-    }
-
     #[test]
     fn a_file_lacking_a_secret_is_refused_in_every_mode_naming_the_command_that_creates_it() {
-        let without = |part: &str| {
+        let without = |part: &str, put: &str| {
             assert!(SLIPMESH.contains(part), "{part}");
-            SLIPMESH.replace(part, "")
+            SLIPMESH.replace(part, put)
         };
-        let key_of_a = format!(", mesh_private_key: \"{}\"", *KEY_OF_A);
-        let pool_key = format!("private_key: \"{}\"\n", key());
-        let key_of_a_is_not_set = "node \"a\": mesh_private_key is not set";
+        let key_of_a = format!("wireguard: {{private_key: \"{}\"}}", *KEY_OF_A);
+        let key_of_a_is_not_set = "node \"a\": wireguard.private_key is not set";
         let cases = [
-            (key_of_a_is_not_set, without(&key_of_a), String::new(), "a"),
-            (key_of_a_is_not_set, without(&key_of_a), String::new(), "b"),
+            (
+                key_of_a_is_not_set,
+                without(&key_of_a, "wireguard: null"),
+                "a",
+            ),
+            (
+                key_of_a_is_not_set,
+                without(&key_of_a, "wireguard: null"),
+                "b",
+            ),
             (
                 "mesh link a-b: obfuscation lacks",
-                without(OBFUSCATION),
-                String::new(),
-                "a",
-            ),
-            (
-                "roadwarriors pool \"north\": private_key is not set",
-                SLIPMESH.to_owned(),
-                pool("plain: true\n"),
-                "a",
-            ),
-            (
-                "roadwarriors pool \"north\": obfuscation lacks",
-                SLIPMESH.to_owned(),
-                pool(&pool_key),
+                without(OBFUSCATION, ""),
                 "a",
             ),
         ];
-        for (missing, network, extra, node) in cases {
+        for (missing, network, node) in cases {
             for (check, diff) in MODES {
-                let paths = setup_from(&network, &extra);
+                let paths = setup_from(&network, "");
                 let before = paths.snapshot();
                 let err = paths.generate(Some(node), check, diff).unwrap_err();
                 let err = format!("{err:#}");
@@ -449,18 +514,16 @@ installer:
             .generate(Some("b"), true, false)
             .unwrap_err();
         let err = format!("{err:#}");
-        assert!(err.contains("node \"a\": mesh_private_key"), "{err}");
+        assert!(err.contains("node \"a\": wireguard.private_key"), "{err}");
         assert!(!err.contains("slipmesh mint"), "{err}");
     }
 
     #[test]
     fn a_run_for_one_node_needs_no_secret_of_a_node_it_is_not_linked_to() {
-        let key_of_d = SLIPMESH
-            .lines()
-            .find(|line| line.contains("name: d,"))
-            .and_then(|line| line.split(", mesh_private_key").nth(1))
-            .unwrap();
-        let network = SLIPMESH.replace(&format!(", mesh_private_key{key_of_d}"), "}");
+        let network = SLIPMESH.replace(
+            &format!("wireguard: {{private_key: \"{}\"}}", *KEY_OF_D),
+            "wireguard: null",
+        );
         assert_ne!(network, *SLIPMESH);
         setup_from(&network, "")
             .generate(Some("a"), true, false)
@@ -472,10 +535,24 @@ installer:
     }
 
     #[test]
+    fn a_node_of_another_platform_is_refused_by_name_and_skipped_for_all() {
+        let paths = setup("");
+        let err = format!(
+            "{:#}",
+            paths.generate(Some("router1"), true, false).unwrap_err()
+        );
+        assert!(err.contains("router1") && err.contains("routeros"), "{err}");
+        paths.generate(None, false, false).unwrap();
+        assert!(paths.patch("a").is_some());
+        assert!(paths.patch("router1").is_none());
+    }
+
+    #[test]
     fn a_patch_talos_could_not_key_is_refused_in_every_mode_and_nothing_is_written() {
         for (check, diff) in MODES {
-            let paths =
-                setup("---\nslipmesh:\n  kind: patch\nmachine:\n  install: {disk: /dev/vda}\n");
+            let paths = setup(
+                "---\nslipmesh:\n  kind: patch\n  platform: talos\nmachine:\n  install: {disk: /dev/vda}\n",
+            );
             let before = paths.snapshot();
             let err = format!("{:#}", paths.generate(None, check, diff).unwrap_err());
             assert!(err.contains("has no Talos `kind`"), "{err}");
@@ -490,8 +567,8 @@ installer:
     #[test]
     fn a_file_in_which_no_document_sets_a_template_is_refused_in_every_mode_naming_template() {
         let router = defaults::document(defaults::Service::Router);
-        let nftables = defaults::document(defaults::Service::Nftables);
-        for (lacking, present) in [("nftables", &router), ("router", &nftables)] {
+        let firewall = defaults::document(defaults::Service::Firewall);
+        for (lacking, present) in [("firewall", &router), ("router", &firewall)] {
             for (check, diff) in MODES {
                 let paths = holding(&format!("{}---\n{present}", *SLIPMESH));
                 let before = paths.snapshot();
@@ -500,6 +577,40 @@ installer:
                 assert!(err.contains(&command), "{lacking}: {err}");
                 assert_eq!(paths.snapshot(), before, "{lacking}");
             }
+        }
+    }
+
+    #[test]
+    fn a_refusal_of_one_node_names_it_and_its_document_and_changes_no_patch_file() {
+        let paths = setup("");
+        paths.generate(None, false, false).unwrap();
+        let router = defaults::document(defaults::Service::Router);
+        let firewall = defaults::document(defaults::Service::Firewall)
+            .replace("  platform: talos\n", "  platform: talos\n  exclude: [b]\n");
+        let head = format!("{}---\n{router}---\n{firewall}", *SLIPMESH);
+        let line = head.lines().count() + 2;
+        std::fs::write(
+            &paths.config,
+            format!(
+                "{head}---\nslipmesh: {{kind: patch, platform: talos}}\napiVersion: v1alpha1\nkind: \
+                 ExtensionServiceConfig\nname: nftables\nconfigFiles:\n  - mountPath: \
+                 /etc/talos-extensions/extra.conf\n    content: x\n"
+            ),
+        )
+        .unwrap();
+        for (check, diff) in MODES {
+            let before = paths.snapshot();
+            let err = paths.generate(None, check, diff).unwrap_err();
+            assert_eq!(
+                format!("{err:#}"),
+                format!(
+                    "node \"b\": the `kind: patch` document at line {line}: adds files to \
+                     `nftables`, which no `template` document for the firewall reaches on this \
+                     node, so it gets no `nftables` document - aim the `patch` or a template so \
+                     that both reach the node or neither"
+                )
+            );
+            assert_eq!(paths.snapshot(), before);
         }
     }
 
@@ -513,36 +624,54 @@ installer:
 
     #[test]
     fn a_refusal_that_no_secret_cures_names_no_command() {
-        let network = SLIPMESH.replace(
-            "  bgp_as: 64512\n",
-            "  bgp_as: 64512\n  awg_metrics_port: 0\n",
-        );
-        let err = setup_from(&network, "")
-            .generate(None, true, false)
-            .unwrap_err();
+        let metrics =
+            "---\nslipmesh: {kind: platform, platform: talos}\nmetrics: {mesh: {port: 0}}\n";
+        let err = setup(metrics).generate(None, true, false).unwrap_err();
         let err = format!("{err:#}");
-        assert!(err.contains("awg_metrics_port"), "{err}");
+        let router = defaults::document(defaults::Service::Router);
+        let firewall = defaults::document(defaults::Service::Firewall);
+        let line = format!("{}---\n{router}---\n{firewall}", *SLIPMESH)
+            .lines()
+            .count()
+            + 2;
+        assert!(
+            err.contains(&format!(
+                "the `kind: platform` document at line {line}: metrics.mesh.port: invalid value"
+            )),
+            "{line}: {err}"
+        );
         assert!(!err.contains("slipmesh mint"), "{err}");
     }
 
     #[test]
-    fn a_file_without_the_prefix_and_protocol_keys_is_refused_in_every_mode_naming_them() {
-        let network = SLIPMESH
-            .replace("  interface_prefix: {mesh: mesh-}\n", "")
-            .replace("  route_proto_id: {egress: 152}\n", "");
+    fn files_without_the_interface_prefix_are_refused_in_every_mode_naming_mint() {
+        let network = SLIPMESH.replace("  interface_prefix: mesh-\n", "");
+        assert_ne!(network, *SLIPMESH);
         for (check, diff) in MODES {
             let paths = setup_from(&network, "");
             let before = paths.snapshot();
             let err = format!("{:#}", paths.generate(None, check, diff).unwrap_err());
-            for named in [
-                "cluster.interface_prefix.mesh",
-                "cluster.route_proto_id.egress",
-                "`slipmesh mint`",
-            ] {
+            for named in ["mesh.interface_prefix", "`slipmesh mint`"] {
                 assert!(err.contains(named), "{named}: {err}");
             }
             assert_eq!(paths.snapshot(), before);
         }
+    }
+
+    #[test]
+    fn the_metrics_ports_of_talos_reach_its_nodes() {
+        let metrics =
+            "---\nslipmesh: {kind: platform, platform: talos}\nmetrics: {router: {port: 9324}}\n";
+        let paths = setup(metrics);
+        paths.generate(Some("a"), false, false).unwrap();
+        assert!(
+            paths
+                .patch("a")
+                .unwrap()
+                .contains("listen: 198.51.100.1:9324"),
+            "{}",
+            paths.patch("a").unwrap()
+        );
     }
 
     #[test]
@@ -568,13 +697,19 @@ installer:
     fn two_runs_render_the_same() {
         let paths = setup("");
         let render = || {
-            let file = read_slipmesh(&paths.config).unwrap();
-            let resolved = sliplib_mesh::secrets::read(file.topology());
-            render_hosts(&file, &resolved, &["a", "b", "c", "d"], &paths.patches)
-                .unwrap()
-                .into_iter()
-                .map(|h| h.after)
-                .collect::<Vec<_>>()
+            let (files, network) = read_slipmesh(&paths.config).unwrap();
+            let resolved = sliplib_mesh::secrets::read(&network);
+            render_hosts(
+                &files,
+                &network,
+                &resolved,
+                &["a", "b", "c", "d"],
+                &paths.patches,
+            )
+            .unwrap()
+            .into_iter()
+            .map(|h| h.after)
+            .collect::<Vec<_>>()
         };
         assert_eq!(render(), render());
     }
@@ -599,11 +734,13 @@ installer:
     #[test]
     fn a_host_that_fails_validation_leaves_every_file_unwritten() {
         let paths = setup(
-            "---\nslipmesh:\n  kind: patch\n  include: [d]\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: nftables\nconfigFiles:\n  - mountPath: /etc/talos-extensions/nftables.conf.j2\n    content: |\n      table inet t { {{ bogus }} }\n",
+            "---\nslipmesh: {kind: template, platform: talos, include: [d]}\ndaemon: firewall\nbase: \
+             sha256:0000000000000000000000000000000000000000000000000000000000000000\ncontent: |\n  \
+             table inet t { {{ bogus }} }\n",
         );
         let err = paths.generate(None, false, false).unwrap_err();
         assert!(format!("{err:#}").contains("\"d\""), "{err:#}");
-        for host in ["a", "b", "c", "d"] {
+        for host in ["a", "b", "c", "d", "router1"] {
             assert!(paths.patch(host).is_none(), "{host} was written");
         }
     }
@@ -611,6 +748,9 @@ installer:
     #[test]
     fn generate_rejects_an_unknown_node() {
         let paths = setup("");
-        assert!(paths.generate(Some("nonexistent"), false, false).is_err());
+        let err = paths
+            .generate(Some("nonexistent"), false, false)
+            .unwrap_err();
+        assert_eq!(format!("{err:#}"), "unknown node \"nonexistent\"");
     }
 }

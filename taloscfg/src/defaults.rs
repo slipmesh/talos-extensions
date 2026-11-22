@@ -1,41 +1,48 @@
-//! The reference template of each service that takes one. A template reaches a node only as a
-//! `patch` document of `slipmesh.yaml`; the reference is what such a document starts from.
+//! The reference template of each daemon that takes one. A template reaches a node from a
+//! `template` document of the files; the reference is what such a document starts from.
 
-use sliplib_config::slipmesh_file::SlipmeshFile;
+use sliplib_config::v2::platform::Daemon;
+use sliplib_config::v2::{Error, File};
 
-struct DefaultFile {
-    /// The `ExtensionServiceConfig` the file belongs to.
-    service: &'static str,
-    mount_path: &'static str,
-    content: &'static str,
-}
-
-/// A service with a reference template.
-#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+/// A daemon with a reference template, as the `template` command and a `template` document name
+/// it. `firewall` is the daemon of the `nftables` service: this is the one place the two names
+/// meet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Service {
     Router,
-    Nftables,
+    Firewall,
 }
 
 impl Service {
-    fn file(self) -> DefaultFile {
+    pub fn of(daemon: Daemon) -> Self {
+        match daemon {
+            Daemon::Router => Self::Router,
+            Daemon::Firewall => Self::Firewall,
+        }
+    }
+
+    /// The `ExtensionServiceConfig` the template is a file of.
+    pub const fn name(self) -> &'static str {
         match self {
-            Service::Router => DefaultFile {
-                service: "router",
-                mount_path: router::bird_conf::TEMPLATE_PATH,
-                content: router::bird_conf::REFERENCE_TEMPLATE,
-            },
-            Service::Nftables => DefaultFile {
-                service: "nftables",
-                mount_path: nftables::template::TEMPLATE_PATH,
-                content: nftables::template::REFERENCE_TEMPLATE,
-            },
+            Self::Router => "router",
+            Self::Firewall => "nftables",
+        }
+    }
+
+    /// Where the daemon reads its template.
+    pub const fn mount_path(self) -> &'static str {
+        match self {
+            Self::Router => router::bird_conf::TEMPLATE_PATH,
+            Self::Firewall => nftables::template::TEMPLATE_PATH,
         }
     }
 
     /// The text of the current reference template.
     pub fn reference(self) -> &'static str {
-        self.file().content
+        match self {
+            Self::Router => router::bird_conf::REFERENCE_TEMPLATE,
+            Self::Firewall => nftables::template::REFERENCE_TEMPLATE,
+        }
     }
 
     /// The 64 lower-case hexadecimal digits of the SHA-256 of the reference's text, the digits a
@@ -64,43 +71,49 @@ impl Service {
     }
 }
 
+/// Reads as the `daemon` of a `template` document and the word the `template` command takes.
 impl std::fmt::Display for Service {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.file().service)
+        f.write_str(match self {
+            Self::Router => "router",
+            Self::Firewall => "firewall",
+        })
     }
 }
 
-/// The services whose template no `patch` document of `file` sets, for any host.
+/// The daemons for which no `template` document stands in `files` at all. A `template` document
+/// whose keys do not read is refused here, naming it, rather than counted as no template.
 ///
-/// A template set for some hosts only is not missing: who goes without it was decided by whoever
-/// aimed that document. Going without a router template is refused when the patch files are
+/// A template for some nodes only is not missing: who goes without it was decided by whoever
+/// aimed that document. A node no router template reaches is refused when its patch file is
 /// rendered, since `router` cannot run.
-pub fn missing(file: &SlipmeshFile) -> Vec<Service> {
-    [Service::Router, Service::Nftables]
+pub fn missing(files: &File) -> Result<Vec<Service>, Error> {
+    let written = files
+        .templates()
+        .iter()
+        .map(|template| Ok(Service::of(template.read()?.daemon)))
+        .collect::<Result<Vec<Service>, Error>>()?;
+    Ok([Service::Router, Service::Firewall]
         .into_iter()
-        .filter(|service| {
-            let default = service.file();
-            !crate::patches::sets_file(file, default.service, default.mount_path)
-        })
-        .collect()
+        .filter(|service| !written.contains(service))
+        .collect())
 }
 
-/// The `patch` document that gives every host the reference template of `service`, to add to
-/// `slipmesh.yaml` and edit there. The content is written as a literal block so that it reads in
-/// `slipmesh.yaml` the way it reads in the file it becomes.
+/// The `template` document that gives every node of `talos` the reference template of
+/// `service`, `base` included, to add to the files and edit there. The content is written as a
+/// literal block so that it reads in the files the way it reads in the file it becomes.
 pub fn document(service: Service) -> String {
-    let default = service.file();
-    let content: String = default
-        .content
+    let content: String = service
+        .reference()
         .lines()
         .map(|line| match line {
             "" => "\n".to_owned(),
-            line => format!("      {line}\n"),
+            line => format!("  {line}\n"),
         })
         .collect();
     format!(
-        "slipmesh:\n  kind: patch\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: {}\nconfigFiles:\n  - mountPath: {}\n    content: |\n{content}",
-        default.service, default.mount_path
+        "slipmesh:\n  kind: template\n  platform: talos\ndaemon: {service}\nbase: {}\ncontent: |\n{content}",
+        service.base()
     )
 }
 
@@ -108,66 +121,74 @@ pub fn document(service: Service) -> String {
 mod tests {
     use super::*;
 
-    const NETWORK: &str = r#"slipmesh:
-  kind: network
-cluster:
-  bgp_as: 64512
-  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}
+    const NETWORK: &str = r#"slipmesh: {kind: network, version: 2, revision: 1}
+addressing: {loopback: {ipv4: 198.51.100.0/25, ipv6: "3fff::/64"}}
+routing: {bgp: {as: 64512}}
+mesh: {interface_prefix: mesh-}
 nodes:
-  - {name: node-a, node_id: "198.51.100.1"}
-  - {name: node-b, node_id: "198.51.100.2"}
+  node-a: {platform: talos, node_id: 0.0.0.1, underlay: {wan: {}}}
+  node-b: {platform: talos, node_id: 0.0.0.2, underlay: {wan: {}}}
 "#;
 
-    fn file_content(document: &sliplib_yaml::Value, mount_path: &str) -> Option<String> {
-        document["configFiles"]
-            .as_sequence()?
-            .iter()
-            .find(|f| f["mountPath"].as_str() == Some(mount_path))
-            .and_then(|f| f["content"].as_str())
-            .map(str::to_owned)
-    }
-
-    fn missing_in(text: &str) -> Vec<String> {
-        missing(&SlipmeshFile::parse(text).unwrap())
-            .iter()
-            .map(Service::to_string)
-            .collect()
+    fn missing_in(documents: &[&str]) -> Vec<Service> {
+        let text = std::iter::once(NETWORK)
+            .chain(documents.iter().copied())
+            .collect::<Vec<_>>()
+            .join("---\n");
+        missing(&File::parse(&text).unwrap()).unwrap()
     }
 
     #[test]
-    fn a_file_without_them_misses_every_default() {
-        assert_eq!(missing_in(NETWORK), ["router", "nftables"]);
+    fn files_without_templates_miss_both() {
+        assert_eq!(missing_in(&[]), [Service::Router, Service::Firewall]);
     }
 
     #[test]
-    fn a_file_set_for_some_hosts_only_is_not_missing() {
-        let nftables = format!(
-            "---\nslipmesh:\n  kind: patch\n  exclude: [node-b]\napiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: nftables\nconfigFiles:\n  - mountPath: {}\n    content: \"table inet t {{}}\\n\"\n",
-            nftables::template::TEMPLATE_PATH
+    fn a_template_that_does_not_read_is_refused_naming_it_not_counted_as_missing() {
+        let reference = document(Service::Firewall);
+        let short_base = reference.replace(&Service::Firewall.base(), "sha256:abc");
+        let unknown_key = reference.replace("content: |", "contnet: |");
+        for broken in [short_base, unknown_key] {
+            let text = format!("{NETWORK}---\n{broken}");
+            let err = missing(&File::parse(&text).unwrap()).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("`kind: template` document at line 9"),
+                "{err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_template_for_some_nodes_only_is_not_missing() {
+        let firewall = document(Service::Firewall).replace(
+            "  platform: talos\n",
+            "  platform: talos\n  exclude: [node-b]\n",
         );
-        assert_eq!(missing_in(&format!("{NETWORK}{nftables}")), ["router"]);
+        assert_eq!(missing_in(&[&firewall]), [Service::Router]);
     }
 
     #[test]
-    fn a_services_document_gives_every_host_its_reference_template() {
-        for service in [Service::Router, Service::Nftables] {
-            let default = service.file();
+    fn a_daemons_document_gives_every_node_its_reference_template_and_names_its_base() {
+        for service in [Service::Router, Service::Firewall] {
             let text = format!("{NETWORK}---\n{}", document(service));
-            let file = SlipmeshFile::parse(&text).unwrap();
-            for host in ["node-a", "node-b"] {
-                let documents = crate::patches::for_host(&file, host).unwrap();
-                let document = documents
-                    .iter()
-                    .find(|d| d.identity == format!("ExtensionServiceConfig/{}", default.service))
-                    .unwrap_or_else(|| panic!("{host}: no {} document", default.service));
-                assert_eq!(
-                    file_content(&document.value, default.mount_path).as_deref(),
-                    Some(default.content),
-                    "{host}: {}",
-                    default.service
-                );
+            let files = File::parse(&text).unwrap();
+            for node in ["node-a", "node-b"] {
+                let [reaching] = files.templates_for(node).try_into().unwrap();
+                let template = reaching.read().unwrap();
+                assert_eq!(Service::of(template.daemon), service, "{node}");
+                assert_eq!(template.content, service.reference(), "{node}: {service}");
+                assert_eq!(template.base.digest(), service.digest(), "{service}");
             }
         }
+    }
+
+    #[test]
+    fn a_daemon_reads_as_the_word_the_files_and_the_command_take() {
+        assert_eq!(Service::Router.to_string(), "router");
+        assert_eq!(Service::Firewall.to_string(), "firewall");
+        assert_eq!(Service::Router.name(), "router");
+        assert_eq!(Service::Firewall.name(), "nftables");
     }
 
     // Pinned: a change of a reference changes its digest on purpose, and the digest is of the
@@ -179,7 +200,7 @@ nodes:
             "37259e51772ccc05ce786974fc2f86c4e00f788f63a5cdf192ae93508c633bb0"
         );
         assert_eq!(
-            Service::Nftables.digest(),
+            Service::Firewall.digest(),
             "338c55f97281e90a7464f1bd6cb5f8fa4f750ff99e21d878cc0301688467f4e5"
         );
         assert_eq!(
@@ -190,13 +211,19 @@ nodes:
 
     #[test]
     fn a_text_differs_from_the_reference_under_the_daemons_name() {
-        let reference = Service::Router.reference();
-        assert_eq!(Service::Router.differences_from_reference(reference), None);
+        let reference = Service::Firewall.reference();
+        assert_eq!(
+            Service::Firewall.differences_from_reference(reference),
+            None
+        );
         let edited = format!("{reference}# added by hand\n");
-        let diff = Service::Router.differences_from_reference(&edited).unwrap();
+        let diff = Service::Firewall
+            .differences_from_reference(&edited)
+            .unwrap();
         assert!(
             diff.starts_with(
-                "--- the router template in the files\n+++ the current reference router template\n"
+                "--- the firewall template in the files\n+++ the current reference firewall \
+                 template\n"
             ),
             "{diff}"
         );

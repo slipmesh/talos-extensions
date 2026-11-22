@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Offline generator for Talos machine-config patches (awg mesh/roadwarriors, router BGP/OSPF, nftables) from a single slipmesh.yaml file - never touches a live node"
+description = "Offline generator for Talos machine-config patches (awg mesh, router BGP/OSPF, nftables) from a single slipmesh.yaml file - never touches a live node"
 
 [[bin]]
 name = "slipmesh-taloscfg"
@@ -31,6 +31,5 @@ anstream = "1.0.0"
 anstyle = "1.0.14"
 
 [dev-dependencies]
-expect-test = "1.5.1"
 tempfile = "3.27.0"
 sliplib-secrets.workspace = true
