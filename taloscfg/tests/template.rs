@@ -11,8 +11,8 @@ fn template(service: &str) -> std::process::Output {
 }
 
 #[test]
-fn template_prints_the_patch_document_of_the_service_asked_for() {
-    for (name, service) in [("router", Service::Router), ("nftables", Service::Nftables)] {
+fn template_prints_the_template_document_of_the_daemon_asked_for() {
+    for (name, service) in [("router", Service::Router), ("firewall", Service::Firewall)] {
         let output = template(name);
         assert!(output.status.success(), "{name}: {:?}", output.status);
         assert_eq!(
@@ -24,8 +24,15 @@ fn template_prints_the_patch_document_of_the_service_asked_for() {
 }
 
 #[test]
-fn template_of_a_service_without_one_is_a_usage_error() {
-    let output = template("awg");
-    assert_eq!(output.status.code(), Some(2));
-    assert!(output.stdout.is_empty());
+fn template_of_a_daemon_without_one_is_a_usage_error_naming_those_with_one() {
+    for name in ["awg", "nftables"] {
+        let output = template(name);
+        assert_eq!(output.status.code(), Some(2), "{name}");
+        assert!(output.stdout.is_empty(), "{name}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains("router") && stderr.contains("firewall"),
+            "{name}: {stderr}"
+        );
+    }
 }

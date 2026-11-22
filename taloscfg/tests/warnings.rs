@@ -4,8 +4,8 @@ use sliplib_secrets::wireguard::PrivateKey;
 use std::process::Command;
 use taloscfg::defaults::{Service, document};
 
-/// Four nodes and two links, `a`-`b` and `c`-`d`; the first loses data packets to its range of
-/// `h1` with `random_trailers` on.
+/// Four nodes of `talos` and two links, `a`-`b` and `c`-`d`; the first loses data packets to its
+/// range of `h1` with `random_trailers` on. Both reference templates, for every node.
 fn network() -> String {
     let key = || PrivateKey::generate().expose().to_owned();
     let nodes: String = ["a", "b", "c", "d"]
@@ -13,34 +13,37 @@ fn network() -> String {
         .zip(1..)
         .map(|(name, id)| {
             format!(
-                "  - {{name: {name}, node_id: \"198.51.100.{id}\", endpoint: \"192.0.2.{id}\", \
-                 mesh_private_key: \"{}\"}}\n",
+                "  {name}: {{platform: talos, node_id: 0.0.0.{id}, underlay: {{wan: {{endpoint: \
+                 {{ipv4: 192.0.2.{id}}}}}}}, wireguard: {{private_key: \"{}\"}}}}\n",
                 key()
             )
         })
         .collect();
     format!(
-        r#"slipmesh:
-  kind: network
-cluster:
-  bgp_as: 64512
-  loopback_networks: {{ipv4: "198.51.100.0/25", ipv6: "3fff::/32"}}
-  interface_prefix: {{mesh: mesh-}}
-  route_proto_id: {{egress: 152}}
-nodes:
-{nodes}mesh:
+        r#"slipmesh: {{kind: network, version: 2, revision: 1}}
+addressing: {{loopback: {{ipv4: 198.51.100.0/25, ipv6: "3fff::/64"}}}}
+routing: {{bgp: {{as: 64512}}}}
+mesh:
+  interface_prefix: mesh-
   links:
-    - pair: [a, b]
-      port: 51820
-      obfuscation: {{jc: 4, jmin: 10, jmax: 50, s1: 40, s2: 41, h1: 100-199, h2: 6, h3: 7, h4: 8, random_trailers: true}}
-    - pair: [c, d]
-      port: 51821
-      obfuscation: {{jc: 4, jmin: 10, jmax: 50, s1: 40, s2: 41, h1: 5, h2: 6, h3: 7, h4: 8}}
----
+    a-b:
+      type: amneziawg
+      ends: {{a: {{}}, b: {{}}}}
+      amneziawg:
+        port: 51820
+        obfuscation: {{jc: 4, jmin: 10, jmax: 50, s1: 40, s2: 41, h1: 100-199, h2: 6, h3: 7, h4: 8, random_trailers: true}}
+    c-d:
+      type: amneziawg
+      ends: {{c: {{}}, d: {{}}}}
+      amneziawg:
+        port: 51821
+        obfuscation: {{jc: 4, jmin: 10, jmax: 50, s1: 40, s2: 41, h1: 5, h2: 6, h3: 7, h4: 8}}
+nodes:
+{nodes}---
 {}---
 {}"#,
         document(Service::Router),
-        document(Service::Nftables),
+        document(Service::Firewall),
     )
 }
 
@@ -81,6 +84,62 @@ fn warned(node: Option<&str>) -> Vec<String> {
     let run = generate(dir.path(), &network(), &args);
     assert!(run.success, "{}", run.stderr);
     run.stderr.lines().map(str::to_owned).collect()
+}
+
+/// `network()` with the firewall template for `c` and `d` alone, made from a reference other than
+/// the current one and edited by hand.
+fn with_an_old_firewall_template() -> String {
+    let current = document(Service::Firewall);
+    let old = current
+        .replace(
+            "  platform: talos\n",
+            "  platform: talos\n  include: [c, d]\n",
+        )
+        .replace(
+            &Service::Firewall.base(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .replace("content: |\n", "content: |\n  # added by hand\n");
+    format!("{}---\n{old}", network())
+}
+
+#[test]
+fn a_template_of_another_base_is_warned_about_with_how_it_differs_from_the_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = generate(
+        dir.path(),
+        &with_an_old_firewall_template(),
+        &["--check", "--node", "c"],
+    );
+    assert!(run.success, "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("warning: the `kind: template` document at line"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains(&Service::Firewall.base()),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains("\n-# added by hand\n"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn a_template_of_another_base_is_not_told_of_to_a_run_for_a_node_it_does_not_reach() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = generate(
+        dir.path(),
+        &with_an_old_firewall_template(),
+        &["--check", "--node", "a"],
+    );
+    assert!(run.success, "{}", run.stderr);
+    assert!(!run.stderr.contains("kind: template"), "{}", run.stderr);
 }
 
 #[test]
@@ -141,7 +200,7 @@ fn a_run_that_writes_or_shows_a_diff_warns_too_and_writes_what_it_would_without(
 fn a_refused_file_gets_no_warning() {
     let dir = tempfile::tempdir().unwrap();
     // A key that does not decode refuses the node, and every node linked with it.
-    let text = network().replacen("mesh_private_key: \"", "mesh_private_key: \"not a key", 1);
+    let text = network().replacen("private_key: \"", "private_key: \"not a key", 1);
     let refused = generate(dir.path(), &text, &["--check"]);
     assert!(!refused.success);
     assert!(!refused.stderr.contains("warning:"), "{}", refused.stderr);

@@ -1,9 +1,9 @@
 //! What every node publishes about the mesh as annotations on its Node object, for whatever runs in
 //! the cluster and needs the same facts: one source, `slipmesh.yaml`, and nothing entered twice.
 //!
-//! An annotation is named after the key of its value in `slipmesh.yaml`. Talos keeps the annotations
-//! it sets in step with the config: a changed value is rewritten, a value no longer given is taken
-//! off the Node.
+//! The names are those the specification of `slipmesh.yaml` lists, each with the value it carries.
+//! Talos keeps the annotations it sets in step with the config: a changed value is rewritten, a
+//! value no longer given is taken off the Node.
 
 use sliplib_yaml::Mapping;
 

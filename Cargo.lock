@@ -416,12 +416,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dissimilar"
-version = "1.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aeda16ab4059c5fd2a83f2b9c9e9c981327b18aa8e3b313f7e6563799d4f093e"
-
-[[package]]
 name = "dtoa"
 version = "1.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -447,16 +441,6 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "expect-test"
-version = "1.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "63af43ff4431e848fb47472a920f14fa71c24de13255a5692e93d4e90302acb0"
-dependencies = [
- "dissimilar",
- "once_cell",
 ]
 
 [[package]]
@@ -858,6 +842,8 @@ checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
 dependencies = [
  "equivalent",
  "hashbrown",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -1692,6 +1678,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1773,11 +1769,12 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "sliplib-config"
-version = "0.19.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.19.0#a8ebdea9b82a084f6cac5f9a3d97a055807d78a8"
+version = "0.20.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.20.0#c7c511f8658038e02f4c2bf2cfe36eb24aeffb58"
 dependencies = [
- "anyhow",
+ "indexmap",
  "serde",
+ "serde_ignored",
  "sliplib-net",
  "sliplib-secrets",
  "sliplib-yaml",
@@ -1786,8 +1783,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-mesh"
-version = "0.19.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.19.0#a8ebdea9b82a084f6cac5f9a3d97a055807d78a8"
+version = "0.20.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.20.0#c7c511f8658038e02f4c2bf2cfe36eb24aeffb58"
 dependencies = [
  "sliplib-config",
  "sliplib-net",
@@ -1797,16 +1794,16 @@ dependencies = [
 
 [[package]]
 name = "sliplib-net"
-version = "0.19.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.19.0#a8ebdea9b82a084f6cac5f9a3d97a055807d78a8"
+version = "0.20.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.20.0#c7c511f8658038e02f4c2bf2cfe36eb24aeffb58"
 dependencies = [
  "ipnet",
 ]
 
 [[package]]
 name = "sliplib-runtime"
-version = "0.19.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.19.0#a8ebdea9b82a084f6cac5f9a3d97a055807d78a8"
+version = "0.20.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.20.0#c7c511f8658038e02f4c2bf2cfe36eb24aeffb58"
 dependencies = [
  "anyhow",
  "tokio-graceful-shutdown",
@@ -1816,8 +1813,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-secrets"
-version = "0.19.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.19.0#a8ebdea9b82a084f6cac5f9a3d97a055807d78a8"
+version = "0.20.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.20.0#c7c511f8658038e02f4c2bf2cfe36eb24aeffb58"
 dependencies = [
  "base64",
  "curve25519-dalek",
@@ -1828,8 +1825,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-yaml"
-version = "0.19.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.19.0#a8ebdea9b82a084f6cac5f9a3d97a055807d78a8"
+version = "0.20.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.20.0#c7c511f8658038e02f4c2bf2cfe36eb24aeffb58"
 dependencies = [
  "anyhow",
  "atomic-write-file",
@@ -1922,7 +1919,6 @@ dependencies = [
  "anyhow",
  "base16ct",
  "clap",
- "expect-test",
  "nftables",
  "router",
  "serde",

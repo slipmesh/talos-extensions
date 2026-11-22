@@ -31,6 +31,5 @@ anstream = "1.0.0"
 anstyle = "1.0.14"
 
 [dev-dependencies]
-expect-test = "1.5.1"
 tempfile = "3.27.0"
 sliplib-secrets.workspace = true
