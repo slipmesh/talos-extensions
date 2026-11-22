@@ -23,10 +23,6 @@ pub enum Error {
     NotAMapping,
     #[error("the annotations of a {KUBE_NODE_CONFIG} are not a mapping")]
     AnnotationsNotAMapping,
-    #[error(
-        "a document sets the annotation {set}, and those in {namespace} are generated - take it out of the document"
-    )]
-    SetsGenerated { set: String, namespace: String },
 }
 
 /// What Talos keys a document by: two documents of one identity are one document.
@@ -152,9 +148,21 @@ pub fn is_kube_node_config(document: &Value) -> bool {
     Identity::of(document).kind.as_deref() == Some(KUBE_NODE_CONFIG)
 }
 
-/// Adds `annotations`, all in `namespace`, to the `KubeNodeConfig` `document`. Refuses a document
-/// that sets an annotation in `namespace` itself, which `annotations` would overwrite silently, and
-/// one that deletes the `KubeNodeConfig`, which would drop them.
+/// The first annotation in `namespace` that the `KubeNodeConfig` `document` sets, even to `null`.
+pub fn annotation_in<'a>(document: &'a Value, namespace: &str) -> Option<&'a str> {
+    if !is_kube_node_config(document) {
+        return None;
+    }
+    document
+        .get("annotations")?
+        .as_mapping()?
+        .keys()
+        .filter_map(Value::as_str)
+        .find(|key| key.starts_with(namespace))
+}
+
+/// Adds `annotations`, all in `namespace`, to the `KubeNodeConfig` `document`. Refuses one that
+/// deletes the `KubeNodeConfig`, which would drop them.
 pub fn annotate(document: &mut Value, namespace: &str, annotations: Mapping) -> Result<(), Error> {
     if is_deletion(document) {
         return Err(Error::DeletesAnnotated {
@@ -169,20 +177,10 @@ pub fn annotate(document: &mut Value, namespace: &str, annotations: Mapping) -> 
     if given.is_null() {
         *given = Value::Mapping(Mapping::new());
     }
-    let given = given
+    given
         .as_mapping_mut()
-        .ok_or(Error::AnnotationsNotAMapping)?;
-    if let Some(set) = given
-        .keys()
-        .filter_map(Value::as_str)
-        .find(|key| key.starts_with(namespace))
-    {
-        return Err(Error::SetsGenerated {
-            set: set.to_owned(),
-            namespace: namespace.to_owned(),
-        });
-    }
-    given.extend(annotations);
+        .ok_or(Error::AnnotationsNotAMapping)?
+        .extend(annotations);
     Ok(())
 }
 
@@ -400,13 +398,19 @@ configFiles:
     }
 
     #[test]
-    fn a_document_that_sets_an_annotation_in_the_namespace_takes_none() {
-        let mut document = yaml("kind: KubeNodeConfig\nannotations:\n  node-a.example/other: x\n");
-        let err = annotate(&mut document, NAMESPACE, ours()).unwrap_err();
-        assert!(
-            matches!(&err, Error::SetsGenerated { set, .. } if set == "node-a.example/other"),
-            "{err}"
+    fn an_annotation_in_the_namespace_is_found_even_set_to_null() {
+        let document = yaml(
+            "kind: KubeNodeConfig\nannotations:\n  example.com/role: x\n  node-a.example/other: \
+             null\n",
         );
+        assert_eq!(
+            annotation_in(&document, NAMESPACE),
+            Some("node-a.example/other")
+        );
+        let elsewhere = yaml("kind: KubeletConfig\nannotations:\n  node-a.example/other: x\n");
+        assert_eq!(annotation_in(&elsewhere, NAMESPACE), None);
+        let outside = yaml("kind: KubeNodeConfig\nannotations:\n  example.com/role: x\n");
+        assert_eq!(annotation_in(&outside, NAMESPACE), None);
     }
 
     #[test]

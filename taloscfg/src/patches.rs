@@ -49,8 +49,9 @@ pub(crate) struct HostDocument {
     pub value: Value,
 }
 
-/// Refuses a `patch` document Talos could not key, and one that sets more on a generated document
-/// than files beside the generated ones.
+/// Refuses a `patch` document Talos could not key, one that sets more on a generated document than
+/// files beside the generated ones, and one that sets a generated annotation: each document on its
+/// own, since merging them deletes a key set to `null`.
 pub fn check(files: &File) -> Result<()> {
     files.patches().iter().try_for_each(check_one)
 }
@@ -61,6 +62,13 @@ fn check_one(patch: &PatchDocument) -> Result<()> {
     let Some(kind) = &identity.kind else {
         bail!("{place}: has no Talos `kind`, so it has no identity to merge by");
     };
+    if let Some(set) = talos::annotation_in(patch.value(), crate::annotations::NAMESPACE) {
+        bail!(
+            "{place}: sets the annotation {set}, and those under {} are generated - take it out \
+             of the document",
+            crate::annotations::NAMESPACE
+        );
+    }
     if let Some(name) = &identity.name
         && kind == "ExtensionServiceConfig"
         && let Some((_, generated)) = GENERATED.iter().find(|(n, _)| n == name)
@@ -356,6 +364,28 @@ nodes:
             );
             let err = error(&[NETWORK, &patch]);
             assert!(err.contains(path), "{err}");
+        }
+    }
+
+    fn kube_node_config(aim: &str, annotations: &str) -> String {
+        patch(
+            aim,
+            &format!("apiVersion: v1alpha1\nkind: KubeNodeConfig\nannotations: {annotations}\n"),
+        )
+    }
+
+    #[test]
+    fn a_patch_setting_a_generated_annotation_is_refused_whatever_else_is_merged() {
+        let nulled = kube_node_config("", "{slipmesh.net/endpoint: null}");
+        let alone = error(&[NETWORK, &nulled]);
+        let other = kube_node_config("  include: [node-a]\n", "{example.com/role: edge}");
+        let merged = error(&[NETWORK, &other, &nulled]);
+        for err in [alone, merged] {
+            assert!(
+                err.contains("`kind: patch` document at line")
+                    && err.contains("slipmesh.net/endpoint"),
+                "{err}"
+            );
         }
     }
 
