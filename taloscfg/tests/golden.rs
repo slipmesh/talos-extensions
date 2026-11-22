@@ -5,7 +5,6 @@
 //! with. `UPDATE_EXPECT=1` rewrites the files; the difference is then reviewed like any other.
 
 use expect_test::expect_file;
-use sha2::{Digest, Sha256};
 use sliplib_config::mesh_config::MeshConfig;
 use sliplib_config::slipmesh_file::SlipmeshFile;
 use std::path::Path;
@@ -48,10 +47,7 @@ fn below_the_opening_comment(text: &str) -> &str {
 }
 
 fn sha256(text: &str) -> String {
-    Sha256::digest(text)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    taloscfg::text::sha256_hex(text)
 }
 
 /// Every public key derived from a private key of `topology`, with whose it is. The fixtures'
