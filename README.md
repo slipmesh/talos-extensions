@@ -188,10 +188,11 @@ only routes carrying that exact tag are ever treated as "ours".
 ### Metrics
 
 With a `metrics` section in the config, `awg` serves `GET /metrics` on that address; without one it
-opens nothing, because a node not set up for scraping should not open a port on a default. `taloscfg`
-(below) renders the section from `cluster.awg_metrics_port`, binding it to the node's own v4 mesh
-loopback - the address kubelet reports as `InternalIP`, so Prometheus reaches it through node
-discovery plus a port relabel, exactly the way node-exporter is reached. That address belongs to
+opens nothing, because a node not set up for scraping should not open a port on a default.
+`taloscfg` (below) renders the section from the `talos` `platform` document's `metrics.mesh.port`,
+binding it to the node's own v4 mesh loopback - the address kubelet reports as `InternalIP`, so
+Prometheus reaches it through node discovery plus a port relabel, exactly the way node-exporter is
+reached. That address belongs to
 `ext-router`, and Talos does not order extension startup, so the socket is bound with `IP_FREEBIND`
 and starts answering once the address appears; until then the scrape fails, which is the honest
 reading rather than a fault to paper over.
@@ -320,7 +321,7 @@ is on.
 
 ### BIRD metrics
 
-`cluster.router_metrics_port` makes `ext-router` run [`bird_exporter`] beside BIRD, reading the
+The `talos` `platform` document's `metrics.router.port` makes `ext-router` run [`bird_exporter`] beside BIRD, reading the
 same control socket for protocol state - session up/down, uptime, prefix counts, BFD sessions.
 The address is derived the same way `awg`'s is, from the node's own v4 loopback, so the two
 cannot drift; unset means no node runs it. It needs no `IP_FREEBIND` counterpart, because
@@ -381,84 +382,37 @@ dynamically linked package siderolabs/pkgs already ships.
 
 ## `taloscfg`: one file, every node's patch
 
-`slipmesh-taloscfg` is the only crate here that doesn't run on a node. It reads `slipmesh.yaml`,
-which describes the whole mesh and everything else a node's patch file carries, and writes
-`patches/<node>.yaml` for every node in it, each holding that node's Talos documents followed by the
-`awg`/`router` `ExtensionServiceConfig` documents it generates, which `talosctl apply-config -p`
-then ships to that node. A patch file is output only: nothing in it is read back, so edit
-`slipmesh.yaml` and regenerate rather than editing the patch.
+`slipmesh-taloscfg` is the only crate here that doesn't run on a node. It reads `slipmesh.yaml` in
+[format version 2](https://github.com/slipmesh/sliplib/blob/main/docs/slipmesh-yaml.md), which
+describes the whole mesh and everything else a node of `platform: talos` carries, and writes
+`patches/<node>.yaml` for every such node, each holding the node's Talos documents followed by the
+`awg`, `router` and `nftables` `ExtensionServiceConfig` documents it generates, which `talosctl
+apply-config -p` then ships to that node. A patch file is output only: nothing in it is read back,
+so edit `slipmesh.yaml` and regenerate rather than editing the patch.
 
-It only reads `slipmesh.yaml`. What writes into the file - its keys and obfuscation, the defaults
-of its network settings, the clients of a road-warrior pool - is
-[`slipmesh`](https://github.com/slipmesh/sliplib#slipmesh), and where the file lacks something
-`generate` needs, the refusal names the `slipmesh` command that writes it.
+It only reads `slipmesh.yaml`. What writes into the file - its keys, its obfuscation,
+`mesh.interface_prefix` - is [`slipmesh`](https://github.com/slipmesh/sliplib#slipmesh), and where
+the file lacks something `generate` needs, the refusal names the `slipmesh` command that writes it.
+A file of format version 1 is refused, naming the document that converts it.
 
-### `slipmesh.yaml`
+### What it reads of `slipmesh.yaml`
 
-A multi-document YAML file. Every document opens with a `slipmesh:` block saying what it is; the
-block is addressed to this tool and never reaches a patch file.
+The format is the specification's. Of it, the generator serves the nodes of `talos`, and on them:
 
-```yaml
-slipmesh:
-  kind: network
-cluster:
-  bgp_as: 64512
-  loopback_networks: {ipv4: "198.51.100.0/25", ipv6: "3fff::/120"}
-nodes:
-  - {name: node-a, node_id: "198.51.100.1", endpoint: "192.0.2.1"}
-  - {name: node-b, node_id: "198.51.100.2", endpoint: "192.0.2.2"}
-  - {name: router-1, node_id: "198.51.100.3", endpoint: "192.0.2.3"}
-mesh:
-  links:
-    - {pair: [node-a, node-b], port: 51830}
-    - {pair: [router-1, node-a], port: 51831, plain: true}
----
-slipmesh:
-  kind: roadwarriors
-name: plain
-node_hostnames: [node-a]
-address: "203.0.113.1/27"
-listen_port: 51820
-plain: true
-clients: []
----
-slipmesh:
-  kind: patch
-  exclude: [router-1]
-apiVersion: v1alpha1
-kind: ExtensionServiceConfig
-name: nftables
-configFiles:
-  - mountPath: /etc/talos-extensions/nftables.conf.j2
-    content: |
-      table inet talos_filter { ... }
----
-slipmesh:
-  kind: patch
-  include: [node-b]
-apiVersion: v1alpha1
-kind: UnattendedInstallConfig
-installer:
-    disk: /dev/nvme0n1
-```
+- the network, as every tool reads it, and the metrics ports of the `talos` `platform` document;
+- the `template` documents: of those that reach a node, the last by rank for each daemon,
+  `router` and `firewall`;
+- the `patch` documents of `talos`, merged for each node.
 
-| kind | how many | aimed by | holds |
-| --- | --- | --- | --- |
-| `network` | exactly one | — | the topology: `cluster`, `bfd`, `obfuscation`, `nodes`, `mesh`, `bypass` |
-| `roadwarriors` | one per pool | — | one pool: its address, port, nodes and clients |
-| `patch` | any | `include`/`exclude` | a Talos document, carried into the patch of every node it reaches |
+A node of another platform gets no patch file; `generate --node` with one is refused, naming its
+platform.
 
-`include` lists the nodes a document reaches; leave it out to reach every node. `exclude` takes
-nodes back out. Both name nodes of the `network` document, and a key the `slipmesh:` block does
-not know is an error, so a misspelled `include` cannot quietly aim a document at every node.
-
-`patch` documents of one Talos identity - `apiVersion`, `kind`, `name` - are merged for each node:
-those without `include` first, then those naming the node, each in file order, so the specific one
-wins wherever it sits. Mappings merge key by key, an explicit `null` deletes a key, and a sequence
-replaces the one before it whole. That last part differs from Talos' own strategic merge, which
-appends to a list: appending by key needs the types Talos has and this tool does not, and appending
-without a key would leave no way to remove an element. Every document goes into the patch file
-serialized; its comments stay in `slipmesh.yaml`.
+`patch` documents of one Talos identity - `apiVersion`, `kind`, `name` - are merged for each node in
+the order of their rank, so the narrower one wins wherever it sits. Mappings merge key by key, an
+explicit `null` deletes a key, and a sequence replaces the one before it whole. That last part
+differs from Talos' own strategic merge, which appends to a list: appending by key needs the types
+Talos has and this tool does not, and appending without a key would leave no way to remove an
+element. Every document goes into the patch file serialized; its comments stay in `slipmesh.yaml`.
 
 A file a `patch` document carries in `configFiles[].content` may be written as YAML - a mapping or
 a list - rather than as a string. Talos takes only a string there, so the patch file gets that
@@ -467,98 +421,83 @@ YAML's text. Written this way, each field of the file is a field of `slipmesh.ya
 ```yaml
 slipmesh:
   kind: patch
-  include: [router-1]
+  platform: talos
+  include: [node-b]
 apiVersion: v1alpha1
 kind: ExtensionServiceConfig
-name: mikrotik
+name: example
 configFiles:
-  - mountPath: /etc/talos-extensions/mikrotik.yaml
+  - mountPath: /usr/local/etc/example/example.yaml
     content:
-      host: router1.example.com
-      port: 8729
-      username: admin
-      password: hunter2
+      listen: 198.51.100.2
 ```
 
-A `patch` document may also name a generated `ExtensionServiceConfig`, `awg` or `router`, to add
-files to it: the files follow the generated one in that same document, since Talos takes one
-document per name. It may set `configFiles` and nothing else, and none of them over the generated
-file. This is how `router` gets its template, `/etc/talos-extensions/router.conf.j2`, and
-`nftables` - a document written entirely by hand - its ruleset,
-`/etc/talos-extensions/nftables.conf.j2`. Both are checked as their daemon will check them, and
-the `router` template is rendered with each node's config, so one that would fail on a node fails
+A `patch` document may also name a generated `ExtensionServiceConfig`, `awg`, `router` or
+`nftables`, to add files to it: the files follow the generated ones in that same document, since
+Talos takes one document per name. It may set `configFiles` and nothing else, and none of them at a
+path the generator writes. A `patch` that adds files to `nftables` on a node no `firewall` template
+reaches is refused, since that node gets no `nftables` document.
+
+### Templates
+
+The `router` document carries the node's router template as `/etc/talos-extensions/router.conf.j2`,
+and the `nftables` document, written after it, the `firewall` template as
+`/etc/talos-extensions/nftables.conf.j2`. Both are checked as their daemon will check them, and the
+`router` template is rendered with each node's config, so one that would fail on a node fails
 `generate` instead. The `nftables` document also gets the ruleset as
 `/etc/talos-extensions/nftables.yaml`, the file the daemon read before it took a template: a node
 that falls back to its previous boot slot runs that daemon against this config, and would
 otherwise apply no ruleset at all. That copy goes once no node can fall back that far.
 
-A template reaches a node only through a `patch` document of `slipmesh.yaml`: the copy there is the
-one in force, and a newer reference does not replace it. `template` prints the document that gives
-every node a service's reference template, to add to the file and edit there:
+The text in the files is the one in force, and a newer reference does not replace it. `template`
+prints the `template` document that gives every node of `talos` a daemon's reference template,
+`base` included, to add to the file and edit there:
 
 ```sh
-slipmesh-taloscfg template router    # or: nftables
+slipmesh-taloscfg template router    # or: firewall
 ```
 
 It prints the document alone, without a leading `---`:
 
 ```sh
-{ echo ---; slipmesh-taloscfg template nftables; } >> slipmesh.yaml
+{ echo ---; slipmesh-taloscfg template firewall; } >> slipmesh.yaml
 ```
 
-A file in which no document sets a service's template for any node is refused by `generate` in
-every mode, naming the command above. A document aimed at some nodes only counts as setting it: the
-nodes it leaves out go without, as whoever aimed it decided - a node without an `nftables` template
-gets no ruleset, and one no `router` template reaches is refused, since `router` does not run
-without one.
+A template whose `base` is not the hash of its daemon's current reference is warned about, with
+the diff from its text to that reference; the warning stops nothing. Files with no template for a
+daemon at all are refused by `generate` in every mode, naming the command above. A template aimed
+at some nodes only counts: the nodes it leaves out go without - a node no `firewall` template
+reaches gets no ruleset, and one no `router` template reaches is refused, since `router` does not
+run without one.
 
 ### Mesh MTU
 
 Every mesh interface gets one MTU, the largest at which a full-size packet still crosses every
-link unfragmented. A fragmented outer packet takes TCP in the tunnel down to a few Mbit/s. A
-link's limit is `U - 32 - 8 - IP - S4`:
-
-- `U` is the smaller uplink MTU of its two nodes, `nodes[].uplink_mtu`, 1500 when unset;
-- 32 is WireGuard's header and tag, 8 the UDP header;
-- `IP` is 20 or 40, for the family of the endpoint the link is dialed at;
-- `S4` is the junk AmneziaWG adds to every data packet, the link's `obfuscation.s4`.
-
-The family is that of the endpoint of whichever side has one, and the same when both do. Endpoints
-of two families on one link are an error: which one carries the link would depend on who starts
-the handshake. A link with no endpoint on either side is an error too, since neither end can dial
-the other. An IP literal says its family itself. For a hostname, `nodes[].address_family`
-(`ipv4` or `ipv6`) says it, and it is IPv6 when unset.
-
-`cluster.mesh_mtu` sets the MTU instead, and `generate` refuses one above the least link limit,
-naming that link. An MTU below 1280 is an error, since the mesh runs OSPFv3 over IPv6. A
-`mesh_mtu` with no links in the mesh is an error as well. Pool interfaces keep the kernel's default.
+link unfragmented. A fragmented outer packet takes TCP in the tunnel down to a few Mbit/s.
+`sliplib-mesh` computes it, as the specification's "The MTU of the mesh" says, from the underlay
+MTU of each node, the family each link is dialed over and the `s4` of each link of type
+`amneziawg`; `mesh.mtu` may lower it, and `generate` refuses one above the least link limit.
 
 A change of the mesh MTU has to reach both ends of every link at once.
 OSPF compares MTUs in its database description packets and refuses a neighbor whose MTU is larger
 than its own, so an adjacency across ends that differ does not form again; BIRD cannot skip the
-check. Keep `cluster.mesh_mtu` at the current value until every node runs an `awg` that sets the
-MTU, then apply every node's patch in one pass. Adjacencies across ends that still differ are down
-for that pass.
+check. Keep `mesh.mtu` at the current value until every node runs an `awg` that sets the MTU, then
+apply every node's patch in one pass. Adjacencies across ends that still differ are down for that
+pass.
 
 ### Node annotations
 
 Every node publishes what the cluster needs to know about the mesh as annotations on its Node
 object: `generate` puts them into the node's `KubeNodeConfig`, merged with the one a `patch`
-document gives, since Talos takes one document of that kind. An annotation is named after the key
-of its value in `slipmesh.yaml`:
+document gives, since Talos takes one document of that kind. The names are those the
+specification lists:
 
-| path | annotation | default |
+| from | annotation | |
 | --- | --- | --- |
-| `cluster.interface_prefix.mesh` | `slipmesh.net/interface_prefix.mesh` | `mesh-` |
-| `cluster.route_proto_id.egress` | `slipmesh.net/route_proto_id.egress` | `152` |
-| `nodes[].endpoint` | `slipmesh.net/endpoint` | none: a node without an endpoint has no annotation |
-| `cluster.mesh_mtu` | `slipmesh.net/mesh_mtu` | the least link limit, see [Mesh MTU](#mesh-mtu); none without links |
-
-`cluster.interface_prefix.mesh` is what every mesh interface's name starts with, and the pattern
-OSPF and `direct_interfaces` match them by; it takes ASCII letters, digits, `-`, `_` and `.`.
-`cluster.route_proto_id.egress` is the protocol number, `proto` in `ip route`, that egress routes
-carry; 0 to 4 are the kernel's own and refused. When `slipmesh.yaml` leaves either key out,
-`generate` refuses the file in every mode, naming the key: `slipmesh mint` writes its default.
+| `mesh.interface_prefix` | `slipmesh.net/interface_prefix.mesh` | what every mesh interface's name starts with |
+| `routing.classes.<name>.protocol` | `slipmesh.net/route_proto_id.<name>` | one for each route class |
+| the node's `endpoint` | `slipmesh.net/endpoint` | as written; none for a node without one |
+| the mesh MTU | `slipmesh.net/mesh_mtu` | see [Mesh MTU](#mesh-mtu); none without links |
 
 Talos keeps the annotations it sets in step with the config: a changed value is rewritten on the
 Node, and one no longer given is taken off it. A `patch` document may set annotations of its own,
@@ -567,11 +506,11 @@ but none under `slipmesh.net/`.
 ### Secrets
 
 Everything derivable is derived: interface names and link-local/loopback addressing fall out of
-the topology rather than being written by hand, and only the public half of a peer's key ever
+the network rather than being written by hand, and only the public half of a peer's key ever
 appears in the other end's config. Keys aren't derivable: they stand in `slipmesh.yaml`, in
-`nodes[].mesh_private_key`, a pool document's `private_key`, and the `obfuscation` of every link
-and pool that is not `plain`. `slipmesh mint` creates the ones the file lacks and writes them
-there; `generate` creates none and refuses a node whose config needs one that is missing.
+`nodes.<name>.wireguard.private_key` of every node on a link, and the `obfuscation` of every link
+of type `amneziawg`. `slipmesh mint` creates the ones the file lacks and writes them there;
+`generate` creates none and refuses a node whose config needs one that is missing.
 
 So `slipmesh.yaml` holds private keys in the clear, as the patch files it renders do - keep it
 where those are kept.
@@ -580,61 +519,35 @@ Each node's configs are rendered and validated by `sliplib-mesh`, on the config 
 read, so the generator and the daemons check one definition.
 
 ```sh
-slipmesh-taloscfg generate                      # every node, into ./patches
+slipmesh-taloscfg generate                      # every node of talos, into ./patches
 slipmesh-taloscfg generate --node node-a --diff # one node, print what would change, write nothing
 slipmesh-taloscfg generate --check              # validate only
 ```
 
 Every run renders and validates every node it was asked for before it writes any patch file, and
 none writes `slipmesh.yaml`. With `--node`, only the secrets that node's config needs have to be
-there: its own key, and for each of its links and pools the peer's key, the pool's key and their
-obfuscation. `--check` and `--diff` write no patch file either.
+there: its own key, and for each of its links the peer's key and the link's obfuscation. `--check`
+and `--diff` write no patch file either.
 
 `--diff` prints no secret. The value of every `private_key`, `header_protection_key` and `password`
 line, at any depth, shows as `<redacted>` when it is the same on both sides and as
 `<redacted, old>` and `<redacted, new>` where it changed.
 
 In every mode a run prints a line that starts with `warning:` on standard error for each way a
-link of the nodes it was asked for loses data packets it should deliver, one line each, and fails
-for none of them. A file it refuses gets no warning.
-There are two such cases, both on a link with `random_trailers` on: one of `h1` to `h3` is a range,
-which costs up to the share of data packets the line names; and the link has no
+link of the nodes it was asked for loses data packets it should deliver, one line each, and for
+each template whose `base` is not the current reference, and fails for none of them. A file it
+refuses gets no warning.
+There are two such cases of loss, both on a link with `random_trailers` on: one of `h1` to `h3` is
+a range, which costs up to the share of data packets the line names; and the link has no
 `header_protection_key` while one of `s1` to `s3` stands 1 to 15 bytes above `s4`.
 
-### Road warriors
-
-A pool's clients are added, removed and shown with `slipmesh rw add`, `rw del` and `rw inspect`,
-described [with that tool](https://github.com/slipmesh/sliplib#slipmesh); `generate` renders the
-pool's interface on each of its `node_hostnames` from what the pool's document holds.
-
-The same generated `<node>.yaml` also drives [routeros](https://github.com/slipmesh/routeros),
-which converges a MikroTik device into the mesh from it - a mesh member need not be a Talos node.
-
-### Coming from `mesh.yaml`
-
-Before `slipmesh.yaml`, the topology lived in `mesh.yaml`, and the keys and hand-written documents
-lived inside the patch files, which `generate` now overwrites without reading. Move them over by
-hand before the first run:
-
-- `mesh.yaml` without `roadwarriors` and `nftables` becomes the `kind: network` document;
-- each `roadwarriors` entry becomes a `kind: roadwarriors` document of its own, and
-  `nftables.ruleset` the `/etc/talos-extensions/nftables.conf.j2` file of a `kind: patch` document
-  holding `ExtensionServiceConfig` `nftables`;
-- each document written by hand into a patch file becomes a `kind: patch` document with
-  `include: [<node>]`;
-- the `private_key` of a node's mesh interfaces goes into that node's `mesh_private_key`, and
-  a link's `jc`...`h4` into the link's `obfuscation`;
-- the `private_key` of a pool's interface goes into the `private_key` of its `kind: roadwarriors`
-  document, and the pool's `jc`...`h4` into its `obfuscation`, unless the pool is `plain`.
-
-Anything left out has to be created by `slipmesh mint` before `generate` runs: a new identity for
-that node or link and every peer of it, and for a pool, a new server key that no client config
-already handed out connects to.
-
-`generate --diff` then shows what the patch files would become: with everything carried over, the
-keys and settings in them stay as they were and only their layout changes.
-
 ### Breaking changes
+
+After v1.15.0-beta.0+sm.5, `slipmesh-taloscfg` reads a `slipmesh.yaml` of format version 2 alone;
+a file of version 1 is converted as sliplib's `docs/slipmesh-yaml-v1-to-v2.md` says, with the
+release that reads it before and this one after. `template` prints a `template` document, and
+`template nftables` is `template firewall`. A node of another platform gets no patch file any
+more: delete the one version 1 wrote for it.
 
 Since v1.15.0-beta.0+sm.4, a peer's `advanced_security` is gone from the config: a file that still
 has it is read and the key ignored. The module reads no per-peer switch; header protection is the
@@ -715,18 +628,15 @@ is unit-tested directly; a node's configs are rendered by `sliplib-mesh` and CID
 exclusion come from `sliplib-net`, each tested there;
 netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`).
 
-[`taloscfg/tests/golden.rs`](taloscfg/tests/golden.rs) pins what `slipmesh-taloscfg generate` writes
-from a file of format version 1: the patch file of every node of the two fixtures under
-[`taloscfg/tests/golden/`](taloscfg/tests/golden) is compared byte for byte with the files beside
-each, with derived public keys named by their owner. `v1` sets every key of the format, and
-`v1-alternate` takes the other side of each key a file sets once. The fixtures are copies of the
-ones `sliplib-mesh` pins a node's configs on, and both tests hold the hash of each, so the copies
-change together. A change meant to move the patch files records the new ones, and the difference
-is reviewed with the rest of the pull request; the test refuses to record in CI:
-
-```sh
-UPDATE_EXPECT=1 cargo test -p taloscfg --test golden
-```
+[`taloscfg/tests/golden.rs`](taloscfg/tests/golden.rs) pins what `slipmesh-taloscfg generate` writes.
+Under [`taloscfg/tests/golden/`](taloscfg/tests/golden), `v1` and `v1-alternate` hold the patch
+files two networks of format version 1 gave every node of `talos`, with derived public keys named
+by their owner. `v2` and `v2-alternate` are the same networks converted by hand, the network as
+`sliplib-mesh`'s own twins of them. Every node of each gets those files, but for what a conversion
+changes, which the test lists and applies to the files it reads. Each file is also read and written
+back, and has to come out the same text. A change of what a node gets fails the test; a change of
+how a patch file is written fails the read-back until the files are rewritten, which the pull
+request then shows.
 
 Exercising a daemon end to end needs a Linux host with `CAP_NET_ADMIN`, and for `awg` the
 `amneziawg` kernel module loaded. Each daemon reads its config from the fixed path its
