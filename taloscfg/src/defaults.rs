@@ -1,8 +1,8 @@
 //! The reference template of each daemon that takes one. A template reaches a node from a
 //! `template` document of the files; the reference is what such a document starts from.
 
-use sliplib_config::v2::File;
 use sliplib_config::v2::platform::Daemon;
+use sliplib_config::v2::{Error, File};
 
 /// A daemon with a reference template, as the `template` command and a `template` document name
 /// it. `firewall` is the daemon of the `nftables` service: this is the one place the two names
@@ -81,22 +81,22 @@ impl std::fmt::Display for Service {
     }
 }
 
-/// The daemons for which no `template` document stands in `files` at all.
+/// The daemons for which no `template` document stands in `files` at all. A `template` document
+/// whose keys do not read is refused here, naming it, rather than counted as no template.
 ///
 /// A template for some nodes only is not missing: who goes without it was decided by whoever
 /// aimed that document. A node no router template reaches is refused when its patch file is
 /// rendered, since `router` cannot run.
-pub fn missing(files: &File) -> Vec<Service> {
-    let written: Vec<Service> = files
+pub fn missing(files: &File) -> Result<Vec<Service>, Error> {
+    let written = files
         .templates()
         .iter()
-        .filter_map(|template| template.read().ok())
-        .map(|template| Service::of(template.daemon))
-        .collect();
-    [Service::Router, Service::Firewall]
+        .map(|template| Ok(Service::of(template.read()?.daemon)))
+        .collect::<Result<Vec<Service>, Error>>()?;
+    Ok([Service::Router, Service::Firewall]
         .into_iter()
         .filter(|service| !written.contains(service))
-        .collect()
+        .collect())
 }
 
 /// The `template` document that gives every node of `talos` the reference template of
@@ -135,12 +135,28 @@ nodes:
             .chain(documents.iter().copied())
             .collect::<Vec<_>>()
             .join("---\n");
-        missing(&File::parse(&text).unwrap())
+        missing(&File::parse(&text).unwrap()).unwrap()
     }
 
     #[test]
     fn files_without_templates_miss_both() {
         assert_eq!(missing_in(&[]), [Service::Router, Service::Firewall]);
+    }
+
+    #[test]
+    fn a_template_that_does_not_read_is_refused_naming_it_not_counted_as_missing() {
+        let reference = document(Service::Firewall);
+        let short_base = reference.replace(&Service::Firewall.base(), "sha256:abc");
+        let unknown_key = reference.replace("content: |", "contnet: |");
+        for broken in [short_base, unknown_key] {
+            let text = format!("{NETWORK}---\n{broken}");
+            let err = missing(&File::parse(&text).unwrap()).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("`kind: template` document at line 9"),
+                "{err:#}"
+            );
+        }
     }
 
     #[test]

@@ -134,6 +134,7 @@ fn generate(
     // A node a template does not reach was aimed past; a daemon no document gives a template at
     // all was left out, and would start on every node without one.
     let untemplated: Vec<String> = defaults::missing(&files)
+        .with_context(|| format!("reading {}", config_path.display()))?
         .iter()
         .map(|service| format!("`slipmesh-taloscfg template {service}`"))
         .collect();
