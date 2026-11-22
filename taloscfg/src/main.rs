@@ -253,13 +253,17 @@ fn print_diff(host: &str, before: &str, after: &str) {
         return;
     };
     for line in text.lines() {
-        let style = match line.as_bytes().first() {
-            Some(b'-') => anstyle::AnsiColor::Red.on_default(),
-            Some(b'+') => anstyle::AnsiColor::Green.on_default(),
-            Some(b'@') => anstyle::AnsiColor::Cyan.on_default(),
-            _ => anstyle::Style::new(),
-        };
+        let style = style_of(line);
         anstream::println!("{style}{line}{style:#}");
+    }
+}
+
+fn style_of(line: &str) -> anstyle::Style {
+    match line.as_bytes().first() {
+        Some(b'-') => anstyle::AnsiColor::Red.on_default(),
+        Some(b'+') => anstyle::AnsiColor::Green.on_default(),
+        Some(b'@') => anstyle::AnsiColor::Cyan.on_default(),
+        _ => anstyle::Style::new(),
     }
 }
 
@@ -269,6 +273,16 @@ mod tests {
     use sliplib_secrets::wireguard::PrivateKey;
     use std::sync::LazyLock;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn a_diff_line_is_coloured_by_its_first_character() {
+        use anstyle::{AnsiColor, Style};
+        assert_eq!(style_of("-  mtu: 1400"), AnsiColor::Red.on_default());
+        assert_eq!(style_of("+  mtu: 1420"), AnsiColor::Green.on_default());
+        assert_eq!(style_of("@@ -1,3 +1,3 @@"), AnsiColor::Cyan.on_default());
+        assert_eq!(style_of("   mtu: 1400"), Style::new());
+        assert_eq!(style_of(""), Style::new());
+    }
 
     #[test]
     fn a_diff_shows_that_a_key_changed_and_never_a_key() {
