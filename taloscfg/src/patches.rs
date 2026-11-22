@@ -1,6 +1,7 @@
 //! The `patch` documents of `slipmesh.yaml` as Talos documents: checked as far as the generator
 //! knows them, and merged into what one host gets.
 
+use crate::defaults::Service;
 use crate::talos::{self, Identity};
 use anyhow::{Context, Result, bail, ensure};
 use sliplib_config::v2::{File, PatchDocument};
@@ -16,15 +17,15 @@ pub(crate) const LEGACY_NFTABLES_PATH: &str = "/etc/talos-extensions/nftables.ya
 const GENERATED: [(&str, &[&str]); 3] = [
     ("awg", &["/etc/talos-extensions/awg.yaml"]),
     (
-        "router",
+        Service::Router.name(),
         &[
             "/etc/talos-extensions/router.yaml",
-            router::bird_conf::TEMPLATE_PATH,
+            Service::Router.mount_path(),
         ],
     ),
     (
-        "nftables",
-        &[nftables::template::TEMPLATE_PATH, LEGACY_NFTABLES_PATH],
+        Service::Firewall.name(),
+        &[Service::Firewall.mount_path(), LEGACY_NFTABLES_PATH],
     ),
 ];
 

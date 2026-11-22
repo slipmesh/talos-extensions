@@ -22,7 +22,7 @@ impl Service {
     }
 
     /// The `ExtensionServiceConfig` the template is a file of.
-    pub fn name(self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         match self {
             Self::Router => "router",
             Self::Firewall => "nftables",
@@ -30,7 +30,7 @@ impl Service {
     }
 
     /// Where the daemon reads its template.
-    pub fn mount_path(self) -> &'static str {
+    pub const fn mount_path(self) -> &'static str {
         match self {
             Self::Router => router::bird_conf::TEMPLATE_PATH,
             Self::Firewall => nftables::template::TEMPLATE_PATH,

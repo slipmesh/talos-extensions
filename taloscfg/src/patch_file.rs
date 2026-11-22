@@ -10,7 +10,6 @@ use crate::talos::{self, ConfigFile, ExtensionServiceConfig, Identity};
 use anyhow::{Context, Result, bail};
 use sliplib_config::router::RouterConfig;
 use sliplib_config::v2::File;
-use sliplib_config::v2::platform::Daemon;
 use sliplib_mesh::model::Network;
 use sliplib_mesh::render::{NodeConfigs, node_configs};
 use sliplib_mesh::secrets::ResolvedSecrets;
@@ -67,15 +66,18 @@ fn legacy_nftables_file(ruleset: String) -> Result<ConfigFile> {
 /// `added` beside it, and the ruleset as [`legacy_nftables_file`] gives it.
 pub(crate) fn nftables_document(template: &str, added: Vec<ConfigFile>) -> Result<String> {
     let template_file = ConfigFile {
-        mount_path: nftables::template::TEMPLATE_PATH.to_string(),
+        mount_path: Service::Firewall.mount_path().to_owned(),
         content: template.to_owned(),
     };
     let files = std::iter::once(template_file)
         .chain(added)
         .chain([legacy_nftables_file(template.to_owned())?])
         .collect();
-    sliplib_yaml::to_string(&ExtensionServiceConfig::new("nftables", files))
-        .context("serializing the nftables document")
+    sliplib_yaml::to_string(&ExtensionServiceConfig::new(
+        Service::Firewall.name(),
+        files,
+    ))
+    .context("serializing the nftables document")
 }
 
 /// Refuses a router template the node would fail on: one that does not compile, reads a variable
@@ -127,9 +129,9 @@ impl Templates {
         let mut templates = Self::default();
         for document in files.templates_for(host) {
             let template = document.read()?;
-            match template.daemon {
-                Daemon::Router => templates.router = Some(template.content),
-                Daemon::Firewall => templates.firewall = Some(template.content),
+            match Service::of(template.daemon) {
+                Service::Router => templates.router = Some(template.content),
+                Service::Firewall => templates.firewall = Some(template.content),
             }
         }
         Ok(templates)
@@ -163,20 +165,23 @@ pub fn render(
         .chain(take_added_files(&mut patches, "awg")?)
         .collect();
     let router = [
-        config_file("router", sliplib_yaml::to_string(&router_cfg)?),
+        config_file(
+            Service::Router.name(),
+            sliplib_yaml::to_string(&router_cfg)?,
+        ),
         ConfigFile {
             mount_path: Service::Router.mount_path().to_owned(),
             content: router_template,
         },
     ]
     .into_iter()
-    .chain(take_added_files(&mut patches, "router")?)
+    .chain(take_added_files(&mut patches, Service::Router.name())?)
     .collect();
     let mut generated = vec![
         render_extension_service_document("awg", awg)?,
-        render_extension_service_document("router", router)?,
+        render_extension_service_document(Service::Router.name(), router)?,
     ];
-    let nftables_files = take_added_files(&mut patches, "nftables")?;
+    let nftables_files = take_added_files(&mut patches, Service::Firewall.name())?;
     match templates.firewall {
         Some(ruleset) => {
             nftables::template::compile(ruleset.clone())
