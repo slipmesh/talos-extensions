@@ -6,3 +6,4 @@ pub mod patch_file;
 pub mod patches;
 pub mod redact;
 pub(crate) mod talos;
+pub mod text;

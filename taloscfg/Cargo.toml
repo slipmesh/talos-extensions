@@ -16,6 +16,7 @@ path = "src/main.rs"
 # netlink-backed modules out, which is what lets this generator build off Linux.
 [dependencies]
 anyhow.workspace = true
+base16ct = { version = "1.0.0", features = ["alloc"] }
 clap.workspace = true
 nftables.workspace = true
 router.workspace = true
