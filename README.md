@@ -268,9 +268,9 @@ declares it all:
 
 - `node.loopback_addresses` - this node's own IPv4+IPv6 loopback identity;
 - `bgp_peers` - every other mesh node's name + IPv6 loopback (static by necessity);
-- `ospf_interfaces` - exact interface names, shell-glob patterns like `"mesh-*"`, or CIDRs
-  matching an interface's address - fed straight into BIRD's own `interface` clause, so nothing
-  here needs to know what `awg` actually named its interfaces;
+- `ospf_interfaces` - interface names, or a prefix and `*` like `"mesh-*"` - fed straight into
+  BIRD's own `interface` clause, so nothing here needs to know what `awg` actually named its
+  interfaces;
 - `direct_interfaces` - interfaces whose own addresses should be announced (`protocol direct`);
 - `learn` - IPv4 CIDRs: any kernel route equal to or inside one is picked up and re-announced over
   iBGP, whoever installed it. This is how a node's pod subnet gets announced without naming the
@@ -439,11 +439,17 @@ configFiles:
       listen: 198.51.100.2
 ```
 
+The generator reads of a `patch` document only what it uses: its `apiVersion`, `kind` and `name`,
+each a string, a `KubeNodeConfig`'s `annotations`, a mapping, and what is set on a generated
+document. A value of the wrong type there is refused at its key and line; every other key goes to
+Talos as written.
+
 A `patch` document may also name a generated `ExtensionServiceConfig`, `awg`, `router` or
 `nftables`, to add files to it: the files follow the generated ones in that same document, since
-Talos takes one document per name. It may set `configFiles` and nothing else, and none of them at a
-path the generator writes. A `patch` that adds files to `nftables` on a node no `firewall` template
-reaches is refused, since that node gets no `nftables` document.
+Talos takes one document per name. It may set `configFiles` and nothing else, each entry a
+`mountPath` and a `content`, and none of them at a path the generator writes. A `patch` that adds
+files to `nftables` on a node no `firewall` template reaches is refused, since that node gets no
+`nftables` document.
 
 ### Templates
 
