@@ -4,7 +4,7 @@
 use crate::defaults::Service;
 use crate::talos::{self, Identity};
 use anyhow::{Context, Result, bail, ensure};
-use sliplib_config::v2::{File, PatchDocument};
+use sliplib_config::v2::{AimedDocument, File};
 use sliplib_yaml::Value;
 
 /// Where the `nftables` daemon read its ruleset before it took a template.
@@ -58,7 +58,7 @@ pub fn check(files: &File) -> Result<()> {
     files.patches().iter().try_for_each(check_one)
 }
 
-fn check_one(patch: &PatchDocument) -> Result<()> {
+fn check_one(patch: &AimedDocument) -> Result<()> {
     let place = patch.aim();
     let identity = Identity::of(patch.value());
     let Some(kind) = &identity.kind else {
@@ -107,7 +107,7 @@ fn check_one(patch: &PatchDocument) -> Result<()> {
 /// Documents of one identity are merged in the order of their rank, so the more specific document
 /// wins wherever it sits in the file.
 pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
-    let reaching: Vec<&PatchDocument> = files
+    let reaching: Vec<&AimedDocument> = files
         .patches()
         .iter()
         .filter(|patch| patch.aim().reaches(host))
@@ -124,7 +124,7 @@ pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
     identities
         .into_iter()
         .map(|identity| {
-            let mut sources: Vec<&PatchDocument> = reaching
+            let mut sources: Vec<&AimedDocument> = reaching
                 .iter()
                 .filter(|patch| Identity::of(patch.value()) == identity)
                 .copied()

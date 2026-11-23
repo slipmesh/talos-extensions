@@ -5,15 +5,17 @@
 //! files the `patch` documents add to it.
 
 use crate::defaults::Service;
+use crate::documents::{Listener, TalosSettings, Template};
 use crate::patches::{self, HostDocument, LEGACY_NFTABLES_PATH};
 use crate::talos::{self, ConfigFile, ExtensionServiceConfig, Identity};
 use anyhow::{Context, Result, bail};
+use common::daemon::{AwgDaemonConfig, MetricsConfig, RouterDaemonConfig};
 use sliplib_config::router::RouterConfig;
 use sliplib_config::v2::File;
-use sliplib_mesh::model::Network;
+use sliplib_mesh::Mesh;
 use sliplib_mesh::render::{NodeConfigs, node_configs};
-use sliplib_mesh::secrets::ResolvedSecrets;
 use sliplib_yaml::Mapping;
+use std::net::Ipv4Addr;
 
 /// What opens every patch file this tool writes.
 pub const HEADER: &str =
@@ -144,7 +146,7 @@ impl Templates {
     fn of(files: &File, host: &str, router: &RouterConfig) -> Result<Self> {
         let mut templates = Self::default();
         for document in files.templates_for(host) {
-            let template = document.read()?;
+            let template = Template::of(document)?;
             let service = Service::of(template.daemon);
             let invalid = || format!("{}: the {service} template is invalid", document.aim());
             match service {
@@ -166,25 +168,38 @@ impl Templates {
 /// node: one of computing its configs does already.
 pub fn render(
     files: &File,
-    network: &Network,
-    resolved: &ResolvedSecrets,
+    network: &Mesh<'_>,
+    settings: &TalosSettings,
     host: &str,
 ) -> Result<String> {
-    let configs = node_configs(network, host, resolved)?;
-    render_node(files, network, resolved, host, configs).with_context(|| format!("node {host:?}"))
+    let NodeConfigs { awg, router } = node_configs(network, host)?;
+    let loopback = network.addresses(network.node(host)?).loopback.0;
+    let metrics = settings.metrics.clone().unwrap_or_default();
+    let awg_cfg = AwgDaemonConfig {
+        mesh: awg,
+        metrics: listener(loopback, metrics.mesh.as_ref()),
+    };
+    let router_cfg = RouterDaemonConfig {
+        mesh: router,
+        metrics: listener(loopback, metrics.router.as_ref()),
+    };
+    render_node(files, network, host, awg_cfg, router_cfg).with_context(|| format!("node {host:?}"))
+}
+
+fn listener(loopback: Ipv4Addr, listener: Option<&Listener>) -> Option<MetricsConfig> {
+    listener.map(|listener| MetricsConfig {
+        listen: format!("{loopback}:{}", listener.port),
+    })
 }
 
 fn render_node(
     files: &File,
-    network: &Network,
-    resolved: &ResolvedSecrets,
+    network: &Mesh<'_>,
     host: &str,
-    NodeConfigs {
-        awg: awg_cfg,
-        router: router_cfg,
-    }: NodeConfigs,
+    awg_cfg: AwgDaemonConfig,
+    router_cfg: RouterDaemonConfig,
 ) -> Result<String> {
-    let templates = Templates::of(files, host, &router_cfg)?;
+    let templates = Templates::of(files, host, &router_cfg.mesh)?;
     let Some(router_template) = templates.router else {
         bail!(
             "no `template` document for the router reaches it, and its routing daemon does not \
@@ -228,16 +243,23 @@ fn render_node(
     }
 
     let node = network.node(host)?;
+    let classes: Vec<(String, u8)> = network
+        .network()
+        .routing
+        .classes
+        .iter()
+        .map(|(name, class)| (name.to_string(), class.protocol))
+        .collect();
     publish_annotations(
         &mut patches,
         crate::annotations::for_node(&crate::annotations::Values {
-            interface_prefix: &network.interface_prefix,
-            classes: &network.classes,
+            interface_prefix: network.interface_prefix(),
+            classes: &classes,
             endpoint: node
-                .endpoint
-                .as_ref()
-                .map(|endpoint| endpoint.written.as_str()),
-            mesh_mtu: sliplib_mesh::mtu::mesh_mtu(network, resolved)?,
+                .underlay()
+                .and_then(|underlay| underlay.endpoint.as_ref())
+                .map(|endpoint| endpoint.host()),
+            mesh_mtu: sliplib_mesh::mtu::mesh_mtu(network)?,
         }),
     )?;
     let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
@@ -347,6 +369,37 @@ content: "table inet x {{}}"
         assert!(!a.contains("\n\n---\n") && !a.ends_with("\n\n"), "{a}");
     }
 
+    /// Where `a`'s `awg` and `router` listen, with `settings` as the body of `talos`'s `platform`.
+    fn listeners(settings: &str) -> (Option<String>, Option<String>) {
+        let raw = format!(
+            "{}---\nslipmesh: {{kind: platform, platform: talos}}\n{settings}\n",
+            with_router_files(&[("", TEMPLATE)])
+        );
+        let a = render_raw(&raw, "a").unwrap();
+        let listen = |name: &str| {
+            let config: sliplib_yaml::Value =
+                sliplib_yaml::from_str(content(&generated_document(&a, name).unwrap())).unwrap();
+            config
+                .get("metrics")
+                .map(|metrics| metrics["listen"].as_str().unwrap().to_owned())
+        };
+        (listen("awg"), listen("router"))
+    }
+
+    #[test]
+    fn the_daemons_listen_on_the_nodes_ipv4_loopback_at_the_ports_of_talos() {
+        let at = |port: u16| Some(format!("198.51.100.1:{port}"));
+        assert_eq!(
+            listeners("metrics: {mesh: {port: 9586}, router: {port: 9324}}"),
+            (at(9586), at(9324))
+        );
+        assert_eq!(
+            listeners("metrics: {router: {port: 9324}}"),
+            (None, at(9324))
+        );
+        assert_eq!(listeners("metrics: {}"), (None, None));
+    }
+
     fn kube_node_configs(file: &str) -> Vec<sliplib_yaml::Value> {
         documents(file)
             .into_iter()
@@ -408,9 +461,8 @@ content: "table inet x {{}}"
 
     fn render_raw(raw: &str, host: &str) -> Result<String> {
         let files = File::parse(raw).unwrap();
-        let network = sliplib_mesh::v2::lower(&files).unwrap();
-        let resolved = sliplib_mesh::secrets::read(&network);
-        render(&files, &network, &resolved, host)
+        let network = Mesh::of(&files).unwrap();
+        render(&files, &network, &TalosSettings::of(&files).unwrap(), host)
     }
 
     fn router_files(patch: &str) -> Vec<(String, String)> {

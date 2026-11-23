@@ -2,6 +2,7 @@
 
 pub mod annotations;
 pub mod defaults;
+pub mod documents;
 pub mod patch_file;
 pub mod patches;
 pub mod redact;

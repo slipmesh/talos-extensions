@@ -404,8 +404,8 @@ async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sliplib_config::Obfuscation;
     use sliplib_config::awg::{InterfaceEntry, PeerEntry};
-    use sliplib_config::{MetricsConfig, Obfuscation};
 
     // Public keys are opaque identifiers to everything in this module - nothing here decodes them,
     // they only join a config entry to its dump entry - so the fixtures say what they are instead
@@ -432,7 +432,6 @@ mod tests {
             addresses: vec![],
             private_key: PRIVATE_KEY.into(),
             obfuscation: Obfuscation::default(),
-            handshake_stale_secs: None,
             mtu: None,
             peers,
         }
@@ -449,9 +448,6 @@ mod tests {
                     vec![peer(RW_PEER, Some("client-one"), Some(&["203.0.113.5/32"]))],
                 ),
             ],
-            metrics: Some(MetricsConfig {
-                listen: "198.51.100.1:9586".to_string(),
-            }),
         }
     }
 
@@ -538,7 +534,6 @@ mod tests {
                 "rw-north",
                 vec![peer(RW_PEER, None, Some(&["203.0.113.9/32"]))],
             )],
-            metrics: None,
         };
         let out = render(
             &cfg,
@@ -749,10 +744,7 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let cfg = Arc::new(AwgConfig {
-            interfaces: vec![],
-            metrics: None,
-        });
+        let cfg = Arc::new(AwgConfig { interfaces: vec![] });
         let (_tx, rx) = watch::channel(ReconcileSnapshot::default());
         tokio::spawn(serve(listener, cfg, rx));
 

@@ -1,5 +1,6 @@
 use awg::handshake::ReconcileSnapshot;
 use awg::{gc, handshake, interface, metrics};
+use common::daemon::{AwgDaemonConfig, MetricsConfig};
 use sliplib_config::awg as config;
 
 use anyhow::{Context, Result};
@@ -15,6 +16,9 @@ use tokio::sync::watch;
 /// Fixed path, matching `extension-services/awg.yaml`'s `configFiles[].mountPath` - never an env
 /// var or CLI flag: everything comes from the `ExtensionServiceConfig`, nothing else.
 const CONFIG_PATH: &str = "/etc/talos-extensions/awg.yaml";
+
+/// Seconds after its last handshake that a tracked peer's routes go.
+const HANDSHAKE_STALE_SECS: u64 = 180;
 /// Inside the 10 s Talos waits after SIGTERM before it sends SIGKILL.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -37,10 +41,10 @@ async fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    let cfg: config::AwgConfig =
+    let daemon: AwgDaemonConfig =
         sliplib_yaml::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
-    config::validate(&cfg).context("config validation failed")?;
-    let cfg = Arc::new(cfg);
+    daemon.validate().context("config validation failed")?;
+    let cfg = Arc::new(daemon.mesh);
 
     tracing::info!(interfaces = cfg.interfaces.len(), "starting awg");
 
@@ -81,7 +85,7 @@ async fn run() -> Result<()> {
 
     let tracked = build_tracked_interfaces(&rt, &cfg).await?;
     let (verdict_tx, verdict_rx) = tokio::sync::watch::channel(ReconcileSnapshot::default());
-    spawn_metrics(&cfg, verdict_rx);
+    spawn_metrics(daemon.metrics.as_ref(), &cfg, verdict_rx);
 
     tracing::info!(
         tracked_interfaces = tracked.len(),
@@ -97,15 +101,19 @@ async fn run() -> Result<()> {
 /// A failure here is logged and dropped rather than returned. Reconciliation is the daemon's job
 /// and must survive a listener that could not bind; the scrape failing is itself the signal, which
 /// is the whole reason this serves rather than writing a file.
-fn spawn_metrics(cfg: &Arc<config::AwgConfig>, verdict: watch::Receiver<ReconcileSnapshot>) {
-    let Some(metrics) = &cfg.metrics else {
+fn spawn_metrics(
+    metrics: Option<&MetricsConfig>,
+    cfg: &Arc<config::AwgConfig>,
+    verdict: watch::Receiver<ReconcileSnapshot>,
+) {
+    let Some(metrics) = metrics else {
         tracing::info!("no metrics section in the config - not listening");
         return;
     };
     let listen: SocketAddr = match metrics.listen.parse() {
         Ok(listen) => listen,
         Err(e) => {
-            // `config::validate` already parsed this, so reaching here means the two disagree.
+            // `validate` already parsed it: the two disagree.
             tracing::error!(listen = metrics.listen, error = %e, "metrics: unusable listen address");
             return;
         }
@@ -176,9 +184,7 @@ async fn build_tracked_interfaces(
         out.push(handshake::TrackedInterface {
             name: iface.name.clone(),
             index,
-            stale_secs: iface
-                .handshake_stale_secs
-                .unwrap_or(config::DEFAULT_HANDSHAKE_STALE_SECS),
+            stale_secs: HANDSHAKE_STALE_SECS,
             peers,
         });
     }

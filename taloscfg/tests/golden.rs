@@ -5,11 +5,13 @@
 //! the files here: no pool interface, no bypass list, no label on what is announced, the link's
 //! port where a node's endpoint held another, the endpoint annotation without that port, and the
 //! `nftables` document, which the generator makes from a `template` now, after `router` and not
-//! among the `patch` documents. A change of what a node gets fails here, and changes what the
-//! nodes of a working network are configured with.
+//! among the `patch` documents; the addresses of a `node_id` the conversion replaced; and no
+//! `handshake_stale_secs`, which the `awg` daemon no longer reads. A change of what a node gets
+//! fails here, and changes what the nodes of a working network are configured with.
 
-use sliplib_config::awg::AwgConfig;
-use sliplib_config::router::RouterConfig;
+use common::daemon::{AwgDaemonConfig, MetricsConfig, RouterDaemonConfig};
+use serde::{Deserialize, Serialize};
+use sliplib_config::awg::{AwgConfig, InterfaceEntry};
 use sliplib_yaml::{MultiDoc, Value};
 use std::path::Path;
 use std::process::Command;
@@ -28,6 +30,24 @@ struct Twin {
     redialed: &'static [(&'static str, &'static str)],
     /// The same endpoint in the node's annotation, and the address it carries now.
     annotated: &'static [(&'static str, &'static str)],
+    /// An address of a `node_id` too wide for its network, and the one of its replacement.
+    renumbered: &'static [(&'static str, &'static str)],
+}
+
+/// Version 1's `awg` file: an interface held `handshake_stale_secs`.
+#[derive(Deserialize, Serialize)]
+struct Awg {
+    interfaces: Vec<Interface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metrics: Option<MetricsConfig>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct Interface {
+    #[serde(flatten)]
+    shared: InterfaceEntry,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    handshake_stale_secs: Option<u64>,
 }
 
 const FULL: Twin = Twin {
@@ -36,6 +56,7 @@ const FULL: Twin = Twin {
     nodes: &["node-a", "node-b", "node-c", "node-d", "node-e", "node-f"],
     redialed: &[("192.0.2.4:51999", "192.0.2.4:51832")],
     annotated: &[("192.0.2.4:51999", "192.0.2.4")],
+    renumbered: &[],
 };
 
 const ALTERNATE: Twin = Twin {
@@ -44,6 +65,14 @@ const ALTERNATE: Twin = Twin {
     nodes: &["east", "west", "south"],
     redialed: &[],
     annotated: &[],
+    // east was 198.51.100.133 and west 0.0.1.2, cut by version 1 to 0.0.0.5 and 0.0.0.2 in the
+    // IPv4 loopback's /25 and not in the IPv6 one's /64.
+    renumbered: &[
+        ("3fff::1:0:0:c633:6485", "3fff:0:0:1::5"),
+        ("fe80::c633:6485", "fe80::5"),
+        ("3fff:0:0:1::102", "3fff:0:0:1::2"),
+        ("fe80::102", "fe80::2"),
+    ],
 };
 
 fn generate(config: &Path, patches: &Path) {
@@ -88,26 +117,47 @@ fn position(documents: &[Value], name: &str) -> Option<usize> {
 }
 
 /// The text of the first file of the `ExtensionServiceConfig` named `name`, the daemon's config,
-/// read as `T`, edited by `edit` and written back.
-fn edit_config<T>(documents: &mut [Value], name: &str, edit: impl FnOnce(&mut T))
+/// read as `R`, made a `T`, edited by `edit` and written back.
+fn edit_config<R, T>(documents: &mut [Value], name: &str, edit: impl FnOnce(&mut T))
 where
-    T: serde::de::DeserializeOwned + serde::Serialize,
+    R: serde::de::DeserializeOwned + Serialize + Into<T>,
+    T: Serialize,
 {
     let index = position(documents, name).unwrap();
     let content = &mut documents[index]["configFiles"][0]["content"];
     let text = content.as_str().unwrap();
-    let mut config: T = sliplib_yaml::from_str(text).unwrap();
-    // Read and written back, the config is the text it holds: a key `T` does not know would
-    // otherwise vanish from the expected side unseen.
-    assert_eq!(sliplib_yaml::to_string(&config).unwrap(), text, "{name}");
+    let read: R = sliplib_yaml::from_str(text).unwrap();
+    // By value: a key `R` does not know would otherwise vanish from the expected side unseen.
+    assert_eq!(
+        sliplib_yaml::to_value(&read).unwrap(),
+        sliplib_yaml::from_str::<Value>(text).unwrap(),
+        "{name}"
+    );
+    let mut config = read.into();
     edit(&mut config);
     *content = sliplib_yaml::to_string(&config).unwrap().into();
 }
 
+impl From<Awg> for AwgDaemonConfig {
+    fn from(awg: Awg) -> Self {
+        Self {
+            mesh: AwgConfig {
+                interfaces: awg.interfaces.into_iter().map(|i| i.shared).collect(),
+            },
+            metrics: awg.metrics,
+        }
+    }
+}
+
 /// The patch file version 1 gave a node, `file`, as `twin` gives it after a conversion.
 fn converted(twin: &Twin, file: &str) -> String {
-    let mut documents = documents(file);
-    edit_config(&mut documents, "awg", |awg: &mut AwgConfig| {
+    let file = twin
+        .renumbered
+        .iter()
+        .fold(file.to_owned(), |text, (was, now)| text.replace(was, now));
+    let mut documents = documents(&file);
+    edit_config::<Awg, _>(&mut documents, "awg", |awg: &mut AwgDaemonConfig| {
+        let awg = &mut awg.mesh;
         awg.interfaces
             .retain(|interface| !interface.name.starts_with("rw-"));
         let endpoints = awg
@@ -121,12 +171,17 @@ fn converted(twin: &Twin, file: &str) -> String {
             }
         }
     });
-    edit_config(&mut documents, "router", |router: &mut RouterConfig| {
-        router.bypass = None;
-        for announced in &mut router.announce {
-            announced.label = None;
-        }
-    });
+    edit_config::<RouterDaemonConfig, _>(
+        &mut documents,
+        "router",
+        |router: &mut RouterDaemonConfig| {
+            let router = &mut router.mesh;
+            router.bypass = None;
+            for announced in &mut router.announce {
+                announced.label = None;
+            }
+        },
+    );
     if let Some(nftables) = position(&documents, "nftables") {
         let nftables = documents.remove(nftables);
         let router = position(&documents, "router").unwrap();

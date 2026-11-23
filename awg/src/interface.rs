@@ -727,7 +727,6 @@ mod tests {
             addresses: vec![],
             private_key: encode_key(&KEY).as_str().into(),
             obfuscation,
-            handshake_stale_secs: None,
             mtu: None,
             peers: vec![],
         }

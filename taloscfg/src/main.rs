@@ -11,10 +11,10 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use sliplib_config::v2::{File, Platform};
-use sliplib_mesh::model::{MetricsPorts, Network};
-use sliplib_mesh::secrets::ResolvedSecrets;
+use sliplib_mesh::Mesh;
 use sliplib_yaml::MultiDoc;
 use std::path::{Path, PathBuf};
+use taloscfg::documents::{TalosSettings, Template};
 use taloscfg::{defaults, patch_file, patches};
 
 #[derive(Parser)]
@@ -70,15 +70,18 @@ fn main() -> Result<()> {
     }
 }
 
-/// The files at `config_path`, read and checked as far as this generator reads them, and the
-/// network they give, with the metrics ports of `talos`.
-fn read_slipmesh(config_path: &Path) -> Result<(File, Network)> {
+/// Checked as far as this generator reads them, with the settings of `talos`.
+fn read_slipmesh(config_path: &Path) -> Result<(File, TalosSettings)> {
     let reading = || format!("reading {}", config_path.display());
     let files = File::read(&MultiDoc::read(config_path)?).with_context(reading)?;
     patches::check(&files).with_context(reading)?;
-    let mut network = sliplib_mesh::v2::lower(&files).with_context(reading)?;
-    network.metrics = MetricsPorts::from(&files.talos_settings().with_context(reading)?);
-    Ok((files, network))
+    let settings = TalosSettings::of(&files).with_context(reading)?;
+    Ok((files, settings))
+}
+
+/// The refusal names the file.
+fn mesh_of<'a>(files: &'a File, config_path: &Path) -> Result<Mesh<'a>> {
+    Mesh::of(files).with_context(|| format!("reading {}", config_path.display()))
 }
 
 /// A warning for every `template` document reaching one of `targets` whose `base` is not the hash
@@ -89,7 +92,7 @@ fn base_warnings(files: &File, targets: &[&str]) -> Result<Vec<String>> {
         if !targets.iter().any(|target| document.aim().reaches(target)) {
             continue;
         }
-        let template = document.read()?;
+        let template = Template::of(document)?;
         let service = defaults::Service::of(template.daemon);
         if template.base.digest() == service.digest() {
             continue;
@@ -129,7 +132,8 @@ fn generate(
     config_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
-    let (files, network) = read_slipmesh(config_path)?;
+    let (files, settings) = read_slipmesh(config_path)?;
+    let network = mesh_of(&files, config_path)?;
     if let Some(n) = node {
         let platform = network.node(n)?.platform;
         anyhow::ensure!(
@@ -150,24 +154,24 @@ fn generate(
         config_path.display(),
         untemplated.join(" and ")
     );
-    let resolved = sliplib_mesh::secrets::read(&network);
     let targets: Vec<&str> = match node {
         Some(n) => vec![n],
         None => network
+            .network()
             .nodes
             .iter()
-            .filter(|node| node.platform == Platform::Talos)
-            .map(|node| node.name.as_str())
+            .filter(|(_, node)| node.platform == Platform::Talos)
+            .map(|(name, _)| name.as_str())
             .collect(),
     };
 
     // Every host is rendered and validated before anything is written, so a host that fails
     // leaves the patch files as they were rather than half of them new.
-    let hosts = render_hosts(&files, &network, &resolved, &targets, patches_dir)?;
+    let hosts = render_hosts(&files, &network, &settings, &targets, patches_dir)?;
 
     // Told in every mode, and failing none: the files are valid, and their writer should still
     // know.
-    for warning in sliplib_mesh::warnings::warnings(&network, &resolved)
+    for warning in sliplib_mesh::warnings::warnings(&network)
         .iter()
         .filter(|warning| targets.iter().any(|target| warning.concerns(target)))
     {
@@ -201,16 +205,17 @@ fn generate(
 /// Every target host's patch file, rendered and validated in memory.
 fn render_hosts(
     files: &File,
-    network: &Network,
-    resolved: &ResolvedSecrets,
+    network: &Mesh<'_>,
+    settings: &TalosSettings,
     targets: &[&str],
     patches_dir: &Path,
 ) -> Result<Vec<HostFile>> {
     targets
         .iter()
         .map(|&host| {
-            let after =
-                patch_file::render(files, network, resolved, host).map_err(with_its_cure)?;
+            // One line: `main`'s `{:?}` would print the chain over several.
+            let after = patch_file::render(files, network, settings, host)
+                .map_err(|refusal| anyhow::anyhow!("{refusal:#}"))?;
             let path = patches_dir.join(format!("{host}.yaml"));
             // A missing file is the from-scratch case; anything else must not read as "there was
             // nothing here", or the diff would show a whole file where one line changed.
@@ -223,18 +228,6 @@ fn render_hosts(
             })
         })
         .collect()
-}
-
-/// `refusal`, with the command that creates the secret when a missing one is what it is about.
-fn with_its_cure(refusal: anyhow::Error) -> anyhow::Error {
-    let lacks_a_secret = refusal
-        .downcast_ref::<sliplib_mesh::render::Error>()
-        .is_some_and(|refusal| refusal.missing_secret().is_some());
-    if lacks_a_secret {
-        anyhow::anyhow!("{refusal:#} - `slipmesh mint` creates it")
-    } else {
-        refusal
-    }
 }
 
 /// A unified diff of one host's patch file with its secrets masked, `None` when nothing would
@@ -499,9 +492,13 @@ installer:
                 let paths = setup_from(&network, "");
                 let before = paths.snapshot();
                 let err = paths.generate(Some(node), check, diff).unwrap_err();
-                let err = format!("{err:#}");
+                // As `main` prints it: one line.
+                let err = format!("{err:?}");
                 assert!(err.contains(missing), "{missing}: {err}");
-                assert!(err.contains("`slipmesh mint`"), "{missing}: {err}");
+                assert!(
+                    !err.contains('\n') && err.ends_with(" - `slipmesh mint` creates it"),
+                    "{missing}: {err}"
+                );
                 assert_eq!(paths.snapshot(), before, "{missing}");
             }
         }
@@ -697,12 +694,12 @@ installer:
     fn two_runs_render_the_same() {
         let paths = setup("");
         let render = || {
-            let (files, network) = read_slipmesh(&paths.config).unwrap();
-            let resolved = sliplib_mesh::secrets::read(&network);
+            let (files, settings) = read_slipmesh(&paths.config).unwrap();
+            let network = Mesh::of(&files).unwrap();
             render_hosts(
                 &files,
                 &network,
-                &resolved,
+                &settings,
                 &["a", "b", "c", "d"],
                 &paths.patches,
             )

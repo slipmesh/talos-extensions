@@ -18,6 +18,7 @@ path = "src/main.rs"
 anyhow.workspace = true
 base16ct = { version = "1.0.0", features = ["alloc"] }
 clap.workspace = true
+common.workspace = true
 nftables.workspace = true
 router.workspace = true
 serde.workspace = true

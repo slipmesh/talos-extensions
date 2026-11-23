@@ -1,8 +1,9 @@
 use router::{bird, bird_conf, bird_process, exporter, resolver};
 
 use anyhow::{Context, Result};
+use common::daemon::{MetricsConfig, RouterDaemonConfig};
 use common::netlink::rt::RtClient;
-use sliplib_config::router::{self as config, RouterConfig};
+use sliplib_config::router as config;
 use sliplib_runtime::Shutdown;
 use std::path::Path;
 use std::sync::Arc;
@@ -48,7 +49,7 @@ async fn main() -> Result<()> {
 /// there's nothing here that's watched, only what `router.yaml` declared once at startup.
 struct RouterState {
     inputs: bird_conf::StaticInputs,
-    metrics: Option<sliplib_config::MetricsConfig>,
+    metrics: Option<MetricsConfig>,
     bypass_cfg: Option<config::BypassConfig>,
     /// Last-successful bypass resolution - re-resolving (RIPEstat/DNS) only happens on the
     /// startup/refresh-interval schedule (`bypass_refresh_loop`); a resolve failure serves this
@@ -112,9 +113,10 @@ async fn run(shutdown: Shutdown) -> Result<()> {
 
 /// Everything before `bird` is spawned: config, template, `router-lo`, and a `bird.conf` on disk.
 async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
-    let cfg: RouterConfig =
+    let daemon: RouterDaemonConfig =
         sliplib_yaml::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
-    config::validate(&cfg).context("config validation failed")?;
+    daemon.validate().context("config validation failed")?;
+    let RouterDaemonConfig { mesh: cfg, metrics } = daemon;
     // Read before anything on the node is touched: without a template there is no bird.conf to
     // write, and nothing to fall back on - the template is the node's config, not this binary's.
     let template_source = tokio::fs::read_to_string(bird_conf::TEMPLATE_PATH)
@@ -140,7 +142,7 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
     let ctx = Arc::new(RouterState {
         inputs,
         bypass_cfg: cfg.bypass,
-        metrics: cfg.metrics,
+        metrics,
         bypass_cache: Mutex::new(None),
         render_lock: Mutex::new(()),
         template,
