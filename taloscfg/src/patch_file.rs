@@ -7,7 +7,7 @@
 use crate::defaults::Service;
 use crate::documents::{Listener, TalosSettings, Template};
 use crate::patches::{self, HostDocument, LEGACY_NFTABLES_PATH};
-use crate::talos::{self, ConfigFile, ExtensionServiceConfig, Identity};
+use crate::talos::{self, ConfigFile, ExtensionServiceConfig};
 use anyhow::{Context, Result, bail};
 use common::daemon::{AwgDaemonConfig, MetricsConfig, RouterDaemonConfig};
 use sliplib_config::router::RouterConfig;
@@ -112,7 +112,7 @@ fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) ->
         None => {
             let value = talos::kube_node_config();
             patches.push(HostDocument {
-                identity: Identity::of(&value).to_string(),
+                identity: talos::KUBE_NODE_CONFIG.to_owned(),
                 origin: "the KubeNodeConfig the generator adds".to_owned(),
                 text: String::new(),
                 value,

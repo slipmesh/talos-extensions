@@ -2,8 +2,8 @@
 //! knows them, and merged into what one host gets.
 
 use crate::defaults::Service;
-use crate::talos::{self, Identity};
-use anyhow::{Context, Result, bail, ensure};
+use crate::talos::{self, AddedToGenerated, Annotations, Identity};
+use anyhow::{Context, Result, bail};
 use sliplib_config::v2::{AimedDocument, File};
 use sliplib_yaml::Value;
 
@@ -60,11 +60,15 @@ pub fn check(files: &File) -> Result<()> {
 
 fn check_one(patch: &AimedDocument) -> Result<()> {
     let place = patch.aim();
-    let identity = Identity::of(patch.value());
+    let identity: Identity = patch.read()?;
     let Some(kind) = &identity.kind else {
         bail!("{place}: has no Talos `kind`, so it has no identity to merge by");
     };
-    if let Some(set) = talos::annotation_in(patch.value(), crate::annotations::NAMESPACE) {
+    if kind == talos::KUBE_NODE_CONFIG
+        && let Some(set) = patch
+            .read::<Annotations>()?
+            .first_in(crate::annotations::NAMESPACE)
+    {
         bail!(
             "{place}: sets the annotation {set}, and those under {} are generated - take it out \
              of the document",
@@ -72,25 +76,20 @@ fn check_one(patch: &AimedDocument) -> Result<()> {
         );
     }
     if let Some(name) = &identity.name
-        && kind == "ExtensionServiceConfig"
+        && kind == talos::EXTENSION_SERVICE_CONFIG
         && let Some((_, generated)) = GENERATED.iter().find(|(n, _)| n == name)
     {
-        let others: Vec<&str> = patch
-            .value()
-            .as_mapping()
-            .into_iter()
-            .flatten()
-            .filter_map(|(key, _)| key.as_str())
-            .filter(|key| !["apiVersion", "kind", "name", "configFiles"].contains(key))
-            .collect();
-        ensure!(
-            others.is_empty(),
-            "{place}: `ExtensionServiceConfig` {name:?} is generated - a patch may add \
-             `configFiles` to it and nothing else, not {others:?}"
-        );
-        if let Some(over) = generated
+        let added: AddedToGenerated = patch.read().with_context(|| {
+            format!(
+                "`ExtensionServiceConfig` {name:?} is generated - a patch may add `configFiles` \
+                 to it and nothing else"
+            )
+        })?;
+        if let Some(over) = added
+            .config_files
             .iter()
-            .find(|path| talos::sets_file(patch.value(), name, path))
+            .map(|file| file.mount_path.as_str())
+            .find(|path| generated.contains(path))
         {
             bail!(
                 "{place}: {over} is a file the generator writes for {name:?} - add files next to \
@@ -113,9 +112,12 @@ pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
         .filter(|patch| patch.aim().reaches(host))
         .collect();
 
-    let mut identities: Vec<Identity> = Vec::new();
-    for patch in &reaching {
-        let identity = Identity::of(patch.value());
+    let read: Vec<(Identity, &AimedDocument)> = reaching
+        .into_iter()
+        .map(|patch| Ok((patch.read::<Identity>()?, patch)))
+        .collect::<Result<_>>()?;
+    let mut identities: Vec<&Identity> = Vec::new();
+    for (identity, _) in &read {
         if !identities.contains(&identity) {
             identities.push(identity);
         }
@@ -124,10 +126,10 @@ pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
     identities
         .into_iter()
         .map(|identity| {
-            let mut sources: Vec<&AimedDocument> = reaching
+            let mut sources: Vec<&AimedDocument> = read
                 .iter()
-                .filter(|patch| Identity::of(patch.value()) == identity)
-                .copied()
+                .filter(|(of, _)| of == identity)
+                .map(|(_, patch)| *patch)
                 .collect();
             // Stable: of two of one rank, the later read stays the later.
             sources.sort_by_key(|patch| patch.aim().rank());
@@ -395,6 +397,114 @@ nodes:
                 "{err}"
             );
         }
+    }
+
+    /// The line `documents[index]` starts at once they are joined as `parse` joins them.
+    fn line_of(documents: &[&str], index: usize) -> usize {
+        documents[..index]
+            .iter()
+            .map(|document| document.lines().count() + 1)
+            .sum::<usize>()
+            + 1
+    }
+
+    #[test]
+    fn a_typo_in_the_second_of_two_patches_names_that_patch_its_entry_and_line() {
+        let first = generated_with(
+            "awg",
+            "configFiles:\n  - mountPath: /etc/talos-extensions/extra\n    content: x\n",
+        );
+        let second = generated_with(
+            "awg",
+            "configFiles:\n  - mountpath: /etc/talos-extensions/other\n    content: y\n",
+        );
+        let documents = [NETWORK, &first, &second];
+        let err = error(&documents);
+        let start = line_of(&documents, 2);
+        assert!(
+            err.contains(&format!("the `kind: patch` document at line {start}"))
+                && err.contains("configFiles[0]: unknown field `mountpath`")
+                && err.contains(&format!("at line {}", start + 7)),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_kind_or_name_that_is_not_a_string_is_refused_by_its_key_and_line() {
+        for (body, key, offset) in [
+            ("apiVersion: v1alpha1\nkind: 5\n", "kind", 4),
+            (
+                "apiVersion: v1alpha1\nkind: KubeletConfig\nname: [x]\n",
+                "name",
+                5,
+            ),
+        ] {
+            let documents = [NETWORK, &patch("", body)];
+            let err = error(&documents);
+            let line = line_of(&documents, 1) + offset;
+            assert!(
+                err.contains(&format!("{key}: invalid type"))
+                    && err.contains(&format!("at line {line}")),
+                "{body}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn annotations_that_are_not_a_mapping_are_refused_at_the_check() {
+        let documents = [NETWORK, &kube_node_config("", "[x]")];
+        let err = error(&documents);
+        let line = line_of(&documents, 1) + 5;
+        assert!(
+            err.contains("annotations: invalid type") && err.contains(&format!("at line {line}")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_on_a_generated_document_is_refused_by_its_line_saying_why() {
+        let documents = [
+            NETWORK,
+            &generated_with("awg", "environment:\n  - RUST_LOG=debug\n"),
+        ];
+        let err = error(&documents);
+        let line = line_of(&documents, 1) + 6;
+        assert!(
+            err.contains("is generated - a patch may add `configFiles` to it and nothing else")
+                && err.contains("unknown field `environment`")
+                && err.contains(&format!("at line {line}")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_key_the_generator_does_not_read_passes_as_written() {
+        let kubelet = kubelet("", "    v: \"4\"\nextra: [1, {a: b}]\n");
+        let device = patch(
+            "",
+            "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nenvironment: \
+             [X=1]\nconfigFiles:\n  - mountPath: /etc/device\n    content: x\n    mode: 5\n",
+        );
+        let node = patch(
+            "",
+            "apiVersion: v1alpha1\nkind: KubeNodeConfig\nlabels: {role: edge}\nannotations: \
+             {example.com/a: [1]}\n",
+        );
+        let parsed = parse(&[NETWORK, &kubelet, &device, &node]);
+        check(&parsed).unwrap();
+        let documents = for_host(&parsed, "node-a").unwrap();
+        let texts: Vec<&str> = documents.iter().map(|d| d.text.as_str()).collect();
+        assert!(texts[0].contains("extra:\n- 1\n- a: b\n"), "{}", texts[0]);
+        assert!(
+            texts[1].contains("environment:\n- X=1\n") && texts[1].contains("mode: 5"),
+            "{}",
+            texts[1]
+        );
+        assert!(
+            texts[2].contains("role: edge") && texts[2].contains("example.com/a:"),
+            "{}",
+            texts[2]
+        );
     }
 
     #[test]

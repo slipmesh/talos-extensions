@@ -1,11 +1,13 @@
 //! Talos machine-config documents, as far as the generator reads and writes them.
 
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use sliplib_yaml::{Mapping, Value};
+use std::collections::BTreeMap;
 
 const API_VERSION: &str = "v1alpha1";
-const EXTENSION_SERVICE_CONFIG: &str = "ExtensionServiceConfig";
-const KUBE_NODE_CONFIG: &str = "KubeNodeConfig";
+pub const EXTENSION_SERVICE_CONFIG: &str = "ExtensionServiceConfig";
+pub const KUBE_NODE_CONFIG: &str = "KubeNodeConfig";
 
 /// The directive that turns a document into a deletion: a message to Talos, not values to merge.
 const PATCH_KEY: &str = "$patch";
@@ -25,27 +27,38 @@ pub enum Error {
     AnnotationsNotAMapping,
 }
 
-/// What Talos keys a document by: two documents of one identity are one document.
-#[derive(Debug, PartialEq, Eq)]
+/// What Talos keys a document by: two documents of one identity are one document. Every other key
+/// passes unread.
+#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct Identity {
+    #[serde(default, deserialize_with = "string")]
     pub api_version: Option<String>,
+    #[serde(default, deserialize_with = "string")]
     pub kind: Option<String>,
+    #[serde(default, deserialize_with = "string")]
     pub name: Option<String>,
 }
 
-impl Identity {
-    pub fn of(document: &Value) -> Self {
-        let field = |key: &str| document.get(key).and_then(Value::as_str).map(str::to_owned);
-        Self {
-            api_version: field("apiVersion"),
-            kind: field("kind"),
-            name: field("name"),
+/// A string as written: yaml_serde reads `5` or `true` as one when asked, Talos does not.
+fn string<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    struct Written;
+    impl serde::de::Visitor<'_> for Written {
+        type Value = String;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a string")
+        }
+        fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<String, E> {
+            Ok(text.to_owned())
         }
     }
-
-    fn is_extension_service(&self, name: &str) -> bool {
-        self.kind.as_deref() == Some(EXTENSION_SERVICE_CONFIG) && self.name.as_deref() == Some(name)
+    struct Text(String);
+    impl<'de> Deserialize<'de> for Text {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer.deserialize_any(Written).map(Text)
+        }
     }
+    Ok(Option::<Text>::deserialize(deserializer)?.map(|text| text.0))
 }
 
 impl std::fmt::Display for Identity {
@@ -86,15 +99,45 @@ pub struct ConfigFile {
     pub content: String,
 }
 
-/// Whether `document` is the `ExtensionServiceConfig` of `service` and sets its file `mount_path`.
-pub fn sets_file(document: &Value, service: &str, mount_path: &str) -> bool {
-    Identity::of(document).is_extension_service(service)
-        && document
-            .get("configFiles")
-            .and_then(Value::as_sequence)
-            .into_iter()
-            .flatten()
-            .any(|f| f.get("mountPath").and_then(Value::as_str) == Some(mount_path))
+/// An `ExtensionServiceConfig` the generator makes, as a patch may write it: files and nothing
+/// else.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddedToGenerated {
+    #[serde(rename = "apiVersion", default)]
+    _api_version: IgnoredAny,
+    #[serde(rename = "kind")]
+    _kind: IgnoredAny,
+    #[serde(rename = "name")]
+    _name: IgnoredAny,
+    #[serde(rename = "configFiles", default)]
+    pub config_files: Vec<AddedFile>,
+}
+
+/// A mapping or a list as `content` becomes its text later.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AddedFile {
+    pub mount_path: String,
+    #[serde(rename = "content")]
+    _content: Value,
+}
+
+/// A `KubeNodeConfig`'s annotations, values unread: `null` is one too.
+#[derive(Deserialize)]
+pub struct Annotations {
+    #[serde(default)]
+    annotations: Option<BTreeMap<String, IgnoredAny>>,
+}
+
+impl Annotations {
+    pub fn first_in(&self, namespace: &str) -> Option<&str> {
+        self.annotations
+            .iter()
+            .flat_map(BTreeMap::keys)
+            .map(String::as_str)
+            .find(|key| key.starts_with(namespace))
+    }
 }
 
 /// Replaces each `configFiles[].content` of `document` written as a mapping or a list with that
@@ -145,20 +188,7 @@ pub fn kube_node_config() -> Value {
 }
 
 pub fn is_kube_node_config(document: &Value) -> bool {
-    Identity::of(document).kind.as_deref() == Some(KUBE_NODE_CONFIG)
-}
-
-/// The first annotation in `namespace` that the `KubeNodeConfig` `document` sets, even to `null`.
-pub fn annotation_in<'a>(document: &'a Value, namespace: &str) -> Option<&'a str> {
-    if !is_kube_node_config(document) {
-        return None;
-    }
-    document
-        .get("annotations")?
-        .as_mapping()?
-        .keys()
-        .filter_map(Value::as_str)
-        .find(|key| key.starts_with(namespace))
+    document.get("kind").and_then(Value::as_str) == Some(KUBE_NODE_CONFIG)
 }
 
 /// Adds `annotations`, all in `namespace`, to the `KubeNodeConfig` `document`. Refuses one that
@@ -188,6 +218,10 @@ pub fn annotate(document: &mut Value, namespace: &str, annotations: Mapping) -> 
 mod tests {
     use super::*;
     use sliplib_yaml::{from_str, to_value};
+
+    fn identity(document: Value) -> Identity {
+        sliplib_yaml::from_value(document).unwrap()
+    }
 
     fn documents(text: &str) -> Vec<Value> {
         sliplib_yaml::MultiDoc::parse(text).unwrap().values()
@@ -221,7 +255,7 @@ configFiles:
     fn a_documents_identity_is_its_api_version_kind_and_name() {
         let documents = documents(PATCH);
         assert_eq!(
-            Identity::of(&documents[0]),
+            identity(documents[0].clone()),
             Identity {
                 api_version: Some("v1alpha1".into()),
                 kind: Some("ExtensionServiceConfig".into()),
@@ -229,19 +263,22 @@ configFiles:
             }
         );
         let bare: Value = from_str("kind: HostnameConfig\n").unwrap();
-        assert_eq!(Identity::of(&bare).api_version, None);
-        assert_ne!(Identity::of(&documents[1]), Identity::of(&documents[2]));
+        assert_eq!(identity(bare.clone()).api_version, None);
+        assert_ne!(
+            identity(documents[1].clone()),
+            identity(documents[2].clone())
+        );
     }
 
     #[test]
     fn an_identity_reads_as_its_kind_and_name() {
         let documents = documents(PATCH);
         assert_eq!(
-            Identity::of(&documents[0]).to_string(),
+            identity(documents[0].clone()).to_string(),
             "ExtensionServiceConfig/awg"
         );
-        let unnamed = from_str("kind: HostnameConfig\n").unwrap();
-        assert_eq!(Identity::of(&unnamed).to_string(), "HostnameConfig");
+        let unnamed: Value = from_str("kind: HostnameConfig\n").unwrap();
+        assert_eq!(identity(unnamed.clone()).to_string(), "HostnameConfig");
     }
 
     #[test]
@@ -259,23 +296,6 @@ configFiles:
         )
         .unwrap();
         assert_eq!(to_value(&document).unwrap(), expected);
-    }
-
-    #[test]
-    fn a_document_sets_a_file_of_its_own_service_only() {
-        let documents = documents(PATCH);
-        assert!(sets_file(&documents[0], "awg", "/etc/node-a/extra.conf"));
-        assert!(!sets_file(&documents[0], "awg", "/etc/node-a/router.yaml"));
-        assert!(!sets_file(
-            &documents[0],
-            "router",
-            "/etc/node-a/extra.conf"
-        ));
-        assert!(!sets_file(
-            &documents[1],
-            "router",
-            "/etc/node-a/router.yaml"
-        ));
     }
 
     #[test]
@@ -394,18 +414,18 @@ configFiles:
 
     #[test]
     fn an_annotation_in_the_namespace_is_found_even_set_to_null() {
-        let document = yaml(
+        let annotations = |text: &str| -> Annotations { from_str(text).unwrap() };
+        let document = annotations(
             "kind: KubeNodeConfig\nannotations:\n  example.com/role: x\n  node-a.example/other: \
              null\n",
         );
+        assert_eq!(document.first_in(NAMESPACE), Some("node-a.example/other"));
+        let outside = annotations("kind: KubeNodeConfig\nannotations:\n  example.com/role: x\n");
+        assert_eq!(outside.first_in(NAMESPACE), None);
         assert_eq!(
-            annotation_in(&document, NAMESPACE),
-            Some("node-a.example/other")
+            annotations("kind: KubeNodeConfig\n").first_in(NAMESPACE),
+            None
         );
-        let elsewhere = yaml("kind: KubeletConfig\nannotations:\n  node-a.example/other: x\n");
-        assert_eq!(annotation_in(&elsewhere, NAMESPACE), None);
-        let outside = yaml("kind: KubeNodeConfig\nannotations:\n  example.com/role: x\n");
-        assert_eq!(annotation_in(&outside, NAMESPACE), None);
     }
 
     #[test]
