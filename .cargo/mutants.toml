@@ -10,4 +10,6 @@ exclude_re = [
     "replace reconcile_pass with \\(\\)",
     # Its own socket: the connect, a drop mid-scrape, the dump timeout.
     "metrics.rs:.*replace collect -> Dumps with Default::default\\(\\)",
+    # Its only effect is one log line at start.
+    "replace log_handshake_summary with \\(\\)",
 ]
