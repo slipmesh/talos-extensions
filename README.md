@@ -280,8 +280,9 @@ declares it all:
   part stays "live", unlike everything else in this workspace, since resolving ASN/geoip/DNS
   sources is the whole point of the feature.
 
-See `router/src/config.rs`'s doc comments for the full schema, and the template below for how
-each field becomes BIRD config.
+See the doc comments of `sliplib_config::router::RouterConfig` for the full schema, with
+`metrics` from `common/src/daemon.rs`, and the template below for how each field becomes BIRD
+config.
 
 Whoever authors `router.yaml` is responsible for `bypass.exclude` covering this node's own (and
 every peer's) public endpoint - a blackholed endpoint takes the mesh link down with it. There is no
@@ -522,7 +523,8 @@ So `slipmesh.yaml` holds private keys in the clear, as the patch files it render
 where those are kept.
 
 Each node's configs are rendered and validated by `sliplib-mesh`, on the config types the daemons
-read, so the generator and the daemons check one definition.
+read, so the generator and the daemons check one definition. The `metrics` section is the
+generator's own: it writes each listener from the `talos` `platform` document.
 
 ```sh
 slipmesh-taloscfg generate                      # every node of talos, into ./patches
