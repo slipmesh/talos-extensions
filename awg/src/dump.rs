@@ -14,8 +14,8 @@ pub struct Dumped {
     pub stats: PeerStats,
 }
 
-/// By public key. The kernel resumes a peer whose `allowed_ips` do not fit one message in the
-/// next, under its `PublicKey` alone: each piece is folded into the peer.
+/// By public key, each peer whole. A peer whose `allowed_ips` do not fit in one message comes in
+/// several pieces, the later ones holding only its `PublicKey` and the rest of the list.
 pub fn peers(attrs: &[AmneziaWireguardAttribute]) -> BTreeMap<String, Dumped> {
     let mut peers = BTreeMap::new();
     let pieces = attrs
