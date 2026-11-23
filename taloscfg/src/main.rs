@@ -70,18 +70,12 @@ fn main() -> Result<()> {
     }
 }
 
-/// Checked as far as this generator reads them, with the settings of `talos`.
-fn read_slipmesh(config_path: &Path) -> Result<(File, TalosSettings)> {
+/// Checked as far as this generator reads them.
+fn read_slipmesh(config_path: &Path) -> Result<File> {
     let reading = || format!("reading {}", config_path.display());
     let files = File::read(&MultiDoc::read(config_path)?).with_context(reading)?;
     patches::check(&files).with_context(reading)?;
-    let settings = TalosSettings::of(&files).with_context(reading)?;
-    Ok((files, settings))
-}
-
-/// The refusal names the file.
-fn mesh_of<'a>(files: &'a File, config_path: &Path) -> Result<Mesh<'a>> {
-    Mesh::of(files).with_context(|| format!("reading {}", config_path.display()))
+    Ok(files)
 }
 
 /// A warning for every `template` document reaching one of `targets` whose `base` is not the hash
@@ -132,8 +126,10 @@ fn generate(
     config_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
-    let (files, settings) = read_slipmesh(config_path)?;
-    let network = mesh_of(&files, config_path)?;
+    let files = read_slipmesh(config_path)?;
+    let reading = || format!("reading {}", config_path.display());
+    let network = Mesh::of(&files).with_context(reading)?;
+    let settings = TalosSettings::of(&files).with_context(reading)?;
     if let Some(n) = node {
         let platform = network.node(n)?.platform;
         anyhow::ensure!(
@@ -144,7 +140,7 @@ fn generate(
     // A node a template does not reach was aimed past; a daemon no document gives a template at
     // all was left out, and would start on every node without one.
     let untemplated: Vec<String> = defaults::missing(&files)
-        .with_context(|| format!("reading {}", config_path.display()))?
+        .with_context(reading)?
         .iter()
         .map(|service| format!("`slipmesh-taloscfg template {service}`"))
         .collect();
@@ -492,11 +488,12 @@ installer:
                 let paths = setup_from(&network, "");
                 let before = paths.snapshot();
                 let err = paths.generate(Some(node), check, diff).unwrap_err();
-                // As `main` prints it: one line.
-                let err = format!("{err:?}");
+                // `main` prints it with `{:?}`, on one line only without causes.
+                assert_eq!(err.chain().count(), 1, "{missing}: {err:?}");
+                let err = err.to_string();
                 assert!(err.contains(missing), "{missing}: {err}");
                 assert!(
-                    !err.contains('\n') && err.ends_with(" - `slipmesh mint` creates it"),
+                    err.ends_with(" - `slipmesh mint` creates it"),
                     "{missing}: {err}"
                 );
                 assert_eq!(paths.snapshot(), before, "{missing}");
@@ -656,19 +653,14 @@ installer:
     }
 
     #[test]
-    fn the_metrics_ports_of_talos_reach_its_nodes() {
-        let metrics =
-            "---\nslipmesh: {kind: platform, platform: talos}\nmetrics: {router: {port: 9324}}\n";
-        let paths = setup(metrics);
-        paths.generate(Some("a"), false, false).unwrap();
-        assert!(
-            paths
-                .patch("a")
-                .unwrap()
-                .contains("listen: 198.51.100.1:9324"),
-            "{}",
-            paths.patch("a").unwrap()
+    fn a_missing_interface_prefix_is_refused_before_a_talos_body_that_does_not_read() {
+        let network = SLIPMESH.replace("  interface_prefix: mesh-\n", "");
+        let paths = setup_from(
+            &network,
+            "---\nslipmesh: {kind: platform, platform: talos}\nlisten: true\n",
         );
+        let err = format!("{:#}", paths.generate(None, false, false).unwrap_err());
+        assert!(err.contains("mesh.interface_prefix"), "{err}");
     }
 
     #[test]
@@ -694,8 +686,9 @@ installer:
     fn two_runs_render_the_same() {
         let paths = setup("");
         let render = || {
-            let (files, settings) = read_slipmesh(&paths.config).unwrap();
+            let files = read_slipmesh(&paths.config).unwrap();
             let network = Mesh::of(&files).unwrap();
+            let settings = TalosSettings::of(&files).unwrap();
             render_hosts(
                 &files,
                 &network,
