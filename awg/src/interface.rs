@@ -20,7 +20,7 @@ use netlink_packet_amneziawg::{
     AmneziaWireguardPeerFlags,
 };
 use sliplib_config::awg::{InterfaceEntry, PeerEntry};
-use sliplib_secrets::wireguard::{decode_key, encode_key};
+use sliplib_secrets::wireguard::decode_key;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
@@ -114,68 +114,17 @@ fn cidr_to_allowed_ip(cidr: &str) -> Result<AmneziaWireguardAllowedIp> {
     ]))
 }
 
-fn allowed_ip_to_cidr(attrs: &[AmneziaWireguardAllowedIpAttr]) -> Option<String> {
-    let ip = attrs.iter().find_map(|a| match a {
-        AmneziaWireguardAllowedIpAttr::IpAddr(ip) => Some(*ip),
-        _ => None,
-    })?;
-    let cidr = attrs.iter().find_map(|a| match a {
-        AmneziaWireguardAllowedIpAttr::Cidr(c) => Some(*c),
-        _ => None,
-    })?;
-    Some(format!("{ip}/{cidr}"))
-}
-
-fn peer_from_attrs(attrs: Vec<AmneziaWireguardPeerAttribute>) -> Option<Peer> {
-    let mut public_key = None;
-    let mut allowed_ips = Vec::new();
-    let mut endpoint = None;
-    let mut persistent_keepalive = AmneziaWireguardRange::default();
-    for attr in attrs {
-        match attr {
-            AmneziaWireguardPeerAttribute::PersistentKeepalive(range) => {
-                persistent_keepalive = range;
-            }
-            AmneziaWireguardPeerAttribute::PublicKey(k) => {
-                public_key = Some(encode_key(&k));
-            }
-            AmneziaWireguardPeerAttribute::AllowedIps(ips) => {
-                allowed_ips = ips
-                    .iter()
-                    .filter_map(|ip| allowed_ip_to_cidr(&ip.0))
-                    .collect();
-            }
-            AmneziaWireguardPeerAttribute::Endpoint(addr) => {
-                endpoint = Some(addr.to_string());
-            }
-            _ => {}
-        }
-    }
-    Some(Peer {
-        public_key: public_key?,
-        allowed_ips,
-        endpoint,
-        persistent_keepalive,
-    })
-}
-
 /// Reads back the peer set actually configured on the kernel interface. Always called, never
 /// assumed empty - see this module's doc comment for why (no in-memory state survives a restart).
 pub async fn current_peers(awg: &mut AwgClient, iface: &str) -> Result<Vec<Peer>> {
-    let attrs = awg.get_device(iface).await?;
-    let mut peers = Vec::new();
-    for attr in attrs {
-        let AmneziaWireguardAttribute::Peers(device_peers) = attr else {
-            continue;
-        };
-        peers.extend(
-            device_peers
-                .into_iter()
-                .filter_map(|peer| peer_from_attrs(peer.0)),
-        );
-    }
-    peers.sort_by(|a, b| a.public_key.cmp(&b.public_key));
-    Ok(peers)
+    Ok(dumped_peers(&awg.get_device(iface).await?))
+}
+
+fn dumped_peers(attrs: &[AmneziaWireguardAttribute]) -> Vec<Peer> {
+    crate::dump::peers(attrs)
+        .into_values()
+        .map(|dumped| dumped.peer)
+        .collect()
 }
 
 /// One entry per peer that needs to change: `Some(peer)` to add/replace, `None` to remove.
@@ -400,6 +349,7 @@ mod tests {
     use super::*;
     use sliplib_config::awg::{NO_KEEPALIVE, OBFUSCATED_KEEPALIVE, PLAIN_KEEPALIVE};
     use sliplib_config::{Obfuscation, Range};
+    use sliplib_secrets::wireguard::encode_key;
 
     /// A peer as the kernel holds it on an interface that sets nothing of the obfuscation: 25 if
     /// it is dialed, none if it is only waited for.
@@ -638,37 +588,34 @@ mod tests {
     }
 
     #[test]
-    fn a_peer_is_read_back_with_its_key_allowed_ips_endpoint_and_keepalive() {
-        let read = peer_from_attrs(vec![
-            AmneziaWireguardPeerAttribute::PublicKey(KEY),
-            AmneziaWireguardPeerAttribute::AllowedIps(vec![
-                cidr_to_allowed_ip("203.0.113.1/32").unwrap(),
-            ]),
-            AmneziaWireguardPeerAttribute::Endpoint("192.0.2.1:51820".parse().unwrap()),
-            AmneziaWireguardPeerAttribute::PersistentKeepalive(BARE_25),
-        ])
-        .unwrap();
-        assert_eq!(
-            read,
-            Peer {
-                persistent_keepalive: BARE_25,
-                ..peer(
-                    &encode_key(&KEY),
-                    &["203.0.113.1/32"],
-                    Some("192.0.2.1:51820")
-                )
-            }
-        );
-    }
-
-    #[test]
-    fn attributes_without_a_public_key_are_not_a_peer() {
-        assert_eq!(
-            peer_from_attrs(vec![AmneziaWireguardPeerAttribute::PersistentKeepalive(
-                KEEPALIVE
-            )]),
-            None
-        );
+    fn a_peer_the_dump_splits_over_two_pieces_reads_whole_and_compares_unchanged() {
+        let desired = Peer {
+            persistent_keepalive: BARE_25,
+            ..peer(
+                &encode_key(&KEY),
+                &["203.0.113.1/32", "203.0.113.2/32"],
+                Some("192.0.2.1:51820"),
+            )
+        };
+        let dump = vec![
+            AmneziaWireguardAttribute::Peers(vec![AmneziaWireguardPeer(vec![
+                AmneziaWireguardPeerAttribute::PublicKey(KEY),
+                AmneziaWireguardPeerAttribute::Endpoint("192.0.2.1:51820".parse().unwrap()),
+                AmneziaWireguardPeerAttribute::PersistentKeepalive(BARE_25),
+                AmneziaWireguardPeerAttribute::AllowedIps(vec![
+                    cidr_to_allowed_ip("203.0.113.1/32").unwrap(),
+                ]),
+            ])]),
+            AmneziaWireguardAttribute::Peers(vec![AmneziaWireguardPeer(vec![
+                AmneziaWireguardPeerAttribute::PublicKey(KEY),
+                AmneziaWireguardPeerAttribute::AllowedIps(vec![
+                    cidr_to_allowed_ip("203.0.113.2/32").unwrap(),
+                ]),
+            ])]),
+        ];
+        let held = dumped_peers(&dump);
+        assert_eq!(held, std::slice::from_ref(&desired));
+        assert_eq!(diff_peers(&held, &[desired]), vec![]);
     }
 
     #[test]

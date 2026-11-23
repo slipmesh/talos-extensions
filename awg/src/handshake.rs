@@ -23,8 +23,7 @@ use anyhow::Result;
 use common::ROUTE_PROTOCOL;
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
-use netlink_packet_amneziawg::{AmneziaWireguardAttribute, AmneziaWireguardPeerAttribute};
-use sliplib_secrets::wireguard::encode_key;
+use netlink_packet_amneziawg::AmneziaWireguardAttribute;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -60,38 +59,11 @@ pub struct PeerStats {
 }
 
 /// public_key (base64) -> that peer's stats.
-///
-/// Folds attributes into an existing entry rather than replacing it, because one peer can span
-/// several messages of a single dump: the kernel resumes a peer whose `allowed_ips` didn't fit by
-/// re-emitting its `PublicKey` and nothing else, so replacing on every frame would reset a real
-/// handshake and real counters to zero for exactly the peers that carry the most state.
 pub fn merge_peer_attrs(attrs: &[AmneziaWireguardAttribute]) -> HashMap<String, PeerStats> {
-    let mut out: HashMap<String, PeerStats> = HashMap::new();
-    for attr in attrs {
-        let AmneziaWireguardAttribute::Peers(device_peers) = attr else {
-            continue;
-        };
-        for peer in device_peers {
-            let Some(public_key) = peer.0.iter().find_map(|pattr| match pattr {
-                AmneziaWireguardPeerAttribute::PublicKey(k) => Some(encode_key(k)),
-                _ => None,
-            }) else {
-                continue;
-            };
-            let stats = out.entry(public_key).or_default();
-            for pattr in &peer.0 {
-                match pattr {
-                    AmneziaWireguardPeerAttribute::LastHandshake(ts) => {
-                        stats.last_handshake = ts.seconds.max(0) as u64;
-                    }
-                    AmneziaWireguardPeerAttribute::RxBytes(v) => stats.rx_bytes = *v,
-                    AmneziaWireguardPeerAttribute::TxBytes(v) => stats.tx_bytes = *v,
-                    _ => {}
-                }
-            }
-        }
-    }
-    out
+    crate::dump::peers(attrs)
+        .into_iter()
+        .map(|(public_key, dumped)| (public_key, dumped.stats))
+        .collect()
 }
 
 /// The dump itself: one `GetDevice` round trip, parsed by `merge_peer_attrs`.
@@ -234,7 +206,10 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use netlink_packet_amneziawg::{AmneziaWireguardPeer, AmneziaWireguardTimeSpec};
+    use netlink_packet_amneziawg::{
+        AmneziaWireguardPeer, AmneziaWireguardPeerAttribute, AmneziaWireguardTimeSpec,
+    };
+    use sliplib_secrets::wireguard::encode_key;
 
     const KEY: [u8; 32] = [7u8; 32];
 
