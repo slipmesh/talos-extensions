@@ -393,6 +393,7 @@ mod tests {
     fn a_peer_is_fresh_for_stale_secs_after_its_handshake_and_never_without_one() {
         let now = 1_700_000_000;
         assert!(!is_fresh(&PeerStats::default(), now, 180));
+        assert!(!is_fresh(&PeerStats::default(), 100, 180));
         assert!(is_fresh(&handshake_secs_ago(now, 179), now, 180));
         assert!(!is_fresh(&handshake_secs_ago(now, 180), now, 180));
     }
