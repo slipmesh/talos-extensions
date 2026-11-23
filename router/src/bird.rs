@@ -63,8 +63,8 @@ fn ospf_configured_interfaces(show_ospf_interface_output: &str) -> HashSet<&str>
 
 /// True if BIRD's live state (queried fresh via `birdc show ...`, never the rendered config text)
 /// shows no protocol stuck in `Error: No listening socket`, and every name in
-/// `exact_ospf_ifaces` (see `exact_iface_names` - only literal names, not glob/CIDR entries, since
-/// those have no single expected name to diff against here) has a working OSPF interface attached.
+/// `exact_ospf_ifaces` (the patterns' `name()`s: a glob has no single expected name to diff against
+/// here) has a working OSPF interface attached.
 /// Both are symptoms of the same interface-notification race `force_reconfigure`'s doc comment
 /// describes - a config that already lists an interface/peer doesn't mean BIRD's interface manager
 /// actually caught up to it yet, and a config-diff-gated `reconcile()` alone can never detect or

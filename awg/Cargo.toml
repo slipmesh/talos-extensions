@@ -28,4 +28,3 @@ socket2.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true
 sliplib-runtime.workspace = true
-sliplib-yaml.workspace = true

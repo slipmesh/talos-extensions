@@ -108,7 +108,6 @@ dependencies = [
  "sliplib-net",
  "sliplib-runtime",
  "sliplib-secrets",
- "sliplib-yaml",
  "socket2",
  "tokio",
  "tracing",
