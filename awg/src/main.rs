@@ -41,8 +41,8 @@ async fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    let daemon: AwgDaemonConfig =
-        sliplib_yaml::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
+    let daemon =
+        AwgDaemonConfig::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
     daemon.validate().context("config validation failed")?;
     let cfg = Arc::new(daemon.mesh);
 

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use sliplib_config::awg::AwgConfig;
 use sliplib_config::router::RouterConfig;
+use std::path::Path;
 
 /// Where a daemon serves its Prometheus endpoint.
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
@@ -54,11 +55,19 @@ impl MetricsConfig {
     }
 }
 
+/// A daemon's own keys, beside the shared ones.
+#[derive(Deserialize)]
+struct OwnKeys {
+    #[serde(default)]
+    metrics: Option<MetricsConfig>,
+}
+
 fn metrics_valid(metrics: Option<&MetricsConfig>) -> Result<(), MetricsError> {
     metrics.map_or(Ok(()), MetricsConfig::validate)
 }
 
-#[derive(Deserialize, Serialize, Debug, Default, PartialEq)]
+/// What the generator writes: [`AwgDaemonConfig::read`] reads it back.
+#[derive(Serialize, Debug, Default, PartialEq)]
 pub struct AwgDaemonConfig {
     #[serde(flatten)]
     pub mesh: AwgConfig,
@@ -67,13 +76,22 @@ pub struct AwgDaemonConfig {
 }
 
 impl AwgDaemonConfig {
+    /// Read twice, the shared keys and the daemon's own, each from the text.
+    pub fn read(path: &Path) -> anyhow::Result<Self> {
+        Ok(Self {
+            mesh: sliplib_yaml::read::<AwgConfig>(path)?,
+            metrics: sliplib_yaml::read::<OwnKeys>(path)?.metrics,
+        })
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         sliplib_config::awg::validate(&self.mesh)?;
         Ok(metrics_valid(self.metrics.as_ref())?)
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, PartialEq)]
+/// What the generator writes: [`RouterDaemonConfig::read`] reads it back.
+#[derive(Serialize, Debug, PartialEq)]
 pub struct RouterDaemonConfig {
     #[serde(flatten)]
     pub mesh: RouterConfig,
@@ -82,6 +100,14 @@ pub struct RouterDaemonConfig {
 }
 
 impl RouterDaemonConfig {
+    /// Read twice, the shared keys and the daemon's own, each from the text.
+    pub fn read(path: &Path) -> anyhow::Result<Self> {
+        Ok(Self {
+            mesh: sliplib_yaml::read::<RouterConfig>(path)?,
+            metrics: sliplib_yaml::read::<OwnKeys>(path)?.metrics,
+        })
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         sliplib_config::router::validate(&self.mesh)?;
         Ok(metrics_valid(self.metrics.as_ref())?)
@@ -91,6 +117,9 @@ impl RouterDaemonConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ROUTER: &str =
+        "node:\n  loopback_addresses: [\"198.51.100.1/32\", \"3fff::1/128\"]\nbgp_as: 64512\n";
 
     fn with_metrics(listen: &str) -> AwgDaemonConfig {
         AwgDaemonConfig {
@@ -154,21 +183,57 @@ mod tests {
         assert!(matches!(refusal("198.51.100.1:0"), MetricsError::NoPort(_)));
     }
 
-    #[test]
-    fn a_config_without_a_metrics_section_parses_and_validates() {
-        let cfg: AwgDaemonConfig = sliplib_yaml::from_str("interfaces: []").unwrap();
-        assert_eq!(cfg.metrics, None);
-        cfg.validate().unwrap();
+    /// `text` as a daemon's file.
+    fn file(text: &str) -> tempfile::NamedTempFile {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), text).unwrap();
+        file
+    }
+
+    fn chain(err: anyhow::Error) -> String {
+        format!("{err:#}")
     }
 
     #[test]
-    fn a_metrics_section_round_trips_through_yaml() {
-        let cfg = with_metrics("198.51.100.1:9586");
-        let yaml = sliplib_yaml::to_string(&cfg).unwrap();
-        assert_eq!(
-            sliplib_yaml::from_str::<AwgDaemonConfig>(&yaml).unwrap(),
-            cfg
+    fn what_the_generator_writes_for_each_daemon_reads_back_the_same() {
+        let awg = AwgDaemonConfig {
+            mesh: sliplib_yaml::from_str(
+                "interfaces:\n  - {name: mesh-a, listen_port: 51820, addresses: [\"fe80::1/64\"], \
+                 private_key: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}\n",
+            )
+            .unwrap(),
+            ..with_metrics("198.51.100.1:9586")
+        };
+        let written = file(&sliplib_yaml::to_string(&awg).unwrap());
+        assert_eq!(AwgDaemonConfig::read(written.path()).unwrap(), awg);
+        let router = RouterDaemonConfig {
+            mesh: sliplib_yaml::from_str(ROUTER).unwrap(),
+            metrics: Some(MetricsConfig {
+                listen: "198.51.100.1:9324".to_owned(),
+            }),
+        };
+        let written = file(&sliplib_yaml::to_string(&router).unwrap());
+        assert_eq!(RouterDaemonConfig::read(written.path()).unwrap(), router);
+    }
+
+    #[test]
+    fn a_value_that_does_not_fit_is_refused_by_its_key_and_line() {
+        let awg = file("interfaces:\n  - name: mesh-a\n    listen_port: abc\n");
+        let err = chain(AwgDaemonConfig::read(awg.path()).unwrap_err());
+        assert!(
+            err.contains("interfaces[0].listen_port: ") && err.contains("line 3"),
+            "{err}"
         );
+        let router = file(&ROUTER.replace("bgp_as: 64512", "bgp_as: abc"));
+        let err = chain(RouterDaemonConfig::read(router.path()).unwrap_err());
+        assert!(err.contains("bgp_as: ") && err.contains("line 3"), "{err}");
+    }
+
+    #[test]
+    fn a_config_without_a_metrics_section_parses_and_validates() {
+        let cfg = AwgDaemonConfig::read(file("interfaces: []").path()).unwrap();
+        assert_eq!(cfg.metrics, None);
+        cfg.validate().unwrap();
     }
 
     #[test]
@@ -179,9 +244,8 @@ mod tests {
 
     #[test]
     fn router_rejects_a_wildcard_metrics_listener() {
-        let yaml = "node:\n  loopback_addresses: [\"198.51.100.1/32\", \"3fff::1/128\"]\nbgp_as: \
-                    64512\nmetrics:\n  listen: 0.0.0.0:9324\n";
-        let cfg: RouterDaemonConfig = sliplib_yaml::from_str(yaml).unwrap();
+        let yaml = format!("{ROUTER}metrics:\n  listen: 0.0.0.0:9324\n");
+        let cfg = RouterDaemonConfig::read(file(&yaml).path()).unwrap();
         let err = cfg.validate().unwrap_err().to_string();
         assert!(err.contains("wildcard"), "unexpected error: {err}");
     }

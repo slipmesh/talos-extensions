@@ -113,8 +113,8 @@ async fn run(shutdown: Shutdown) -> Result<()> {
 
 /// Everything before `bird` is spawned: config, template, `router-lo`, and a `bird.conf` on disk.
 async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
-    let daemon: RouterDaemonConfig =
-        sliplib_yaml::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
+    let daemon = RouterDaemonConfig::read(Path::new(CONFIG_PATH))
+        .context("failed to read the config file")?;
     daemon.validate().context("config validation failed")?;
     let RouterDaemonConfig { mesh: cfg, metrics } = daemon;
     // Read before anything on the node is touched: without a template there is no bird.conf to

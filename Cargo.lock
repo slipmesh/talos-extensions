@@ -323,6 +323,7 @@ dependencies = [
  "sliplib-net",
  "sliplib-secrets",
  "sliplib-yaml",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",
