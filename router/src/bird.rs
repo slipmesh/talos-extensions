@@ -151,6 +151,18 @@ pub async fn ensure_loopback(
 mod tests {
     use super::*;
 
+    /// Before `birdc configure`, which fails here: no BIRD is listening.
+    #[tokio::test]
+    async fn a_changed_config_is_written_before_bird_is_told() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bird.conf");
+        let _ = reconcile(&path, "router id 198.51.100.1;\n").await;
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "router id 198.51.100.1;\n"
+        );
+    }
+
     // Fixtures below are real `birdc` output, captured against BIRD 2.19.1 running in a container
     // with a deliberately reproduced "strict bind yes local address not present yet" / "OSPF
     // interface not attached yet" race - not hand-guessed from memory of BIRD's CLI format.

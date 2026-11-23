@@ -36,4 +36,5 @@ default = ["runtime"]
 runtime = ["common/netlink", "dep:nix"]
 
 [dev-dependencies]
+tempfile = "3.27.0"
 sliplib-yaml.workspace = true
