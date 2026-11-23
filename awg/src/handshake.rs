@@ -23,9 +23,8 @@ use anyhow::Result;
 use common::ROUTE_PROTOCOL;
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
-use netlink_packet_amneziawg::{AmneziaWireguardAttribute, AmneziaWireguardPeerAttribute};
-use sliplib_secrets::wireguard::encode_key;
-use std::collections::{HashMap, HashSet};
+use netlink_packet_amneziawg::AmneziaWireguardAttribute;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// One interface's worth of peers this daemon should be tracking handshakes/routes for - built
@@ -60,38 +59,11 @@ pub struct PeerStats {
 }
 
 /// public_key (base64) -> that peer's stats.
-///
-/// Folds attributes into an existing entry rather than replacing it, because one peer can span
-/// several messages of a single dump: the kernel resumes a peer whose `allowed_ips` didn't fit by
-/// re-emitting its `PublicKey` and nothing else, so replacing on every frame would reset a real
-/// handshake and real counters to zero for exactly the peers that carry the most state.
 pub fn merge_peer_attrs(attrs: &[AmneziaWireguardAttribute]) -> HashMap<String, PeerStats> {
-    let mut out: HashMap<String, PeerStats> = HashMap::new();
-    for attr in attrs {
-        let AmneziaWireguardAttribute::Peers(device_peers) = attr else {
-            continue;
-        };
-        for peer in device_peers {
-            let Some(public_key) = peer.0.iter().find_map(|pattr| match pattr {
-                AmneziaWireguardPeerAttribute::PublicKey(k) => Some(encode_key(k)),
-                _ => None,
-            }) else {
-                continue;
-            };
-            let stats = out.entry(public_key).or_default();
-            for pattr in &peer.0 {
-                match pattr {
-                    AmneziaWireguardPeerAttribute::LastHandshake(ts) => {
-                        stats.last_handshake = ts.seconds.max(0) as u64;
-                    }
-                    AmneziaWireguardPeerAttribute::RxBytes(v) => stats.rx_bytes = *v,
-                    AmneziaWireguardPeerAttribute::TxBytes(v) => stats.tx_bytes = *v,
-                    _ => {}
-                }
-            }
-        }
-    }
-    out
+    crate::dump::peers(attrs)
+        .into_iter()
+        .map(|(public_key, dumped)| (public_key, dumped.stats))
+        .collect()
 }
 
 /// The dump itself: one `GetDevice` round trip, parsed by `merge_peer_attrs`.
@@ -162,35 +134,61 @@ async fn reconcile_pass(
         };
 
         let entry = installed.entry(iface.index).or_default();
-        let mut still_fresh: HashSet<String> = HashSet::new();
-
-        for (public_key, allowed_ips) in &iface.peers {
-            let is_fresh = peers.get(public_key).is_some_and(|p| {
-                p.last_handshake > 0 && now.saturating_sub(p.last_handshake) < iface.stale_secs
-            });
-            if !is_fresh {
+        let plan = route_plan(iface, &peers, entry, now);
+        for cidr in plan.add {
+            if let Err(e) = rt.route_add(iface.index, &cidr, ROUTE_PROTOCOL).await {
+                tracing::warn!(iface = iface.name, cidr, error = %e, "failed to install route");
                 continue;
             }
-            for cidr in allowed_ips {
-                if !entry.contains(cidr)
-                    && let Err(e) = rt.route_add(iface.index, cidr, ROUTE_PROTOCOL).await
-                {
-                    tracing::warn!(iface = iface.name, cidr, error = %e, "failed to install route");
-                    continue;
-                }
-                entry.insert(cidr.clone());
-                still_fresh.insert(cidr.clone());
-            }
+            entry.insert(cidr);
         }
-
-        let stale: Vec<String> = entry.difference(&still_fresh).cloned().collect();
-        for cidr in stale {
+        for cidr in plan.remove {
             if let Err(e) = rt.route_del(iface.index, &cidr, ROUTE_PROTOCOL).await {
                 tracing::warn!(iface = iface.name, cidr, error = %e, "failed to remove stale route");
                 continue;
             }
             entry.remove(&cidr);
         }
+    }
+}
+
+fn is_fresh(stats: &PeerStats, now: u64, stale_secs: u64) -> bool {
+    stats.last_handshake > 0 && now.saturating_sub(stats.last_handshake) < stale_secs
+}
+
+/// What a pass changes: the routes of fresh peers it does not hold, and every other it holds.
+#[derive(Debug, PartialEq, Eq)]
+struct RoutePlan {
+    add: BTreeSet<String>,
+    remove: BTreeSet<String>,
+}
+
+fn route_plan(
+    iface: &TrackedInterface,
+    dump: &HashMap<String, PeerStats>,
+    installed: &HashSet<String>,
+    now: u64,
+) -> RoutePlan {
+    let fresh: HashSet<&String> = iface
+        .peers
+        .iter()
+        .filter(|(public_key, _)| {
+            dump.get(*public_key)
+                .is_some_and(|stats| is_fresh(stats, now, iface.stale_secs))
+        })
+        .flat_map(|(_, allowed_ips)| allowed_ips)
+        .collect();
+    RoutePlan {
+        add: fresh
+            .iter()
+            .filter(|cidr| !installed.contains(**cidr))
+            .map(|cidr| (*cidr).clone())
+            .collect(),
+        remove: installed
+            .iter()
+            .filter(|cidr| !fresh.contains(cidr))
+            .cloned()
+            .collect(),
     }
 }
 
@@ -234,7 +232,10 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use netlink_packet_amneziawg::{AmneziaWireguardPeer, AmneziaWireguardTimeSpec};
+    use netlink_packet_amneziawg::{
+        AmneziaWireguardPeer, AmneziaWireguardPeerAttribute, AmneziaWireguardTimeSpec,
+    };
+    use sliplib_secrets::wireguard::encode_key;
 
     const KEY: [u8; 32] = [7u8; 32];
 
@@ -379,6 +380,55 @@ mod tests {
             1_700_000_000,
         );
         assert!(snap.connected.is_empty());
+    }
+
+    fn handshake_secs_ago(now: u64, ago: u64) -> PeerStats {
+        PeerStats {
+            last_handshake: now - ago,
+            ..PeerStats::default()
+        }
+    }
+
+    #[test]
+    fn a_peer_is_fresh_for_stale_secs_after_its_handshake_and_never_without_one() {
+        let now = 1_700_000_000;
+        assert!(!is_fresh(&PeerStats::default(), now, 180));
+        assert!(!is_fresh(&PeerStats::default(), 100, 180));
+        assert!(is_fresh(&handshake_secs_ago(now, 179), now, 180));
+        assert!(!is_fresh(&handshake_secs_ago(now, 180), now, 180));
+    }
+
+    #[test]
+    fn a_pass_adds_the_routes_of_fresh_peers_it_lacks_and_removes_every_other_it_holds() {
+        let now = 1_700_000_000;
+        let iface = tracked(
+            4,
+            &[
+                ("fresh", &["203.0.113.1/32", "203.0.113.2/32"]),
+                ("stale", &["203.0.113.3/32"]),
+                ("undumped", &["203.0.113.4/32"]),
+            ],
+        );
+        let dump = HashMap::from([
+            ("fresh".to_string(), handshake_secs_ago(now, 10)),
+            ("stale".to_string(), handshake_secs_ago(now, 600)),
+        ]);
+        let held: HashSet<String> = [
+            "203.0.113.1/32",
+            "203.0.113.3/32",
+            "203.0.113.4/32",
+            "198.51.100.1/32",
+        ]
+        .map(String::from)
+        .into();
+        let set = |cidrs: &[&str]| cidrs.iter().map(|c| (*c).to_string()).collect();
+        assert_eq!(
+            route_plan(&iface, &dump, &held, now),
+            RoutePlan {
+                add: set(&["203.0.113.2/32"]),
+                remove: set(&["198.51.100.1/32", "203.0.113.3/32", "203.0.113.4/32"]),
+            }
+        );
     }
 
     #[test]
