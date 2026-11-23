@@ -160,7 +160,10 @@ mod tests {
         let refused = read::<TalosSettings>("metrics: {mesh: {port: 9586}, router: {port: 9586}}")
             .unwrap_err();
         assert!(
-            refused.contains(&MetricsError::OnePort(9586).to_string()),
+            refused.contains(
+                "`metrics.mesh` and `metrics.router` both take port 9586, and two daemons cannot \
+                 serve one port - give each its own"
+            ),
             "{refused}"
         );
     }
@@ -168,7 +171,12 @@ mod tests {
     #[test]
     fn a_listener_needs_a_port_that_is_not_zero() {
         assert!(read::<TalosSettings>("metrics: {mesh: {port: 1}}").is_ok());
-        for yaml in ["metrics: {mesh: {}}", "metrics: {mesh: {port: 0}}"] {
+        for yaml in [
+            "metrics: {mesh: {}}",
+            "metrics: {mesh: {port: 0}}",
+            "metrics: {mesh: {port: 65536}}",
+            "metrics: {mesh: {port: '9586'}}",
+        ] {
             assert!(read::<TalosSettings>(yaml).is_err(), "{yaml}");
         }
     }
@@ -236,5 +244,11 @@ mod tests {
         ] {
             assert_eq!(Base::try_from(text.clone()), Err(BaseError(text)));
         }
+        assert_eq!(
+            BaseError("md5:0".to_owned()).to_string(),
+            "`base` is `sha256:` and the 64 hexadecimal digits of the SHA-256 of the reference \
+             template, which \"md5:0\" is not - `slipmesh-taloscfg template` prints the document \
+             with it"
+        );
     }
 }

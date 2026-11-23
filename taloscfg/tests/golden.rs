@@ -5,13 +5,9 @@
 //! the files here: no pool interface, no bypass list, no label on what is announced, the link's
 //! port where a node's endpoint held another, the endpoint annotation without that port, and the
 //! `nftables` document, which the generator makes from a `template` now, after `router` and not
-//! among the `patch` documents; the addresses of a `node_id` the conversion replaced; and no
-//! `handshake_stale_secs`, which the `awg` daemon no longer reads. A change of what a node gets
-//! fails here, and changes what the nodes of a working network are configured with.
+//! among the `patch` documents; and the addresses of a `node_id` the conversion replaced. A change
+//! of what a node gets fails here, and changes what the nodes of a working network are configured with.
 
-use common::daemon::{AwgDaemonConfig, MetricsConfig, RouterDaemonConfig};
-use serde::{Deserialize, Serialize};
-use sliplib_config::awg::{AwgConfig, InterfaceEntry};
 use sliplib_yaml::{MultiDoc, Value};
 use std::path::Path;
 use std::process::Command;
@@ -32,22 +28,6 @@ struct Twin {
     annotated: &'static [(&'static str, &'static str)],
     /// An address of a `node_id` too wide for its network, and the one of its replacement.
     renumbered: &'static [(&'static str, &'static str)],
-}
-
-/// Version 1's `awg` file: an interface held `handshake_stale_secs`.
-#[derive(Deserialize, Serialize)]
-struct Awg {
-    interfaces: Vec<Interface>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    metrics: Option<MetricsConfig>,
-}
-
-#[derive(Deserialize, Serialize)]
-struct Interface {
-    #[serde(flatten)]
-    shared: InterfaceEntry,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    handshake_stale_secs: Option<u64>,
 }
 
 const FULL: Twin = Twin {
@@ -116,37 +96,18 @@ fn position(documents: &[Value], name: &str) -> Option<usize> {
     })
 }
 
-/// The text of the first file of the `ExtensionServiceConfig` named `name`, the daemon's config,
-/// read as `R`, made a `T`, edited by `edit` and written back.
-fn edit_config<R, T>(documents: &mut [Value], name: &str, edit: impl FnOnce(&mut T))
-where
-    R: serde::de::DeserializeOwned + Serialize + Into<T>,
-    T: Serialize,
-{
+/// The first file of the `ExtensionServiceConfig` named `name`, the daemon's config, edited by
+/// `edit` with its keys in the order written.
+fn edit_config(documents: &mut [Value], name: &str, edit: impl FnOnce(&mut Value)) {
     let index = position(documents, name).unwrap();
     let content = &mut documents[index]["configFiles"][0]["content"];
-    let text = content.as_str().unwrap();
-    let read: R = sliplib_yaml::from_str(text).unwrap();
-    // By value: a key `R` does not know would otherwise vanish from the expected side unseen.
-    assert_eq!(
-        sliplib_yaml::to_value(&read).unwrap(),
-        sliplib_yaml::from_str::<Value>(text).unwrap(),
-        "{name}"
-    );
-    let mut config = read.into();
+    let mut config: Value = sliplib_yaml::from_str(content.as_str().unwrap()).unwrap();
     edit(&mut config);
     *content = sliplib_yaml::to_string(&config).unwrap().into();
 }
 
-impl From<Awg> for AwgDaemonConfig {
-    fn from(awg: Awg) -> Self {
-        Self {
-            mesh: AwgConfig {
-                interfaces: awg.interfaces.into_iter().map(|i| i.shared).collect(),
-            },
-            metrics: awg.metrics,
-        }
-    }
+fn sequence<'a>(value: &'a mut Value, key: &str) -> &'a mut Vec<Value> {
+    value.get_mut(key).and_then(Value::as_sequence_mut).unwrap()
 }
 
 /// The patch file version 1 gave a node, `file`, as `twin` gives it after a conversion.
@@ -156,32 +117,31 @@ fn converted(twin: &Twin, file: &str) -> String {
         .iter()
         .fold(file.to_owned(), |text, (was, now)| text.replace(was, now));
     let mut documents = documents(&file);
-    edit_config::<Awg, _>(&mut documents, "awg", |awg: &mut AwgDaemonConfig| {
-        let awg = &mut awg.mesh;
-        awg.interfaces
-            .retain(|interface| !interface.name.starts_with("rw-"));
-        let endpoints = awg
-            .interfaces
+    edit_config(&mut documents, "awg", |awg| {
+        let interfaces = sequence(awg, "interfaces");
+        interfaces.retain(|interface| !interface["name"].as_str().unwrap().starts_with("rw-"));
+        let endpoints = interfaces
             .iter_mut()
-            .flat_map(|interface| &mut interface.peers)
-            .filter_map(|peer| peer.endpoint.as_mut());
+            .flat_map(|interface| sequence(interface, "peers"))
+            .filter_map(|peer| peer.get_mut("endpoint"));
         for endpoint in endpoints {
-            if let Some((_, now)) = twin.redialed.iter().find(|(was, _)| endpoint == was) {
-                *endpoint = (*now).to_owned();
+            if let Some((_, now)) = twin
+                .redialed
+                .iter()
+                .find(|(was, _)| endpoint.as_str() == Some(was))
+            {
+                *endpoint = (*now).into();
             }
         }
     });
-    edit_config::<RouterDaemonConfig, _>(
-        &mut documents,
-        "router",
-        |router: &mut RouterDaemonConfig| {
-            let router = &mut router.mesh;
-            router.bypass = None;
-            for announced in &mut router.announce {
-                announced.label = None;
+    edit_config(&mut documents, "router", |router| {
+        router.as_mapping_mut().unwrap().shift_remove("bypass");
+        if let Some(announced) = router.get_mut("announce") {
+            for announced in announced.as_sequence_mut().unwrap() {
+                announced.as_mapping_mut().unwrap().shift_remove("label");
             }
-        },
-    );
+        }
+    });
     if let Some(nftables) = position(&documents, "nftables") {
         let nftables = documents.remove(nftables);
         let router = position(&documents, "router").unwrap();

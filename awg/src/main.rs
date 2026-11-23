@@ -6,7 +6,7 @@ use sliplib_config::awg as config;
 use anyhow::{Context, Result};
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -171,22 +171,89 @@ async fn build_tracked_interfaces(
 ) -> Result<Vec<handshake::TrackedInterface>> {
     let mut out = Vec::new();
     for iface in &cfg.interfaces {
-        let mut peers = HashMap::new();
-        for peer in &iface.peers {
-            if let Some(allowed_ips) = &peer.allowed_ips {
-                peers.insert(peer.public_key.clone(), allowed_ips.clone());
-            }
-        }
         let index = rt
             .link_index(&iface.name)
             .await?
             .with_context(|| format!("interface {:?} missing after converging", iface.name))?;
-        out.push(handshake::TrackedInterface {
-            name: iface.name.clone(),
-            index,
-            stale_secs: HANDSHAKE_STALE_SECS,
-            peers,
-        });
+        out.push(tracked(iface, index));
     }
     Ok(out)
+}
+
+fn tracked(iface: &config::InterfaceEntry, index: u32) -> handshake::TrackedInterface {
+    let peers = iface
+        .peers
+        .iter()
+        .filter_map(|peer| Some((peer.public_key.clone(), peer.allowed_ips.clone()?)))
+        .collect();
+    handshake::TrackedInterface {
+        name: iface.name.clone(),
+        index,
+        stale_secs: HANDSHAKE_STALE_SECS,
+        peers,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sliplib_config::Obfuscation;
+    use sliplib_config::awg::{InterfaceEntry, PeerEntry};
+    use std::collections::HashMap;
+
+    fn peer(public_key: &str, allowed_ips: Option<&[&str]>) -> PeerEntry {
+        PeerEntry {
+            public_key: public_key.to_owned(),
+            name: None,
+            endpoint: None,
+            allowed_ips: allowed_ips.map(|cidrs| cidrs.iter().map(|c| (*c).to_owned()).collect()),
+            persistent_keepalive: None,
+        }
+    }
+
+    #[test]
+    fn an_interface_tracks_the_peers_with_allowed_ips_for_180_seconds() {
+        let iface = InterfaceEntry {
+            name: "rw-north".to_owned(),
+            listen_port: 51820,
+            addresses: vec![],
+            private_key: "private".into(),
+            obfuscation: Obfuscation::default(),
+            mtu: None,
+            peers: vec![
+                peer("tracked", Some(&["203.0.113.2/32"])),
+                peer("mesh", None),
+            ],
+        };
+        let tracked = tracked(&iface, 7);
+        assert_eq!((tracked.name.as_str(), tracked.index), ("rw-north", 7));
+        assert_eq!(tracked.stale_secs, 180);
+        assert_eq!(
+            tracked.peers,
+            HashMap::from([("tracked".to_owned(), vec!["203.0.113.2/32".to_owned()])])
+        );
+    }
+
+    #[tokio::test]
+    async fn the_metrics_endpoint_is_served_at_its_listen_address() {
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listen = free.local_addr().unwrap().to_string();
+        drop(free);
+        let (_tx, rx) = watch::channel(ReconcileSnapshot::default());
+        let cfg = Arc::new(config::AwgConfig { interfaces: vec![] });
+        spawn_metrics(
+            Some(&MetricsConfig {
+                listen: listen.clone(),
+            }),
+            &cfg,
+            rx,
+        );
+        for _ in 0..200 {
+            if tokio::net::TcpStream::connect(&listen).await.is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("nothing listens at {listen}");
+    }
 }
