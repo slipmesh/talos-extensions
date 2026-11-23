@@ -182,8 +182,12 @@ fn generate(
         return Ok(());
     }
 
+    std::fs::create_dir_all(patches_dir)
+        .with_context(|| format!("creating {}", patches_dir.display()))?;
     for host in &hosts {
-        if sliplib_fs::write_if_changed(&host.path, &host.after)? {
+        if sliplib_fs::write_if_changed(&host.path, &host.after)
+            .with_context(|| format!("writing the patch file of {}", host.host))?
+        {
             println!("wrote {}", host.path.display());
         } else {
             println!("{}: no changes", host.host);

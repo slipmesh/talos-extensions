@@ -151,9 +151,16 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
     // Render and write bird.conf *before* spawning bird, which refuses to start without it.
     // `bird::reconcile` can't be used here - its diff-then-`birdc configure` path assumes bird is
     // already running and listening, which it isn't yet.
+    let conf = Path::new(BIRD_CONF_PATH);
+    if let Some(parent) = conf.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
     let bypass_routes = current_bypass_routes(&ctx).await;
     let initial_conf = ctx.inputs.render(&ctx.template, &bypass_routes)?;
-    sliplib_fs::write_if_changed(Path::new(BIRD_CONF_PATH), &initial_conf)?;
+    sliplib_fs::write_if_changed(conf, &initial_conf)
+        .with_context(|| format!("failed to write {BIRD_CONF_PATH}"))?;
     Ok((ctx, bypass_routes))
 }
 
