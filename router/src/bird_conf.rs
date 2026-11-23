@@ -397,6 +397,39 @@ mod tests {
     }
 
     #[test]
+    fn the_bird_conf_of_every_key_the_reference_template_reads_is_pinned() {
+        let cfg: sliplib_config::router::RouterConfig = sliplib_yaml::from_str(
+            r#"
+node:
+  loopback_addresses: ["198.51.100.1/32", "3fff::1/128"]
+bgp_as: 64512
+bgp_peers:
+  - {name: node-b, address: "3fff::2"}
+  - {name: router1, address: "3fff::4"}
+bfd: {min_rx_ms: 300, min_tx_ms: 300, multiplier: 5}
+ospf_interfaces: [mesh-*, router-lo]
+direct_interfaces: [lan0, mesh-*]
+learn: [203.0.113.128/26]
+announce:
+  - {net: 203.0.113.192/26}
+"#,
+        )
+        .unwrap();
+        let bypass = [BypassRoute {
+            net: "192.0.2.0/24".to_string(),
+            label: "example".to_string(),
+        }];
+        let out = StaticInputs::from_config(&cfg)
+            .unwrap()
+            .render(&compile(REFERENCE_TEMPLATE).unwrap(), &bypass)
+            .unwrap();
+        if let Some(path) = std::env::var_os("WRITE_BIRD_CONF") {
+            std::fs::write(path, &out).unwrap();
+        }
+        assert_eq!(out, include_str!("testdata/full_bird.conf"));
+    }
+
+    #[test]
     fn static_inputs_render_what_router_yaml_declares() {
         let cfg: sliplib_config::router::RouterConfig = sliplib_yaml::from_str(
             r#"
