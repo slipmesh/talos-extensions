@@ -12,58 +12,50 @@ pub struct MetricsConfig {
     pub listen: String,
 }
 
-/// `field` is the caller's path to the section.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum MetricsError {
-    #[error("{field} {listen:?} is not an ip:port: {error}")]
+    #[error("metrics.listen {listen:?} is not an ip:port: {error}")]
     NotAnAddress {
-        field: String,
         listen: String,
         error: std::net::AddrParseError,
     },
     #[error(
-        "{field} {listen:?} is not IPv4 - Prometheus discovers a node by its InternalIP, which is the v4 loopback"
+        "metrics.listen {0:?} is not IPv4 - Prometheus discovers a node by its InternalIP, which is the v4 loopback"
     )]
-    NotIpv4 { field: String, listen: String },
+    NotIpv4(String),
     #[error(
-        "{field} {listen:?} is a wildcard address - bind this node's own mesh loopback, which exists only inside the overlay"
+        "metrics.listen {0:?} is a wildcard address - bind this node's own mesh loopback, which exists only inside the overlay"
     )]
-    Wildcard { field: String, listen: String },
-    #[error("{field} {listen:?} has no port - omit the section to serve nothing")]
-    NoPort { field: String, listen: String },
+    Wildcard(String),
+    #[error("metrics.listen {0:?} has no port - omit the section to serve nothing")]
+    NoPort(String),
 }
 
 impl MetricsConfig {
-    pub fn validate(&self, field: &str) -> Result<(), MetricsError> {
-        let (field, listen) = (field.to_owned(), self.listen.clone());
+    pub fn validate(&self) -> Result<(), MetricsError> {
+        let listen = self.listen.clone();
         let address: std::net::SocketAddr = match self.listen.parse() {
             Ok(address) => address,
-            Err(error) => {
-                return Err(MetricsError::NotAnAddress {
-                    field,
-                    listen,
-                    error,
-                });
-            }
+            Err(error) => return Err(MetricsError::NotAnAddress { listen, error }),
         };
         if !address.is_ipv4() {
-            return Err(MetricsError::NotIpv4 { field, listen });
+            return Err(MetricsError::NotIpv4(listen));
         }
         // Both parse and bind. A wildcard puts the endpoint on every interface, public ones too.
         if address.ip().is_unspecified() {
-            return Err(MetricsError::Wildcard { field, listen });
+            return Err(MetricsError::Wildcard(listen));
         }
         // An ephemeral port nothing can be pointed at.
         if address.port() == 0 {
-            return Err(MetricsError::NoPort { field, listen });
+            return Err(MetricsError::NoPort(listen));
         }
         Ok(())
     }
 }
 
 fn metrics_valid(metrics: Option<&MetricsConfig>) -> Result<(), MetricsError> {
-    metrics.map_or(Ok(()), |metrics| metrics.validate("metrics.listen"))
+    metrics.map_or(Ok(()), MetricsConfig::validate)
 }
 
 #[derive(Deserialize, Serialize, Debug, Default, PartialEq)]
@@ -109,30 +101,57 @@ mod tests {
         }
     }
 
+    fn refusal(listen: &str) -> MetricsError {
+        MetricsConfig {
+            listen: listen.to_owned(),
+        }
+        .validate()
+        .unwrap_err()
+    }
+
     #[test]
     fn accepts_a_v4_metrics_listen_address() {
         with_metrics("198.51.100.1:9586").validate().unwrap();
     }
 
     #[test]
-    fn rejects_a_wildcard_metrics_listen_address() {
-        assert!(with_metrics("0.0.0.0:9586").validate().is_err());
-    }
-
-    #[test]
-    fn rejects_port_zero() {
-        assert!(with_metrics("198.51.100.1:0").validate().is_err());
-    }
-
-    #[test]
-    fn rejects_a_malformed_metrics_listen_address() {
-        assert!(with_metrics("198.51.100.1").validate().is_err());
-        assert!(with_metrics("not-an-address").validate().is_err());
-    }
-
-    #[test]
-    fn rejects_a_v6_metrics_listen_address() {
-        assert!(with_metrics("[3fff::1]:9586").validate().is_err());
+    fn a_listen_address_that_is_not_one_v4_address_with_a_port_is_refused_saying_why() {
+        for (listen, refused) in [
+            (
+                "198.51.100.1",
+                "metrics.listen \"198.51.100.1\" is not an ip:port: invalid socket address syntax",
+            ),
+            (
+                "not-an-address",
+                "metrics.listen \"not-an-address\" is not an ip:port: invalid socket address syntax",
+            ),
+            (
+                "[3fff::1]:9586",
+                "metrics.listen \"[3fff::1]:9586\" is not IPv4 - Prometheus discovers a node by its \
+                 InternalIP, which is the v4 loopback",
+            ),
+            (
+                "0.0.0.0:9586",
+                "metrics.listen \"0.0.0.0:9586\" is a wildcard address - bind this node's own mesh \
+                 loopback, which exists only inside the overlay",
+            ),
+            (
+                "198.51.100.1:0",
+                "metrics.listen \"198.51.100.1:0\" has no port - omit the section to serve nothing",
+            ),
+        ] {
+            assert_eq!(refusal(listen).to_string(), refused);
+        }
+        assert!(matches!(
+            refusal("198.51.100.1"),
+            MetricsError::NotAnAddress { .. }
+        ));
+        assert!(matches!(
+            refusal("[3fff::1]:9586"),
+            MetricsError::NotIpv4(_)
+        ));
+        assert!(matches!(refusal("0.0.0.0:9586"), MetricsError::Wildcard(_)));
+        assert!(matches!(refusal("198.51.100.1:0"), MetricsError::NoPort(_)));
     }
 
     #[test]

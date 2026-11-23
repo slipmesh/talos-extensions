@@ -21,7 +21,7 @@ serde.workspace = true
 sliplib-config.workspace = true
 sliplib-net.workspace = true
 sliplib-secrets.workspace = true
-thiserror = "2.0.21"
+thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 tracing.workspace = true
 
