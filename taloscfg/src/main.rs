@@ -12,7 +12,6 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use sliplib_config::v2::{File, Platform};
 use sliplib_mesh::Mesh;
-use sliplib_yaml::MultiDoc;
 use std::path::{Path, PathBuf};
 use taloscfg::documents::{TalosSettings, Template};
 use taloscfg::{defaults, patch_file, patches};
@@ -72,9 +71,8 @@ fn main() -> Result<()> {
 
 /// Checked as far as this generator reads them.
 fn read_slipmesh(config_path: &Path) -> Result<File> {
-    let reading = || format!("reading {}", config_path.display());
-    let files = File::read(&MultiDoc::read(config_path)?).with_context(reading)?;
-    patches::check(&files).with_context(reading)?;
+    let files = File::open(config_path)?;
+    patches::check(&files).with_context(|| format!("reading {}", config_path.display()))?;
     Ok(files)
 }
 
@@ -131,11 +129,7 @@ fn generate(
     let network = Mesh::of(&files).with_context(reading)?;
     let settings = TalosSettings::of(&files).with_context(reading)?;
     if let Some(n) = node {
-        let platform = network.node(n)?.platform;
-        anyhow::ensure!(
-            platform == Platform::Talos,
-            "node {n:?} is a `{platform}` node, which this generator does not configure"
-        );
+        network.node_on(n, Platform::Talos)?;
     }
     // A node a template does not reach was aimed past; a daemon no document gives a template at
     // all was left out, and would start on every node without one.

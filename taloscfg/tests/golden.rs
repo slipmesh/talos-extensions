@@ -72,12 +72,7 @@ fn generate(config: &Path, patches: &Path) {
 }
 
 fn documents(text: &str) -> Vec<Value> {
-    MultiDoc::parse(text)
-        .unwrap()
-        .documents()
-        .iter()
-        .map(|document| document.value.clone())
-        .collect()
+    MultiDoc::parse(text).unwrap().values()
 }
 
 /// `documents` as the text of a patch file.

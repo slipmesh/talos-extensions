@@ -190,12 +190,7 @@ mod tests {
     use sliplib_yaml::{from_str, to_value};
 
     fn documents(text: &str) -> Vec<Value> {
-        sliplib_yaml::MultiDoc::parse(text)
-            .unwrap()
-            .documents()
-            .iter()
-            .map(|d| d.value.clone())
-            .collect()
+        sliplib_yaml::MultiDoc::parse(text).unwrap().values()
     }
 
     const PATCH: &str = "\

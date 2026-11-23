@@ -284,12 +284,7 @@ mod tests {
     }
 
     fn documents(file: &str) -> Vec<sliplib_yaml::Value> {
-        sliplib_yaml::MultiDoc::parse(file)
-            .unwrap()
-            .documents()
-            .iter()
-            .map(|document| document.value.clone())
-            .collect()
+        sliplib_yaml::MultiDoc::parse(file).unwrap().values()
     }
 
     fn content(document: &sliplib_yaml::Value) -> &str {
