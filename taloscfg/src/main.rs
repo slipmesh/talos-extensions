@@ -189,7 +189,7 @@ fn generate(
     }
 
     for host in &hosts {
-        if sliplib_yaml::write_if_changed(&host.path, &host.after)? {
+        if sliplib_fs::write_if_changed(&host.path, &host.after)? {
             println!("wrote {}", host.path.display());
         } else {
             println!("{}: no changes", host.host);
@@ -215,7 +215,7 @@ fn render_hosts(
             let path = patches_dir.join(format!("{host}.yaml"));
             // A missing file is the from-scratch case; anything else must not read as "there was
             // nothing here", or the diff would show a whole file where one line changed.
-            let before = sliplib_yaml::read_or_empty(&path)?;
+            let before = sliplib_fs::read_or_empty(&path)?;
             Ok(HostFile {
                 host: host.to_owned(),
                 path,

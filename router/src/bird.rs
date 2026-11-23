@@ -13,30 +13,17 @@
 //! directly - see `talos-extensions/README.md`'s design notes and `config.rs`'s doc comments for
 //! the static-config shape this now renders from.
 
-use crate::bird_conf::ROUTER_LOOPBACK_IFACE;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use common::netlink::rt::RtClient;
+use sliplib_config::router::ROUTER_LOOPBACK;
+use sliplib_net::Ipv6Net;
 use std::collections::HashSet;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 
 /// This daemon spawns `bird` itself (see `main.rs`) and always launches it with `-s
 /// BIRD_CONTROL_SOCKET`, so the two agree on this path by construction rather than by convention.
 pub const BIRD_CONTROL_SOCKET: &str = "/run/bird.ctl";
-
-/// The subset of `ospf_interfaces` that are exact interface names - no `*`/`?` glob characters,
-/// and not a CIDR. Used by `protocols_healthy` to check `show ospf interface` against a concrete
-/// expected set; glob/CIDR entries have no single expected name to diff against, so they're
-/// excluded here rather than guessed at (see this module's `protocols_healthy` doc comment).
-pub fn exact_iface_names(ospf_interfaces: &[String]) -> Vec<String> {
-    ospf_interfaces
-        .iter()
-        .filter(|entry| {
-            !entry.contains('*') && !entry.contains('?') && sliplib_net::parse(entry).is_err()
-        })
-        .cloned()
-        .collect()
-}
 
 /// Name of this daemon's rendered OSPFv3 protocol block - see `render()`.
 const OSPF_PROTOCOL: &str = "mesh6";
@@ -98,14 +85,10 @@ pub async fn protocols_healthy(exact_ospf_ifaces: &[String]) -> Result<bool> {
 }
 
 pub async fn reconcile(path: &Path, desired: &str) -> Result<()> {
-    let current = tokio::fs::read_to_string(path).await.unwrap_or_default();
-    if current == desired {
-        return Ok(());
+    if sliplib_fs::write_if_changed(path, desired)? {
+        run_birdc_configure().await?;
     }
-    tokio::fs::write(path, desired)
-        .await
-        .with_context(|| format!("failed to write {}", path.display()))?;
-    run_birdc_configure().await
+    Ok(())
 }
 
 /// Unconditional reload, bypassing the config-text diff `reconcile()` uses to skip redundant
@@ -149,14 +132,14 @@ pub async fn ensure_loopback(
     loopback: Ipv4Addr,
     ipv6_loopback: Ipv6Addr,
 ) -> Result<()> {
-    let (index, _created) = rt.ensure_link(ROUTER_LOOPBACK_IFACE, "dummy").await?;
+    let (index, _created) = rt.ensure_link(ROUTER_LOOPBACK, "dummy").await?;
     let link_local = sliplib_mesh::addressing::link_local_from_loopback(ipv6_loopback);
     rt.ensure_addresses(
         index,
         &[
-            format!("{loopback}/32"),
-            format!("{ipv6_loopback}/128"),
-            format!("{link_local}/64"),
+            IpAddr::V4(loopback).into(),
+            IpAddr::V6(ipv6_loopback).into(),
+            Ipv6Net::new(link_local, 64)?.into(),
         ],
     )
     .await?;
@@ -167,16 +150,6 @@ pub async fn ensure_loopback(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn exact_iface_names_excludes_globs_and_cidrs() {
-        let entries = vec![
-            "mesh-east".to_string(),
-            "mesh-*".to_string(),
-            "198.51.100.192/26".to_string(),
-        ];
-        assert_eq!(exact_iface_names(&entries), vec!["mesh-east".to_string()]);
-    }
 
     // Fixtures below are real `birdc` output, captured against BIRD 2.19.1 running in a container
     // with a deliberately reproduced "strict bind yes local address not present yet" / "OSPF

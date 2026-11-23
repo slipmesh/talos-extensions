@@ -132,12 +132,12 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
         "starting router"
     );
 
-    let inputs = bird_conf::StaticInputs::from_config(&cfg)?;
+    let inputs = bird_conf::StaticInputs::from_config(&cfg);
 
     let rt = RtClient::connect().context("failed to open rtnetlink socket")?;
     bird::ensure_loopback(&rt, inputs.identity.loopback, inputs.identity.ipv6_loopback)
         .await
-        .context("failed to converge router-lo")?;
+        .with_context(|| format!("failed to converge {}", config::ROUTER_LOOPBACK))?;
 
     let ctx = Arc::new(RouterState {
         inputs,
@@ -277,7 +277,13 @@ const BIRD_HEALTH_ESCALATE_AFTER: u32 = 8;
 /// `bird::protocols_healthy`'s and `bird::force_reconfigure`'s doc comments for what this
 /// recovers from and why a config-diff-gated reconcile alone can never catch it.
 async fn bird_health_watchdog(ctx: Arc<RouterState>) -> ! {
-    let exact_ifaces = bird::exact_iface_names(&ctx.inputs.ospf_interfaces);
+    let exact_ifaces: Vec<String> = ctx
+        .inputs
+        .ospf_interfaces
+        .iter()
+        .filter_map(config::InterfacePattern::name)
+        .map(str::to_owned)
+        .collect();
     let mut tick = tokio::time::interval(BIRD_HEALTH_CHECK_INTERVAL);
     let mut consecutive_unhealthy: u32 = 0;
     loop {

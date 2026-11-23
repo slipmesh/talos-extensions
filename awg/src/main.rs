@@ -184,7 +184,13 @@ fn tracked(iface: &config::InterfaceEntry, index: u32) -> handshake::TrackedInte
     let peers = iface
         .peers
         .iter()
-        .filter_map(|peer| Some((peer.public_key.clone(), peer.allowed_ips.clone()?)))
+        .filter_map(|peer| {
+            let allowed_ips = peer.allowed_ips.as_ref()?;
+            Some((
+                peer.public_key.clone(),
+                allowed_ips.iter().map(|prefix| prefix.0).collect(),
+            ))
+        })
         .collect();
     handshake::TrackedInterface {
         name: iface.name.clone(),
@@ -206,7 +212,12 @@ mod tests {
             public_key: public_key.to_owned(),
             name: None,
             endpoint: None,
-            allowed_ips: allowed_ips.map(|cidrs| cidrs.iter().map(|c| (*c).to_owned()).collect()),
+            allowed_ips: allowed_ips.map(|cidrs| {
+                cidrs
+                    .iter()
+                    .map(|c| sliplib_config::Prefix::try_from((*c).to_owned()).unwrap())
+                    .collect()
+            }),
             persistent_keepalive: None,
         }
     }
@@ -230,7 +241,10 @@ mod tests {
         assert_eq!(tracked.stale_secs, 180);
         assert_eq!(
             tracked.peers,
-            HashMap::from([("tracked".to_owned(), vec!["203.0.113.2/32".to_owned()])])
+            HashMap::from([(
+                "tracked".to_owned(),
+                vec!["203.0.113.2/32".parse().unwrap()]
+            )])
         );
     }
 

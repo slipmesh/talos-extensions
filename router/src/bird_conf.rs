@@ -2,15 +2,12 @@
 //! template reads. Pure, with no netlink or BIRD process behind it, so that `taloscfg` renders a
 //! node's template the same way the node will and refuses one that does not render.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use common::template::Template;
 use serde::Serialize;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-
-/// Dedicated dummy interface carrying this node's router identity /32 and IPv6 loopback /128 -
-/// kept separate from the real `lo` and from `ext-awg`-managed interfaces so nothing but this
-/// daemon ever touches it.
-pub const ROUTER_LOOPBACK_IFACE: &str = "router-lo";
+use sliplib_config::Prefix4;
+use sliplib_config::router::{InterfacePattern, ROUTER_LOOPBACK};
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// This node's own OSPF/BGP-standard IPv4 loopback plus its IPv6 loopback (the OSPFv3/RFC 8950
 /// underlay's session-source address) - grouped into one param rather than two loose ones purely
@@ -32,15 +29,6 @@ pub struct RouterIdentity {
 pub struct BgpPeer {
     pub name: String,
     pub address: Ipv6Addr,
-}
-
-/// A BIRD quoted string ends at the first `"` - an embedded quote breaks out into the surrounding
-/// block and lets whatever follows be parsed as real config. `ospf_interfaces` name/glob entries
-/// come from `router.yaml`, so they go through this before being quoted.
-fn sanitize_quoted(raw: &str) -> String {
-    raw.chars()
-        .filter(|&c| c != '"' && c != '\n' && c != '\r')
-        .collect()
 }
 
 /// A BIRD `#` comment runs to the end of the line - an embedded newline breaks out of the comment
@@ -112,20 +100,9 @@ impl SanitizedRoute {
     }
 }
 
-/// Renders one interface-matching entry (`ospf_interfaces` or `direct_interfaces`) as BIRD would
-/// need it written in an `interface` clause: a bare (unquoted) CIDR literal if it parses as one -
-/// BIRD's interface-pattern grammar takes a prefix as its own token type, not a quoted string - or
-/// a quoted, sanitized name/glob pattern otherwise. Shared by both config fields - same grammar,
-/// same `protocol { interface ...; }` clause shape either way. **This split needs verifying against
-/// the pinned BIRD version's real grammar before relying on it** (see `config.rs`'s
-/// `ospf_interfaces` doc comment) - if CIDR-by-address matching turns out not to work the way this
-/// assumes, falling back to name/glob-only entries doesn't change anything else in this module.
-fn render_iface_pattern(entry: &str) -> String {
-    if sliplib_net::parse(entry).is_ok() {
-        entry.to_string()
-    } else {
-        format!("\"{}\"", sanitize_quoted(entry))
-    }
+/// BIRD's `interface` clause takes a name or a glob quoted; the pattern holds no `"` to break out.
+fn render_iface_pattern(pattern: &InterfacePattern) -> String {
+    format!("\"{}\"", pattern.as_str())
 }
 
 /// The desired-state inputs that vary independently of `identity`/`as_number` - one struct
@@ -134,7 +111,7 @@ fn render_iface_pattern(entry: &str) -> String {
 pub struct RenderInputs<'a> {
     /// OSPFv3 runs over the mesh links plus the loopback stub, and never re-exports
     /// kernel or BGP routes back into the IGP (`export none`).
-    pub ospf_interfaces: &'a [String],
+    pub ospf_interfaces: &'a [InterfacePattern],
     /// iBGP full mesh over the loopbacks (`multihop` + RFC 8950). It carries this node's own
     /// IPv4 loopback (`source = RTS_DEVICE`), its BYPASS/ANNOUNCE statics (`RTS_STATIC`) and any
     /// kernel route inside a `learn` range (`RTS_INHERIT`) - but never OSPF-learned routes, which
@@ -175,14 +152,14 @@ pub struct RenderInputs<'a> {
     /// podCIDR route is exactly that under every CNI, so a bare `learn` silently learns nothing
     /// and the node stops announcing its pods. `all` widens the *source* of learnable routes, not
     /// the scope: the import filter still rejects everything outside these prefixes.
-    pub learn: &'a [String],
-    /// Extra interfaces (exact name, glob, or CIDR - same grammar as `ospf_interfaces`) to treat
+    pub learn: &'a [Prefix4],
+    /// Extra interfaces (exact name or glob, as `ospf_interfaces`) to treat
     /// as `protocol direct` sources, each exported over iBGP by the existing `RTS_DEVICE` clause
     /// (the same one that already carries `router-lo`'s own loopback) - no separate wiring needed
     /// per entry. Not specific to any one purpose: a pod-network bridge (`cni0`, written by a
     /// separate component - see `slipmesh/cni-config`) is the motivating case, but this field
     /// doesn't know or care what the interface is for.
-    pub direct_interfaces: &'a [String],
+    pub direct_interfaces: &'a [InterfacePattern],
     /// Requests BFD sessions on every OSPF link, with the intervals the mesh chose. A WireGuard
     /// interface stays up whether or not packets still cross it, so without BFD a dead path is
     /// only noticed when OSPF's dead timer expires; the cost is constant control traffic through
@@ -233,59 +210,44 @@ pub fn render(
 pub struct StaticInputs {
     pub identity: RouterIdentity,
     pub as_number: u32,
-    pub ospf_interfaces: Vec<String>,
-    pub direct_interfaces: Vec<String>,
+    pub ospf_interfaces: Vec<InterfacePattern>,
+    pub direct_interfaces: Vec<InterfacePattern>,
     pub bgp_peers: Vec<BgpPeer>,
     pub announce: Vec<AnnounceRoute>,
-    pub learn: Vec<String>,
+    pub learn: Vec<Prefix4>,
     pub bfd: Option<sliplib_config::router::BfdSettings>,
 }
 
 impl StaticInputs {
-    /// `cfg` as `config::validate` left it.
-    pub fn from_config(cfg: &sliplib_config::router::RouterConfig) -> Result<Self> {
-        let mut v4 = None;
-        let mut v6 = None;
-        for addr in &cfg.node.loopback_addresses {
-            match sliplib_config::router::parse_loopback_address(addr)?.0 {
-                IpAddr::V4(a) => v4 = Some(a),
-                IpAddr::V6(a) => v6 = Some(a),
-            }
-        }
-        let identity = RouterIdentity {
-            loopback: v4.context("node.loopback_addresses has no IPv4 entry")?,
-            ipv6_loopback: v6.context("node.loopback_addresses has no IPv6 entry")?,
-        };
-        let bgp_peers = cfg
-            .bgp_peers
-            .iter()
-            .map(|p| {
-                Ok(BgpPeer {
-                    name: p.name.clone(),
-                    address: p.address.parse().with_context(|| {
-                        format!("bgp_peers[].address {:?} is not IPv6", p.address)
-                    })?,
-                })
-            })
-            .collect::<Result<_>>()?;
-        let announce = cfg
-            .announce
-            .iter()
-            .map(|a| AnnounceRoute {
-                net: a.net.clone(),
-                label: a.label.clone().unwrap_or_default(),
-            })
-            .collect();
-        Ok(Self {
-            identity,
+    pub fn from_config(cfg: &sliplib_config::router::RouterConfig) -> Self {
+        let loopbacks = cfg.node.loopback_addresses;
+        Self {
+            identity: RouterIdentity {
+                loopback: loopbacks.ipv4.0.addr(),
+                ipv6_loopback: loopbacks.ipv6.0.addr(),
+            },
             as_number: cfg.bgp_as,
             ospf_interfaces: cfg.ospf_interfaces.clone(),
             direct_interfaces: cfg.direct_interfaces.clone(),
-            bgp_peers,
-            announce,
+            bgp_peers: cfg
+                .bgp_peers
+                .iter()
+                .map(|p| BgpPeer {
+                    name: p.name.clone(),
+                    address: p.address,
+                })
+                .collect(),
+            announce: cfg
+                .announce
+                .iter()
+                .map(|a| AnnounceRoute {
+                    net: a.net.0.to_string(),
+                    label: a.label.clone().unwrap_or_default(),
+                })
+                .collect(),
             learn: cfg.learn.clone(),
             bfd: cfg.bfd.clone(),
-        })
+        }
     }
 
     pub fn render(&self, template: &Template, bypass: &[BypassRoute]) -> Result<String> {
@@ -349,13 +311,16 @@ impl BirdConfigContext {
                 address: p.address,
             })
             .collect();
-        let learn_patterns: Vec<String> =
-            inputs.learn.iter().map(|cidr| format!("{cidr}+")).collect();
+        let learn_patterns: Vec<String> = inputs
+            .learn
+            .iter()
+            .map(|cidr| format!("{}+", cidr.0))
+            .collect();
         let direct_interfaces: Vec<RenderedDirectIface> = inputs
             .direct_interfaces
             .iter()
             .map(|s| RenderedDirectIface {
-                protocol_id: sanitize_protocol_id(s),
+                protocol_id: sanitize_protocol_id(s.as_str()),
                 pattern: render_iface_pattern(s),
             })
             .collect();
@@ -364,7 +329,7 @@ impl BirdConfigContext {
             loopback: identity.loopback,
             ipv6_loopback: identity.ipv6_loopback,
             as_number,
-            router_loopback_iface: ROUTER_LOOPBACK_IFACE,
+            router_loopback_iface: ROUTER_LOOPBACK,
             ospf_interfaces: inputs
                 .ospf_interfaces
                 .iter()
@@ -373,7 +338,7 @@ impl BirdConfigContext {
                     // neighbour on a dummy interface, so a BFD session there could only ever sit
                     // down. Asking for one would put a permanently-dead entry in `show bfd sessions`
                     // and teach whoever reads it to ignore that column.
-                    bfd: inputs.bfd.is_some() && s != ROUTER_LOOPBACK_IFACE,
+                    bfd: inputs.bfd.is_some() && !s.is_router_loopback(),
                     pattern: render_iface_pattern(s),
                 })
                 .collect(),
@@ -420,7 +385,6 @@ announce:
             label: "example".to_string(),
         }];
         let out = StaticInputs::from_config(&cfg)
-            .unwrap()
             .render(&compile(REFERENCE_TEMPLATE).unwrap(), &bypass)
             .unwrap();
         if let Some(path) = std::env::var_os("WRITE_BIRD_CONF") {
@@ -449,7 +413,6 @@ learn: [203.0.113.128/26]
             label: "example".to_string(),
         }];
         let out = StaticInputs::from_config(&cfg)
-            .unwrap()
             .render(&compile(REFERENCE_TEMPLATE).unwrap(), &bypass)
             .unwrap();
         assert!(out.contains("router id 198.51.100.1;"));
@@ -498,26 +461,32 @@ learn: [203.0.113.128/26]
         }
     }
 
+    fn patterns(list: &[&str]) -> Vec<InterfacePattern> {
+        list.iter()
+            .map(|p| InterfacePattern::try_from((*p).to_owned()).unwrap())
+            .collect()
+    }
+
     /// Positional test helper mirroring `render`/`reconcile`'s pre-`RenderInputs` shape, so each
     /// test case only names the slices it actually varies.
     fn inputs<'a>(
-        ospf_interfaces: &'a [String],
+        ospf_interfaces: &'a [InterfacePattern],
         bgp_peers: &'a [BgpPeer],
         bypass: &'a [BypassRoute],
         announce: &'a [AnnounceRoute],
-        learn: &'a [String],
+        learn: &'a [Prefix4],
     ) -> RenderInputs<'a> {
         inputs_with_direct(ospf_interfaces, bgp_peers, bypass, announce, learn, &[])
     }
 
     #[allow(clippy::too_many_arguments)]
     fn inputs_with_direct<'a>(
-        ospf_interfaces: &'a [String],
+        ospf_interfaces: &'a [InterfacePattern],
         bgp_peers: &'a [BgpPeer],
         bypass: &'a [BypassRoute],
         announce: &'a [AnnounceRoute],
-        learn: &'a [String],
-        direct_interfaces: &'a [String],
+        learn: &'a [Prefix4],
+        direct_interfaces: &'a [InterfacePattern],
     ) -> RenderInputs<'a> {
         RenderInputs {
             ospf_interfaces,
@@ -538,13 +507,8 @@ learn: [203.0.113.128/26]
     /// unconditionally would put control traffic through every tunnel of every mesh.
     #[test]
     fn bfd_is_configured_and_requested_only_when_the_mesh_asks_for_it() {
-        // The loopback is in `ospf_interfaces` on every real node, and a CIDR entry renders
-        // unquoted - both shapes have to come out right in the BFD block as well as the OSPF one.
-        let ifaces = vec![
-            "mesh-*".to_string(),
-            "198.51.100.192/26".to_string(),
-            "router-lo".to_string(),
-        ];
+        // The loopback is in `ospf_interfaces` on every real node.
+        let ifaces = patterns(&["mesh-*", "router-lo"]);
         let settings = sliplib_config::router::BfdSettings {
             min_rx_ms: 500,
             ..Default::default()
@@ -559,7 +523,6 @@ learn: [203.0.113.128/26]
         assert!(on.contains("min tx interval 300 ms"));
         assert!(on.contains("multiplier 5;"));
         assert!(on.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
-        assert!(on.contains("interface 198.51.100.192/26 { type ptp; bfd on; };"));
         assert!(on.contains("interface \"router-lo\" { stub yes; };"));
         // No neighbour on a dummy interface, so no session to ask for.
         assert!(on.contains("interface \"router-lo\" { type ptp; };"));
@@ -572,7 +535,6 @@ learn: [203.0.113.128/26]
             .next()
             .unwrap();
         assert!(bfd_block.contains("interface \"mesh-*\""));
-        assert!(bfd_block.contains("interface 198.51.100.192/26"));
         assert!(!bfd_block.contains("router-lo"));
 
         let off = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
@@ -619,11 +581,11 @@ learn: [203.0.113.128/26]
     }
 
     #[test]
-    fn render_includes_ospf_interfaces_as_names_and_cidrs() {
-        let ifaces = ["mesh-*".to_string(), "198.51.100.192/26".to_string()];
+    fn render_includes_ospf_interfaces_as_quoted_names_and_globs() {
+        let ifaces = patterns(&["mesh-*", "lan0"]);
         let out = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
         assert!(out.contains("interface \"mesh-*\" { type ptp;"));
-        assert!(out.contains("interface 198.51.100.192/26 { type ptp;"));
+        assert!(out.contains("interface \"lan0\" { type ptp;"));
         assert!(out.contains("interface \"router-lo\" { stub yes; };"));
     }
 
@@ -644,7 +606,7 @@ learn: [203.0.113.128/26]
 
     #[test]
     fn render_includes_a_protocol_direct_block_per_direct_interface() {
-        let direct_interfaces = ["cni0".to_string()];
+        let direct_interfaces = patterns(&["cni0"]);
         let out = render(
             identity(),
             64512,
@@ -664,7 +626,7 @@ learn: [203.0.113.128/26]
 
     #[test]
     fn render_direct_interfaces_get_distinct_sanitized_protocol_ids() {
-        let direct_interfaces = ["cni0".to_string(), "my-bridge".to_string()];
+        let direct_interfaces = patterns(&["cni0", "my-bridge"]);
         let out = render(
             identity(),
             64512,
@@ -750,7 +712,7 @@ learn: [203.0.113.128/26]
             name: "peer1".to_string(),
             address: "3fff::2".parse().unwrap(),
         }];
-        let learn = vec!["203.0.113.128/26".to_string()];
+        let learn = vec![Prefix4::try_from("203.0.113.128/26".to_owned()).unwrap()];
         let conf = render(identity(), 64512, &inputs(&[], &peers, &[], &[], &learn)).unwrap();
         // `all`, not a bare `learn` - see `RenderInputs`'s doc comment: without it BIRD skips
         // KRT_SRC_KERNEL routes, which is the only kind a node's own podCIDR route ever is.
@@ -769,15 +731,6 @@ learn: [203.0.113.128/26]
             "legit label protocol static evil { route 0.0.0.0/0 blackhole; }"
         );
         assert_eq!(sanitize_comment("plain label"), "plain label");
-    }
-
-    #[test]
-    fn sanitize_quoted_strips_quotes_and_newlines() {
-        assert_eq!(
-            sanitize_quoted("mesh-west\"; protocol static evil { route 0.0.0.0/0 blackhole; } \""),
-            "mesh-west; protocol static evil { route 0.0.0.0/0 blackhole; } "
-        );
-        assert_eq!(sanitize_quoted("mesh-west"), "mesh-west");
     }
 
     #[test]

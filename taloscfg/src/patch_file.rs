@@ -97,7 +97,7 @@ pub(crate) fn nftables_document(template: &str, added: Vec<ConfigFile>) -> Resul
 /// the daemon does not supply, or fails to render this node's config.
 fn validate_router_template(template: &str, cfg: &RouterConfig) -> Result<()> {
     let template = router::bird_conf::compile(template.to_owned())?;
-    router::bird_conf::StaticInputs::from_config(cfg)?.render(&template, &[])?;
+    router::bird_conf::StaticInputs::from_config(cfg).render(&template, &[])?;
     Ok(())
 }
 

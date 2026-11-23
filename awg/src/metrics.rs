@@ -420,7 +420,12 @@ mod tests {
             public_key: public_key.to_string(),
             name: name.map(str::to_string),
             endpoint: Some("192.0.2.7:51820".to_string()),
-            allowed_ips: allowed_ips.map(|cidrs| cidrs.iter().map(|c| (*c).to_string()).collect()),
+            allowed_ips: allowed_ips.map(|cidrs| {
+                cidrs
+                    .iter()
+                    .map(|c| sliplib_config::Prefix::try_from((*c).to_owned()).unwrap())
+                    .collect()
+            }),
             persistent_keepalive: None,
         }
     }

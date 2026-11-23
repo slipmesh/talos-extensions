@@ -5,6 +5,7 @@ use crate::interface::Peer;
 use netlink_packet_amneziawg::{
     AmneziaWireguardAllowedIpAttr, AmneziaWireguardAttribute, AmneziaWireguardPeerAttribute,
 };
+use sliplib_net::IpNet;
 use sliplib_secrets::wireguard::encode_key;
 use std::collections::BTreeMap;
 
@@ -65,7 +66,7 @@ pub fn peers(attrs: &[AmneziaWireguardAttribute]) -> BTreeMap<String, Dumped> {
     peers
 }
 
-fn allowed_ip_to_cidr(attrs: &[AmneziaWireguardAllowedIpAttr]) -> Option<String> {
+fn allowed_ip_to_cidr(attrs: &[AmneziaWireguardAllowedIpAttr]) -> Option<IpNet> {
     let ip = attrs.iter().find_map(|a| match a {
         AmneziaWireguardAllowedIpAttr::IpAddr(ip) => Some(*ip),
         _ => None,
@@ -74,7 +75,7 @@ fn allowed_ip_to_cidr(attrs: &[AmneziaWireguardAllowedIpAttr]) -> Option<String>
         AmneziaWireguardAllowedIpAttr::Cidr(c) => Some(*c),
         _ => None,
     })?;
-    Some(format!("{ip}/{cidr}"))
+    IpNet::new(ip, cidr).ok()
 }
 
 #[cfg(test)]
@@ -118,9 +119,13 @@ mod tests {
             (a.as_str(), b.as_str()),
             (encode_key(&A).as_str(), encode_key(&B).as_str())
         );
-        assert_eq!(of_a.peer.allowed_ips, ["203.0.113.1/32", "203.0.113.2/32"]);
+        let text = |ips: &[IpNet]| ips.iter().map(IpNet::to_string).collect::<Vec<_>>();
+        assert_eq!(
+            text(&of_a.peer.allowed_ips),
+            ["203.0.113.1/32", "203.0.113.2/32"]
+        );
         assert_eq!(of_a.peer.endpoint.as_deref(), Some("192.0.2.1:51820"));
-        assert_eq!(of_b.peer.allowed_ips, ["203.0.113.9/32"]);
+        assert_eq!(text(&of_b.peer.allowed_ips), ["203.0.113.9/32"]);
         assert_eq!(of_b.peer.endpoint, None);
     }
 }
