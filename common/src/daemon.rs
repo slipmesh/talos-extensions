@@ -171,7 +171,12 @@ mod tests {
         );
     }
 
-    /// `router` asks for the check too.
+    #[test]
+    fn awg_rejects_a_wildcard_metrics_listener() {
+        let err = with_metrics("0.0.0.0:9586").validate().unwrap_err();
+        assert!(err.to_string().contains("wildcard"), "{err}");
+    }
+
     #[test]
     fn router_rejects_a_wildcard_metrics_listener() {
         let yaml = "node:\n  loopback_addresses: [\"198.51.100.1/32\", \"3fff::1/128\"]\nbgp_as: \
