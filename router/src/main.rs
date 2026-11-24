@@ -41,8 +41,7 @@ async fn main() -> Result<()> {
 /// Shared state for the two background loops (`bypass_refresh_loop`, `bird_health_watchdog`) -
 /// everything here is either read-only for the process lifetime (config is never re-read; a
 /// config change means Talos restarts this whole container, same as `awg`) or behind its own
-/// lock. No `Store`/reflector/CRD-cache of any kind - unlike the k8s original's `reconcile::Context`,
-/// there's nothing here that's watched, only what `router.yaml` declared once at startup.
+/// lock: nothing here is watched, only what `router.yaml` declared once at startup.
 struct RouterState {
     mesh: config::RouterConfig,
     metrics: Option<MetricsConfig>,

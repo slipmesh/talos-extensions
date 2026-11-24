@@ -1,19 +1,9 @@
 //! Resolution pipeline: resolve each source (asn -> RIPEstat, literal -> verbatim, geoip ->
 //! RIPEstat, dns -> A record) into (net, label) pairs, dedupe/collapse per label, then punch out
-//! every excluded network (resolved the same way). Ported from `slipmesh/core`'s `resolver.rs`,
-//! which carried no `kube`/`k8s-openapi` import, so this is close to verbatim; the only
-//! structural change is `BypassSourceEntry` (`sliplib_config::router`), a plain
-//! `#[derive(Deserialize)]` struct read straight out of `router.yaml` instead of
-//! the CRD-schema'd version in `core/src/router_types.rs` (which derives `JsonSchema`/
-//! `CustomResource` via `kube`'s macros - exactly the dependency this workspace refuses to take).
+//! every excluded network (resolved the same way).
 //!
-//! One behavioral change versus the k8s original, worth calling out explicitly rather than
-//! silently dropping: `core::resolver::self_and_cluster_exclude_entry` isn't ported. It punched
-//! every cluster node's own endpoint out of the bypass automatically, sourced from every
-//! `NodeConfig` - there's no cluster-wide node list available to a static, per-node config file.
-//! Whoever authors `router.yaml`'s `bypass.exclude` is responsible for excluding this node's own
-//! (and any peer's) public endpoint if it could otherwise fall inside `bypass.include`, the same
-//! "config-authoring concern" pattern `awg`'s README already documents for private keys.
+//! No node's endpoint is excluded on its own: a per-node config holds no list of the others, so
+//! `bypass.exclude` has to name every public endpoint that could fall inside `bypass.include`.
 
 use anyhow::{Context, Result};
 use sliplib_config::router::BypassSourceEntry;
@@ -26,9 +16,8 @@ use tokio::sync::Semaphore;
 /// unless configured, hence `RIPESTAT_CLIENT` below.
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Ceiling on one whole `resolve()` call, not just its individual requests - see `core::resolver`'s
-/// original doc comment for the full reasoning (a caller typically holds some render lock across
-/// this whole call).
+/// Ceiling on one whole `resolve()` call, not just its individual requests: a caller may hold a
+/// lock across the whole call.
 pub const RESOLVE_TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// One shared client for every RIPEstat call - connection/TLS reuse across the lookups a single
@@ -246,9 +235,8 @@ async fn resolve_entries(sources: &[BypassSourceEntry]) -> Result<Vec<(Ipv4Net, 
 /// Full pipeline: resolve `sources` and `exclude` (identical resolution logic for both, via
 /// `resolve_entries`), then punch every exclusion out of every included prefix.
 ///
-/// Any resolution failure fails the whole call rather than returning a partial result - see
-/// `core::resolver::resolve`'s original doc comment for the full "fails closed, toward 'no
-/// blackholing'" reasoning, which applies unchanged here.
+/// Any resolution failure fails the whole call rather than returning a partial result: a partial
+/// exclusion list would blackhole what it missed, so a failure fails closed, toward no blackholing.
 pub async fn resolve(
     sources: &[BypassSourceEntry],
     exclude: &[BypassSourceEntry],

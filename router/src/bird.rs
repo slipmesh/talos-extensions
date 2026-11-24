@@ -5,13 +5,8 @@
 //! loopbacks) and an iBGP full mesh over those loopbacks using `multihop` + RFC 8950 (`extended
 //! next hop on`) to carry the IPv4 payload prefixes - BYPASS/ANNOUNCE statics, kernel routes
 //! inside `learn`, and the road-warrior routes `ext-awg` installs, learned by their protocol
-//! number - with an IPv6 next-hop. Still out of scope: eBGP peers.
-//!
-//! Ported from `slipmesh/operators`' `router/src/bird.rs`, with
-//! the Kubernetes-only pieces dropped (CNI conflist rendering, the `DIRECT_CNI` protocol block,
-//! `ospf_ifaces`/`bgp_peers` derived from CRDs) and replaced by what `router.yaml` declares
-//! directly - see `talos-extensions/README.md`'s design notes and `sliplib_config::router` for the
-//! static-config shape this now renders from.
+//! number - with an IPv6 next-hop. Still out of scope: eBGP peers. What it renders from is
+//! `router.yaml`, `sliplib_config::router`'s shape.
 
 use anyhow::Result;
 use common::netlink::rt::RtClient;
@@ -106,9 +101,7 @@ pub async fn force_reconfigure() -> Result<()> {
 
 /// Ensures the dedicated router loopback (`router-lo`, a dummy interface) exists and carries this
 /// node's IPv4 loopback /32, IPv6 loopback /128, and a deterministic IPv6 link-local - all three
-/// in one `ensure_addresses` call (unlike the k8s original's separate `ensure_address`/
-/// `ensure_address_v6` calls - this repo's `common::netlink::rt` already generalized that into one
-/// call taking any mix of IPv4/IPv6 CIDRs, see its own doc comment).
+/// in one `ensure_addresses` call, which removes every address it is not given.
 ///
 /// The link-local is not optional: OSPFv3 (RFC 5340) sources every packet it sends from an
 /// interface's link-local address, even on a `stub yes` interface that never sends Hello, so

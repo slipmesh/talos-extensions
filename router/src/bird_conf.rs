@@ -13,10 +13,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 /// underlay's session-source address) - grouped into one param rather than two loose ones purely
 /// to keep `render`/`reconcile` under this workspace's `too-many-arguments-threshold`, not because
 /// the two are used together for any other reason. Both come straight from
-/// `config::NodeIdentity::loopback_addresses` - unlike the k8s original, there's no
-/// network+node_id derivation step; whoever authors `router.yaml` gives each node its own
-/// loopbacks directly, the same "config-authoring concern" `awg`'s README documents for private
-/// keys.
+/// `config::NodeIdentity::loopback_addresses`.
 #[derive(Clone, Copy)]
 pub struct RouterIdentity {
     pub loopback: Ipv4Addr,

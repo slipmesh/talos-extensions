@@ -1,14 +1,7 @@
 //! Applies one `InterfaceEntry` to the kernel: link/addresses/identity, then a point-wise peer
 //! diff against whatever's actually configured (read back from the kernel, not assumed empty -
 //! this process gets fully restarted on every config change, so there is no in-memory "previous"
-//! to carry over between runs).
-//!
-//! Ported and merged from slipmesh-operators' `mesh::awg`/`roadwarriors::awg` (same repo,
-//! ) - the two were nearly-identical device/peer-attribute-building
-//! code with different reconciliation shapes (mesh: exactly one peer, unconditional resend;
-//! roadwarriors: many peers, point-wise diff). One shape (point-wise diff) now covers both, since
-//! a diff against a single peer degenerates to exactly the same SetDevice call an unconditional
-//! resend would have made.
+//! to carry over between runs). A mesh link's one peer and a pool's many take the same diff.
 
 use anyhow::{Context, Result};
 use common::netlink::awg::{AwgClient, push_obfuscation_attrs, wire};
