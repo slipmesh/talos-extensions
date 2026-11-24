@@ -528,8 +528,9 @@ content: "table inet x {{}}"
     #[test]
     fn files_added_to_nftables_need_a_firewall_template_that_reaches_the_node() {
         let raw = format!(
-            "{}{}",
+            "{}{}{}",
             with_router_files(&[("", TEMPLATE)]),
+            adding_to("nftables"),
             adding_to("nftables")
         );
         let a = render_raw(&raw, "a").unwrap();
@@ -542,7 +543,7 @@ content: "table inet x {{}}"
         assert!(
             err.contains("nftables")
                 && err.contains("\"b\"")
-                && err.contains("the `kind: patch` document at line"),
+                && err.contains(" and the `kind: patch` document at line"),
             "{err}"
         );
     }
