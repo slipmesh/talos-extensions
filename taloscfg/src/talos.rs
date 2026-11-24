@@ -1,5 +1,6 @@
 //! Talos machine-config documents, as far as the generator reads and writes them.
 
+use anyhow::Context;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use sliplib_yaml::{Mapping, Value};
@@ -8,13 +9,6 @@ use std::collections::BTreeMap;
 const API_VERSION: &str = "v1alpha1";
 pub const EXTENSION_SERVICE_CONFIG: &str = "ExtensionServiceConfig";
 pub const KUBE_NODE_CONFIG: &str = "KubeNodeConfig";
-
-/// What is wrong with a Talos document these functions were given.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("serializing a file's contents")]
-    Contents(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
 
 /// What Talos keys a document by: two documents of one identity are one document. Every other key
 /// passes unread.
@@ -136,7 +130,7 @@ impl Annotations {
 
 /// Replaces each `configFiles[].content` of `document` written as a mapping or a list with that
 /// YAML's text: Talos takes only a string there.
-pub fn contents_as_text(document: &mut Value) -> Result<(), Error> {
+pub fn contents_as_text(document: &mut Value) -> anyhow::Result<()> {
     let Some(files) = document
         .get_mut("configFiles")
         .and_then(Value::as_sequence_mut)
@@ -145,8 +139,8 @@ pub fn contents_as_text(document: &mut Value) -> Result<(), Error> {
     };
     for content in files.iter_mut().filter_map(|file| file.get_mut("content")) {
         if content.is_mapping() || content.is_sequence() {
-            let text = sliplib_yaml::to_string(&*content)
-                .map_err(|source| Error::Contents(source.into()))?;
+            let text =
+                sliplib_yaml::to_string(&*content).context("serializing a file's contents")?;
             *content = Value::String(text);
         }
     }
