@@ -518,6 +518,7 @@ content: "table inet x {{}}"
             .filter(|document| document["name"] == "awg")
             .collect();
         assert_eq!(awg.len(), 1, "{a}");
+        assert_eq!(awg[0]["configFiles"][0]["mountPath"], AWG_CONFIG_PATH);
         assert_eq!(
             awg[0]["configFiles"][1]["mountPath"],
             "/etc/talos-extensions/extra"
