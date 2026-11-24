@@ -11,6 +11,17 @@ use std::collections::BTreeSet;
 
 const NAME: &str = "template";
 
+/// Reads the template at `path` and compiles it with its daemon's `compile`.
+pub async fn load(
+    path: &str,
+    compile: impl FnOnce(String) -> Result<Template>,
+) -> Result<Template> {
+    let source = tokio::fs::read_to_string(path)
+        .await
+        .with_context(|| format!("failed to read template {path}"))?;
+    compile(source).with_context(|| format!("template {path} is invalid"))
+}
+
 /// One compiled template whose every variable is known to its daemon.
 pub struct Template {
     env: Environment<'static>,

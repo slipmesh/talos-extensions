@@ -114,11 +114,7 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
     let RouterDaemonConfig { mesh: cfg, metrics } = daemon;
     // Read before anything on the node is touched: without a template there is no bird.conf to
     // write, and nothing to fall back on - the template is the node's config, not this binary's.
-    let template_source = tokio::fs::read_to_string(bird_conf::TEMPLATE_PATH)
-        .await
-        .with_context(|| format!("failed to read template {}", bird_conf::TEMPLATE_PATH))?;
-    let template = bird_conf::compile(template_source)
-        .with_context(|| format!("template {} is invalid", bird_conf::TEMPLATE_PATH))?;
+    let template = common::template::load(bird_conf::TEMPLATE_PATH, bird_conf::compile).await?;
 
     tracing::info!(
         bgp_peers = cfg.bgp_peers.len(),

@@ -38,11 +38,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    let source = tokio::fs::read_to_string(TEMPLATE_PATH)
-        .await
-        .with_context(|| format!("failed to read template {TEMPLATE_PATH}"))?;
-    let template = template::compile(source)
-        .with_context(|| format!("template {TEMPLATE_PATH} is invalid"))?;
+    let template = common::template::load(TEMPLATE_PATH, template::compile).await?;
 
     let referenced = template.variables();
     tracing::info!(variables = ?referenced, "starting nftables ruleset apply");
