@@ -139,3 +139,14 @@ async fn watchdog(rendered: String) -> Result<()> {
         let _ = monitor.wait().await;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn the_default_route_interface_is_the_one_its_lookup_finds() {
+        let found = default_iface("IPv4", || async { Ok(Some("eth9".to_owned())) }).await;
+        assert_eq!(found.unwrap(), "eth9");
+    }
+}

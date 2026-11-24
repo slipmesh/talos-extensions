@@ -294,3 +294,51 @@ async fn bird_health_watchdog(ctx: Arc<RouterState>) -> ! {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bird_conf::BypassRoute;
+
+    /// What `current_bypass_routes` serves with `cached`, and the time it took, when the bypass's
+    /// one source fails before any lookup: a literal without prefixes.
+    async fn served_with(cached: Option<Vec<BypassRoute>>) -> (Vec<BypassRoute>, Duration) {
+        let mesh: config::RouterConfig = sliplib_yaml::from_str(
+            r#"
+node: {loopback_addresses: ["198.51.100.1/32", "3fff::1/128"]}
+bgp_as: 64512
+bypass: {include: [{kind: literal}]}
+"#,
+        )
+        .unwrap();
+        let ctx = RouterState {
+            mesh,
+            metrics: None,
+            bypass_cache: Mutex::new(cached),
+            render_lock: Mutex::new(()),
+            template: bird_conf::compile(bird_conf::REFERENCE_TEMPLATE).unwrap(),
+        };
+        let start = tokio::time::Instant::now();
+        let served = current_bypass_routes(&ctx).await;
+        (served, start.elapsed())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_resolution_serves_the_cache_at_once_or_nothing_after_every_try() {
+        let cached = vec![BypassRoute {
+            net: "192.0.2.0/24".to_owned(),
+            label: "a".to_owned(),
+        }];
+        assert_eq!(
+            served_with(Some(cached.clone())).await,
+            (cached, Duration::ZERO)
+        );
+        assert_eq!(
+            served_with(None).await,
+            (
+                vec![],
+                BYPASS_STARTUP_RETRY_INTERVAL * (BYPASS_STARTUP_TRIES - 1)
+            )
+        );
+    }
+}

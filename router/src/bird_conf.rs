@@ -55,7 +55,7 @@ fn sanitize_protocol_id(raw: &str) -> String {
     out
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BypassRoute {
     pub net: String,
     pub label: String,

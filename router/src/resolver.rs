@@ -288,6 +288,7 @@ fn exclude_all(included: Vec<(Ipv4Net, String)>, exclude: Vec<Ipv4Net>) -> Vec<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sliplib_config::router::LabeledPrefix;
 
     fn entries(list: &[(&str, &str)]) -> Vec<(String, String)> {
         list.iter()
@@ -382,5 +383,44 @@ mod tests {
         for country in ["D", "DEU", "D1"] {
             assert!(validate_country(country).is_err(), "{country}");
         }
+    }
+
+    fn source(kind: &str) -> BypassSourceEntry {
+        BypassSourceEntry {
+            kind: kind.to_owned(),
+            label: None,
+            asns: None,
+            prefixes: None,
+            country: None,
+            hostnames: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_literal_source_gives_its_prefixes_and_a_dns_source_an_ipv4_host_as_itself() {
+        let literal = BypassSourceEntry {
+            prefixes: Some(
+                [("192.0.2.0/24", Some("a")), ("198.51.100.0/24", None)]
+                    .map(|(net, label)| LabeledPrefix {
+                        net: net.to_owned(),
+                        label: label.map(str::to_owned),
+                    })
+                    .into(),
+            ),
+            ..source("literal")
+        };
+        assert_eq!(
+            collect_source(&literal).await.unwrap(),
+            entries(&[("192.0.2.0/24", "a"), ("198.51.100.0/24", "")])
+        );
+        let dns = BypassSourceEntry {
+            label: Some("b".to_owned()),
+            hostnames: Some(vec!["192.0.2.7".to_owned(), "2001:db8::1".to_owned()]),
+            ..source("dns")
+        };
+        assert_eq!(
+            collect_source(&dns).await.unwrap(),
+            entries(&[("192.0.2.7/32", "b")])
+        );
     }
 }

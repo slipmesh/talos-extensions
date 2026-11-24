@@ -614,4 +614,11 @@ mod tests {
         assert!(expected.contains(&AmneziaWireguardAttribute::Jc(4)));
         assert_eq!(check(&interface("awg-a", obfuscation)).unwrap(), expected);
     }
+
+    #[tokio::test]
+    async fn an_ip_endpoint_resolves_to_itself() {
+        for endpoint in ["198.51.100.4:51820", "[2001:db8::1]:51820"] {
+            assert_eq!(resolve_endpoint(endpoint).await.unwrap(), endpoint);
+        }
+    }
 }
