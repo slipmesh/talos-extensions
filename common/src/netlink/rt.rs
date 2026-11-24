@@ -1,19 +1,11 @@
 //! Thin wrapper around `rtnetlink` - the route/link/address netlink family (`NETLINK_ROUTE`,
 //! distinct from the "amneziawg" genl one in `awg.rs`). Replaces `ip` subprocess calls entirely.
-//!
-//! Ported from slipmesh-operators' `common::netlink::rt`, with two
-//! changes beyond the re-home: address handling is generalized from "one IPv4 address" (`
-//! ensure_address`) / "N IPv6 addresses" (`ensure_address_v6`) into one `ensure_addresses` that
-//! takes any mix of IPv4/IPv6 CIDRs; and routes carry an explicit `RouteProtocol` tag (`route_add`/
-//! `route_del`/new `routes_by_protocol`) so this daemon's own routes are unambiguously
-//! distinguishable from anything else that might exist on the same interface (see
-//! `crate::ROUTE_PROTOCOL`'s doc comment for why this matters).
-//!
-//! Route/link types are imported via `rtnetlink::packet_route::...`, not a separate top-level
-//! `netlink-packet-route` dependency - see this workspace's root `Cargo.toml` comment on why.
+//! Routes carry a `RouteProtocol` tag, so a daemon's own routes are told apart from any other on
+//! the same interface (see `crate::ROUTE_PROTOCOL`).
 
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
+use rtnetlink::packet_route::address::AddressMessage;
 use rtnetlink::packet_route::link::InfoKind;
 use rtnetlink::packet_route::route::{RouteMessage, RouteProtocol};
 use rtnetlink::{
@@ -27,9 +19,8 @@ use tokio::sync::Mutex;
 #[derive(Clone)]
 pub struct RtClient {
     handle: Handle,
-    /// Serializes every netlink request issued through this client - see slipmesh-operators'
-    /// original doc comment (same file, same reasoning): a shared netlink socket under concurrent
-    /// requests can return kernel `EBUSY` even across unrelated links/request types. A `Mutex`
+    /// Serializes every netlink request issued through this client: a shared netlink socket under
+    /// concurrent requests can return kernel `EBUSY` even across unrelated links/request types. A `Mutex`
     /// rather than a retry loop sidesteps picking a retry budget that's merely "probably enough".
     ///
     /// Internal call sites that need what a locked public method already does (e.g. `ensure_link`
@@ -38,10 +29,8 @@ pub struct RtClient {
     netlink_lock: Arc<Mutex<()>>,
 }
 
-/// Which of `current` addresses/routes should be removed so only `desired` remains - pure,
-/// independent of any netlink call, unit-testable without a real link/kernel. Generic over
-/// anything comparable-by-value (address+prefix pairs here).
-fn to_remove<A: PartialEq + Copy>(current: &[A], desired: &[A]) -> Vec<A> {
+/// Which of `current` addresses should be removed so only `desired` remains.
+fn to_remove(current: &[IpNet], desired: &[IpNet]) -> Vec<IpNet> {
     current
         .iter()
         .copied()
@@ -195,7 +184,7 @@ impl RtClient {
             .with_context(|| format!("failed to set the mtu of link {index} to {mtu}"))
     }
 
-    async fn v4_addresses(&self, index: u32) -> Result<Vec<(Ipv4Addr, u8)>> {
+    async fn addresses(&self, index: u32) -> Result<Vec<IpNet>> {
         use rtnetlink::packet_route::address::AddressAttribute;
         let mut addrs = self
             .handle
@@ -211,181 +200,56 @@ impl RtClient {
         {
             let prefix_len = msg.header.prefix_len;
             for attr in &msg.attributes {
-                if let AddressAttribute::Address(IpAddr::V4(addr)) = attr {
-                    out.push((*addr, prefix_len));
+                if let AddressAttribute::Address(addr) = attr {
+                    out.extend(IpNet::new(*addr, prefix_len).ok());
                 }
             }
         }
         Ok(out)
-    }
-
-    async fn v6_addresses(&self, index: u32) -> Result<Vec<(Ipv6Addr, u8)>> {
-        use rtnetlink::packet_route::address::AddressAttribute;
-        let mut addrs = self
-            .handle
-            .address()
-            .get()
-            .set_link_index_filter(index)
-            .execute();
-        let mut out = Vec::new();
-        while let Some(msg) = addrs
-            .try_next()
-            .await
-            .with_context(|| format!("failed to list addresses on link {index}"))?
-        {
-            let prefix_len = msg.header.prefix_len;
-            for attr in &msg.attributes {
-                if let AddressAttribute::Address(IpAddr::V6(addr)) = attr {
-                    out.push((*addr, prefix_len));
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    async fn ensure_v4_addresses(&self, index: u32, desired: &[(Ipv4Addr, u8)]) -> Result<()> {
-        let current = self.v4_addresses(index).await?;
-        for (addr, prefix) in to_remove(&current, desired) {
-            self.handle
-                .address()
-                .del(
-                    AddressMessageBuilder::<Ipv4Addr>::new()
-                        .index(index)
-                        .address(addr, prefix)
-                        .build(),
-                )
-                .execute()
-                .await
-                .with_context(|| {
-                    format!("failed to remove stale address {addr}/{prefix} from link {index}")
-                })?;
-        }
-        for (addr, prefix) in desired {
-            self.handle
-                .address()
-                .add(index, (*addr).into(), *prefix)
-                .replace()
-                .execute()
-                .await
-                .with_context(|| {
-                    format!("failed to assign address {addr}/{prefix} to link {index}")
-                })?;
-        }
-        Ok(())
-    }
-
-    async fn ensure_v6_addresses(&self, index: u32, desired: &[(Ipv6Addr, u8)]) -> Result<()> {
-        let current = self.v6_addresses(index).await?;
-        for (addr, prefix) in to_remove(&current, desired) {
-            self.handle
-                .address()
-                .del(
-                    AddressMessageBuilder::<Ipv6Addr>::new()
-                        .index(index)
-                        .address(addr, prefix)
-                        .build(),
-                )
-                .execute()
-                .await
-                .with_context(|| {
-                    format!("failed to remove stale address {addr}/{prefix} from link {index}")
-                })?;
-        }
-        for (addr, prefix) in desired {
-            self.handle
-                .address()
-                .add(index, (*addr).into(), *prefix)
-                .replace()
-                .execute()
-                .await
-                .with_context(|| {
-                    format!("failed to assign address {addr}/{prefix} to link {index}")
-                })?;
-        }
-        Ok(())
     }
 
     /// Idempotent, self-correcting address assignment for a mix of IPv4/IPv6 CIDRs at once -
     /// equivalent to `ip addr replace` for each entry, plus removing every other address already
-    /// on the interface *within the same family* (an interface can carry addresses of both
-    /// families simultaneously; each family's desired set only ever displaces stale entries of its
-    /// own family, never the other's).
+    /// on the interface, of either family.
     ///
-    /// Takes every address this interface should carry at once, not one at a time - two separate
-    /// calls, each with one address, would have each call remove the other's address as "stale"
-    /// (see slipmesh-operators' `ensure_address_v6` doc comment for the concrete bug this avoids -
-    /// same reasoning here, just generalized to both families and any address count).
+    /// Takes every address this interface should carry at once, not one at a time: two separate
+    /// calls, each with one address, would each remove the other's address as stale.
     pub async fn ensure_addresses(&self, index: u32, cidrs: &[IpNet]) -> Result<()> {
         let _guard = self.netlink_lock.lock().await;
-        let mut v4 = Vec::new();
-        let mut v6 = Vec::new();
-        for cidr in cidrs {
-            match cidr {
-                IpNet::V4(net) => v4.push((net.addr(), net.prefix_len())),
-                IpNet::V6(net) => v6.push((net.addr(), net.prefix_len())),
-            }
+        let current = self.addresses(index).await?;
+        for cidr in to_remove(&current, cidrs) {
+            self.handle
+                .address()
+                .del(address_message(index, cidr))
+                .execute()
+                .await
+                .with_context(|| {
+                    format!("failed to remove stale address {cidr} from link {index}")
+                })?;
         }
-        self.ensure_v4_addresses(index, &v4).await?;
-        self.ensure_v6_addresses(index, &v6).await?;
+        for cidr in cidrs {
+            self.handle
+                .address()
+                .add(index, cidr.addr(), cidr.prefix_len())
+                .replace()
+                .execute()
+                .await
+                .with_context(|| format!("failed to assign address {cidr} to link {index}"))?;
+        }
         Ok(())
-    }
-
-    async fn route_add_v4(
-        &self,
-        index: u32,
-        addr: Ipv4Addr,
-        prefix: u8,
-        protocol: RouteProtocol,
-    ) -> Result<()> {
-        let msg: RouteMessage = RouteMessageBuilder::<Ipv4Addr>::new()
-            .destination_prefix(addr, prefix)
-            .output_interface(index)
-            .protocol(protocol)
-            .build();
-        self.handle
-            .route()
-            .add(msg)
-            .replace()
-            .execute()
-            .await
-            .with_context(|| format!("failed to add route {addr}/{prefix} dev {index}"))
-    }
-
-    async fn route_add_v6(
-        &self,
-        index: u32,
-        addr: Ipv6Addr,
-        prefix: u8,
-        protocol: RouteProtocol,
-    ) -> Result<()> {
-        let msg: RouteMessage = RouteMessageBuilder::<Ipv6Addr>::new()
-            .destination_prefix(addr, prefix)
-            .output_interface(index)
-            .protocol(protocol)
-            .build();
-        self.handle
-            .route()
-            .add(msg)
-            .replace()
-            .execute()
-            .await
-            .with_context(|| format!("failed to add route {addr}/{prefix} dev {index}"))
     }
 
     /// Equivalent to `ip route replace <cidr> dev <index> proto <protocol>` - either address
     /// family. `protocol` marks the route as ours - see `crate::ROUTE_PROTOCOL`.
     pub async fn route_add(&self, index: u32, cidr: IpNet, protocol: RouteProtocol) -> Result<()> {
         let _guard = self.netlink_lock.lock().await;
-        match cidr {
-            IpNet::V4(net) => {
-                self.route_add_v4(index, net.addr(), net.prefix_len(), protocol)
-                    .await
-            }
-            IpNet::V6(net) => {
-                self.route_add_v6(index, net.addr(), net.prefix_len(), protocol)
-                    .await
-            }
-        }
+        self.handle
+            .route()
+            .add(route_message(index, cidr, protocol)?)
+            .replace()
+            .execute()
+            .await
+            .with_context(|| format!("failed to add route {cidr} dev {index}"))
     }
 
     /// Equivalent to `ip route del <cidr> dev <index> proto <protocol>`. Deleting a missing route
@@ -394,35 +258,16 @@ impl RtClient {
     /// alone.
     pub async fn route_del(&self, index: u32, cidr: IpNet, protocol: RouteProtocol) -> Result<()> {
         let _guard = self.netlink_lock.lock().await;
-        let del = |msg: RouteMessage| {
-            let handle = self.handle.clone();
-            async move {
-                match handle.route().del(msg).execute().await {
-                    Ok(()) => Ok(()),
-                    Err(rtnetlink::Error::NetlinkError(ref e)) if e.raw_code() == -3 => Ok(()), // ESRCH
-                    Err(e) => Err(e).context("failed to delete route"),
-                }
-            }
-        };
-        match cidr {
-            IpNet::V4(net) => {
-                let (a, p) = (net.addr(), net.prefix_len());
-                let msg: RouteMessage = RouteMessageBuilder::<Ipv4Addr>::new()
-                    .destination_prefix(a, p)
-                    .output_interface(index)
-                    .protocol(protocol)
-                    .build();
-                del(msg).await
-            }
-            IpNet::V6(net) => {
-                let (a, p) = (net.addr(), net.prefix_len());
-                let msg: RouteMessage = RouteMessageBuilder::<Ipv6Addr>::new()
-                    .destination_prefix(a, p)
-                    .output_interface(index)
-                    .protocol(protocol)
-                    .build();
-                del(msg).await
-            }
+        match self
+            .handle
+            .route()
+            .del(route_message(index, cidr, protocol)?)
+            .execute()
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(rtnetlink::Error::NetlinkError(ref e)) if e.raw_code() == -3 => Ok(()), // ESRCH
+            Err(e) => Err(e).with_context(|| format!("failed to delete route {cidr} dev {index}")),
         }
     }
 
@@ -531,6 +376,30 @@ impl RtClient {
     }
 }
 
+/// `cidr` on `index`, tagged `protocol`: the route to add or to delete.
+fn route_message(index: u32, cidr: IpNet, protocol: RouteProtocol) -> Result<RouteMessage> {
+    Ok(RouteMessageBuilder::<IpAddr>::new()
+        .destination_prefix(cidr.addr(), cidr.prefix_len())
+        .with_context(|| format!("route {cidr}"))?
+        .output_interface(index)
+        .protocol(protocol)
+        .build())
+}
+
+/// `cidr` on `index`. rtnetlink builds an address message for one family at a time.
+fn address_message(index: u32, cidr: IpNet) -> AddressMessage {
+    match cidr {
+        IpNet::V4(net) => AddressMessageBuilder::<Ipv4Addr>::new()
+            .index(index)
+            .address(net.addr(), net.prefix_len())
+            .build(),
+        IpNet::V6(net) => AddressMessageBuilder::<Ipv6Addr>::new()
+            .index(index)
+            .address(net.addr(), net.prefix_len())
+            .build(),
+    }
+}
+
 /// Extracts `(destination, prefix_len)` from a route message, either address family.
 fn destination_of(route: &RouteMessage) -> Option<(IpAddr, u8)> {
     use rtnetlink::packet_route::route::RouteAttribute;
@@ -552,10 +421,11 @@ mod tests {
 
     #[test]
     fn to_remove_keeps_every_entry_in_a_multi_address_desired_set() {
-        let global: (Ipv6Addr, u8) = ("3fff::1".parse().unwrap(), 128);
-        let link_local: (Ipv6Addr, u8) = ("fe80::1".parse().unwrap(), 64);
-        let stale: (Ipv6Addr, u8) = ("fe80::dead".parse().unwrap(), 64);
-        let also_stale: (Ipv6Addr, u8) = ("fe80::beef".parse().unwrap(), 64);
+        let net = |text: &str| -> IpNet { text.parse().unwrap() };
+        let global = net("3fff::1/128");
+        let link_local = net("fe80::1/64");
+        let stale = net("fe80::dead/64");
+        let also_stale = net("fe80::beef/64");
         let mut removed = to_remove(
             &[global, stale, link_local, also_stale],
             &[global, link_local],
