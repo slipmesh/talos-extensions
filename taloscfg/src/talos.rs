@@ -9,20 +9,11 @@ const API_VERSION: &str = "v1alpha1";
 pub const EXTENSION_SERVICE_CONFIG: &str = "ExtensionServiceConfig";
 pub const KUBE_NODE_CONFIG: &str = "KubeNodeConfig";
 
-/// The directive that turns a document into a deletion: a message to Talos, not values to merge.
-const PATCH_KEY: &str = "$patch";
-
 /// What is wrong with a Talos document these functions were given.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("serializing a file's contents")]
     Contents(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error(
-        "a document deletes the {KUBE_NODE_CONFIG}, which carries the annotations in {namespace} - drop its `{PATCH_KEY}: delete`"
-    )]
-    DeletesAnnotated { namespace: String },
-    #[error("a {KUBE_NODE_CONFIG} document is not a mapping")]
-    NotAMapping,
 }
 
 /// What Talos keys a document by: two documents of one identity are one document. Every other key
@@ -162,25 +153,6 @@ pub fn contents_as_text(document: &mut Value) -> Result<(), Error> {
     Ok(())
 }
 
-/// `overlay` merged over `base`, two documents of one identity: JSON Merge Patch, as
-/// [`sliplib_yaml::merge`] does it. A `$patch: delete` document on either side is not merged - over
-/// the base it would turn a deletion into an edit, under the overlay an edit into a deletion - and
-/// the overlay replaces the result outright.
-///
-/// Sequences are replaced rather than appended, unlike Talos' own strategic merge: Talos appends to
-/// a keyed list by its key because it knows the types, and schemaless YAML could neither remove an
-/// element nor tell that two `configFiles` entries share a `mountPath`.
-pub fn merge(base: Value, overlay: &Value) -> Value {
-    if is_deletion(overlay) || is_deletion(&base) {
-        return overlay.clone();
-    }
-    sliplib_yaml::merge(base, overlay)
-}
-
-fn is_deletion(document: &Value) -> bool {
-    document.get(PATCH_KEY).and_then(Value::as_str) == Some("delete")
-}
-
 /// A `KubeNodeConfig` that sets nothing: the document of the node's labels, annotations and
 /// taints, one to a machine config.
 pub fn kube_node_config() -> Value {
@@ -190,25 +162,10 @@ pub fn kube_node_config() -> Value {
     ]))
 }
 
-/// Adds `annotations`, all in `namespace`, to the `KubeNodeConfig` `document`. Refuses one that
-/// deletes the `KubeNodeConfig`, which would drop them.
-pub fn annotate(document: &mut Value, namespace: &str, annotations: Mapping) -> Result<(), Error> {
-    if is_deletion(document) {
-        return Err(Error::DeletesAnnotated {
-            namespace: namespace.to_owned(),
-        });
-    }
-    let given = document
-        .as_mapping_mut()
-        .ok_or(Error::NotAMapping)?
-        .entry("annotations".into())
-        .or_insert(Value::Null);
-    match given {
-        Value::Mapping(given) => given.extend(annotations),
-        // `null`: the check refuses every other value.
-        given => *given = Value::Mapping(annotations),
-    }
-    Ok(())
+/// The `KubeNodeConfig` `document` with `annotations` merged over its own.
+pub fn annotate(document: Value, annotations: Mapping) -> Value {
+    let patch = Mapping::from_iter([("annotations".into(), Value::Mapping(annotations))]);
+    sliplib_yaml::merge(document, &Value::Mapping(patch))
 }
 
 #[cfg(test)]
@@ -261,35 +218,10 @@ mod tests {
     }
 
     #[test]
-    fn a_delete_directive_on_either_side_leaves_the_overlay_as_the_result() {
-        let deletion = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete");
-        let edit = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\nextraArgs: {a: b}");
-        for (base, overlay) in [(&edit, &deletion), (&deletion, &edit)] {
-            assert_eq!(merge(base.clone(), overlay), *overlay);
-        }
-    }
-
-    #[test]
     fn a_new_kube_node_config_sets_nothing() {
         assert_eq!(
             kube_node_config(),
             yaml("apiVersion: v1alpha1\nkind: KubeNodeConfig\n")
-        );
-    }
-
-    const NAMESPACE: &str = "node-a.example/";
-
-    fn ours() -> Mapping {
-        Mapping::from_iter([("node-a.example/endpoint".into(), "192.0.2.10".into())])
-    }
-
-    #[test]
-    fn a_document_that_deletes_itself_takes_no_annotations() {
-        let mut document = yaml("kind: KubeNodeConfig\n$patch: delete\n");
-        let err = annotate(&mut document, NAMESPACE, ours()).unwrap_err();
-        assert!(
-            matches!(&err, Error::DeletesAnnotated { namespace } if namespace == NAMESPACE),
-            "{err}"
         );
     }
 }
