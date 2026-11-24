@@ -625,6 +625,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo deny --locked check licenses bans sources
 ```
 
+The code follows [docs/CODESTYLE.md](docs/CODESTYLE.md).
+
 No mocking framework - pure logic (`config::validate`, `interface::diff_peers`,
 `rt::to_remove`, the bypass set arithmetic in `resolver.rs`, `taloscfg`'s patch files)
 is unit-tested directly; a node's configs are rendered by `sliplib-mesh` and CIDR parsing and
