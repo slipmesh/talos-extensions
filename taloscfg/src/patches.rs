@@ -27,16 +27,13 @@ const GENERATED: [(&str, &[&str]); 3] = [
     ),
 ];
 
-/// One Talos document as it goes into one host's patch file, serialized - its comments stay in
-/// `slipmesh.yaml`.
+/// One Talos document as it goes into one host's patch file; its comments stay in `slipmesh.yaml`.
 #[derive(Debug, PartialEq)]
 pub(crate) struct HostDocument {
     /// `kind`, plus `/name` when the document has one.
     pub identity: String,
     /// Where the documents merged into it stand in the files, for a refusal to name.
     pub origin: String,
-    pub text: String,
-    /// What `text` serializes - for a caller that reads its fields.
     pub value: Value,
 }
 
@@ -136,12 +133,9 @@ pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
                 sliplib_yaml::merge(base, patch.value())
             });
             talos::contents_as_text(&mut document).with_context(|| origin.clone())?;
-            let text =
-                sliplib_yaml::to_string(&document).context("serializing a patch document")?;
             Ok(HostDocument {
                 identity: identity.to_string(),
                 origin,
-                text,
                 value: document,
             })
         })
@@ -196,10 +190,9 @@ nodes:
         )
     }
 
-    /// A `configFiles[].content` in `text`.
-    fn content(text: &str, index: usize) -> Value {
-        let value: Value = sliplib_yaml::from_str(text).unwrap();
-        value["configFiles"][index]["content"].clone()
+    /// A `configFiles[].content` of `document`.
+    fn content(document: &Value, index: usize) -> &Value {
+        &document["configFiles"][index]["content"]
     }
 
     #[test]
@@ -211,11 +204,11 @@ nodes:
         ]);
         let documents = for_host(&parsed, "node-b").unwrap();
         assert_eq!(
-            content(&documents[0].text, 0).as_str(),
+            content(&documents[0].value, 0).as_str(),
             Some("host: router1.example.com\nport: 8729\n")
         );
         assert_eq!(
-            content(&for_host(&parsed, "node-a").unwrap()[0].text, 0).as_str(),
+            content(&for_host(&parsed, "node-a").unwrap()[0].value, 0).as_str(),
             Some("host: router0.example.com\nport: 8729\n")
         );
     }
@@ -230,7 +223,7 @@ nodes:
         ]);
         let merged = for_host(&parsed, "node-a").unwrap();
         assert_eq!(merged.len(), 1);
-        let value: Value = sliplib_yaml::from_str(&merged[0].text).unwrap();
+        let value = &merged[0].value;
         assert_eq!(value["extraArgs"]["v"].as_str(), Some("4"));
         assert_eq!(
             value["extraArgs"]["rotate-server-certificates"].as_str(),
@@ -378,7 +371,7 @@ nodes:
         );
         let parsed = parse(&[NETWORK, &device]);
         check(&parsed).unwrap();
-        let text = &for_host(&parsed, "node-a").unwrap()[0].text;
-        assert!(text.contains("environment:\n- X=1\n"), "{text}");
+        let value = &for_host(&parsed, "node-a").unwrap()[0].value;
+        assert_eq!(value["environment"][0].as_str(), Some("X=1"), "{value:?}");
     }
 }

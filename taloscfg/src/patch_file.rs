@@ -64,24 +64,19 @@ fn legacy_nftables_file(ruleset: String) -> Result<ConfigFile> {
     })
 }
 
-/// The `nftables` document of a node whose ruleset template is `template`: the template, the files
-/// `added` beside it, and the ruleset as [`legacy_nftables_file`] gives it.
-pub(crate) fn nftables_document(template: &str, added: Vec<ServiceFile>) -> Result<String> {
+/// The files of the `nftables` document of a node whose ruleset template is `template`: the
+/// template, the files `added` beside it, and the ruleset as [`legacy_nftables_file`] gives it.
+fn nftables_config_files(template: &str, added: Vec<ServiceFile>) -> Result<Vec<ServiceFile>> {
     let template_file = ConfigFile {
         mount_path: Service::Firewall.mount_path().to_owned(),
         content: template.to_owned(),
     };
-    let files = std::iter::once(ServiceFile::Generated(template_file))
+    Ok(std::iter::once(ServiceFile::Generated(template_file))
         .chain(added)
         .chain([ServiceFile::Generated(legacy_nftables_file(
             template.to_owned(),
         )?)])
-        .collect();
-    sliplib_yaml::to_string(&ExtensionServiceConfig::new(
-        Service::Firewall.name(),
-        files,
-    ))
-    .context("serializing the nftables document")
+        .collect())
 }
 
 /// Refuses a router template the node would fail on: one that does not compile, reads a variable
@@ -94,7 +89,7 @@ fn validate_router_template(template: &str, cfg: &RouterConfig) -> Result<()> {
 
 /// Puts `annotations` into the `KubeNodeConfig` among `patches`, or into a new one when they have
 /// none: Talos takes one.
-fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) -> Result<()> {
+fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) {
     let index = match patches
         .iter()
         .position(|p| p.identity == talos::KUBE_NODE_CONFIG)
@@ -105,7 +100,6 @@ fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) ->
             patches.push(HostDocument {
                 identity: talos::KUBE_NODE_CONFIG.to_owned(),
                 origin: "the KubeNodeConfig the generator adds".to_owned(),
-                text: String::new(),
                 value,
             });
             patches.len() - 1
@@ -113,9 +107,6 @@ fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) ->
     };
     let document = &mut patches[index];
     document.value = talos::annotate(std::mem::take(&mut document.value), annotations);
-    document.text =
-        sliplib_yaml::to_string(&document.value).context("serializing the KubeNodeConfig")?;
-    Ok(())
 }
 
 /// The templates a node gets: of those that reach it, the last by rank for each daemon.
@@ -238,7 +229,10 @@ fn render_node(
     let nftables_added = take_added(&mut patches, Service::Firewall.name());
     let nftables_files = added_files(nftables_added.as_ref());
     match (templates.firewall, nftables_added) {
-        (Some(ruleset), _) => generated.push(nftables_document(&ruleset, nftables_files)?),
+        (Some(ruleset), _) => generated.push(render_extension_service_document(
+            Service::Firewall.name(),
+            nftables_config_files(&ruleset, nftables_files)?,
+        )?),
         (None, Some(added)) if !nftables_files.is_empty() => bail!(
             "{}: adds files to `nftables`, which no `template` document for the firewall reaches \
              on this node, so it gets no `nftables` document - aim the `patch` or a template so \
@@ -260,8 +254,11 @@ fn render_node(
                 .map(|endpoint| endpoint.host()),
             mesh_mtu: sliplib_mesh::mtu::mesh_mtu(network)?,
         }),
-    )?;
-    let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
+    );
+    let patches = patches
+        .iter()
+        .map(|patch| sliplib_yaml::to_string(&patch.value).context("serializing a patch document"))
+        .collect::<Result<Vec<String>>>()?;
 
     Ok(format!(
         "{HEADER}{}",
