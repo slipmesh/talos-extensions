@@ -35,7 +35,7 @@ mod tests {
             let call = calls.get();
             async move { if call < 3 { Err(call) } else { Ok(call) } }
         };
-        assert_eq!(retry(5, Duration::from_secs(1), fails_twice).await, Ok(3));
+        assert_eq!(retry(3, Duration::from_secs(1), fails_twice).await, Ok(3));
         calls.set(0);
         assert_eq!(retry(2, Duration::from_secs(1), fails_twice).await, Err(2));
     }
