@@ -337,7 +337,7 @@ bgp_peers:
   - {name: node-b, address: "3fff::2"}
 bfd: {min_rx_ms: 300, min_tx_ms: 300, multiplier: 5}
 ospf_interfaces: [mesh-*]
-direct_interfaces: [lan0]
+direct_interfaces: [lan0, mesh-*]
 announce:
   - {net: 203.0.113.192/26}
 learn: [203.0.113.128/26]
@@ -359,6 +359,7 @@ learn: [203.0.113.128/26]
         assert!(out.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
         assert!(out.contains("min rx interval 300 ms;"));
         assert!(out.contains("protocol direct direct_lan0 {"));
+        assert!(out.contains("protocol direct direct_mesh__ {"));
     }
 
     /// `VARIABLES` is what a template is checked against, the context is what it gets - a field

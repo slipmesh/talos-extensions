@@ -405,6 +405,7 @@ mod tests {
     }
 
     const KEY: [u8; 32] = [7; 32];
+    const OTHER_KEY: [u8; 32] = [9; 32];
     const KEEPALIVE: AmneziaWireguardRange<u16> = AmneziaWireguardRange { lo: 25, hi: 25 };
     /// What a number of seconds sent in place of a range left in the module.
     const BARE_25: AmneziaWireguardRange<u16> = AmneziaWireguardRange { lo: 25, hi: 0 };
@@ -512,15 +513,27 @@ mod tests {
                 )]),
             ])]),
             AmneziaWireguardAttribute::Peers(vec![AmneziaWireguardPeer(vec![
+                AmneziaWireguardPeerAttribute::PublicKey(OTHER_KEY),
+                AmneziaWireguardPeerAttribute::AllowedIps(vec![allowed_ip(
+                    "203.0.113.9/32".parse().unwrap(),
+                )]),
+            ])]),
+            AmneziaWireguardAttribute::Peers(vec![AmneziaWireguardPeer(vec![
                 AmneziaWireguardPeerAttribute::PublicKey(KEY),
                 AmneziaWireguardPeerAttribute::AllowedIps(vec![allowed_ip(
                     "203.0.113.2/32".parse().unwrap(),
                 )]),
             ])]),
         ];
+        let other = Peer {
+            public_key: encode_key(&OTHER_KEY),
+            allowed_ips: vec!["203.0.113.9/32".parse().unwrap()],
+            endpoint: None,
+            persistent_keepalive: AmneziaWireguardRange::default(),
+        };
         let held = dumped_peers(&dump);
-        assert_eq!(held, std::slice::from_ref(&desired));
-        assert_eq!(diff_peers(&held, &[desired]), vec![]);
+        assert_eq!(held, [desired.clone(), other.clone()]);
+        assert_eq!(diff_peers(&held, &[desired, other]), vec![]);
     }
 
     fn entry(endpoint: Option<&str>) -> PeerEntry {
