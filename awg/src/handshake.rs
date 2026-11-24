@@ -35,8 +35,8 @@ pub struct TrackedInterface {
     pub name: String,
     pub index: u32,
     pub stale_secs: u64,
-    /// public_key (base64) -> allowed_ips (CIDR strings) - only peers with an explicit
-    /// `allowed_ips` in the config belong here at all.
+    /// public_key (base64) -> allowed_ips, only for peers with an explicit `allowed_ips` in the
+    /// config.
     pub peers: HashMap<String, Vec<IpNet>>,
 }
 
