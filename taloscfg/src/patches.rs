@@ -103,35 +103,34 @@ pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
         .into_iter()
         .map(|patch| Ok((patch.read::<Identity>()?, patch)))
         .collect::<Result<_>>()?;
-    let mut identities: Vec<&Identity> = Vec::new();
-    for (identity, _) in &read {
-        if !identities.contains(&identity) {
-            identities.push(identity);
+    // Stable: of two of one rank, the later read stays the later.
+    let mut by_rank: Vec<(usize, &Identity, &AimedDocument)> = read
+        .iter()
+        .enumerate()
+        .map(|(at, (identity, patch))| (at, identity, *patch))
+        .collect();
+    by_rank.sort_by_key(|(_, _, patch)| patch.aim().rank());
+
+    // Each identity with where it first appears, its documents' places and their merge.
+    let mut merged: Vec<(usize, &Identity, Vec<String>, Value)> = Vec::new();
+    for (at, identity, patch) in by_rank {
+        let place = patch.aim().to_string();
+        match merged.iter_mut().find(|(_, of, ..)| *of == identity) {
+            Some((first_seen, _, places, value)) => {
+                *first_seen = (*first_seen).min(at);
+                places.push(place);
+                // Sequences replace rather than append: Talos appends by a key only its types know.
+                *value = sliplib_yaml::merge(std::mem::take(value), patch.value());
+            }
+            None => merged.push((at, identity, vec![place], patch.value().clone())),
         }
     }
+    merged.sort_by_key(|(first_seen, ..)| *first_seen);
 
-    identities
+    merged
         .into_iter()
-        .map(|identity| {
-            let mut sources: Vec<&AimedDocument> = read
-                .iter()
-                .filter(|(of, _)| of == identity)
-                .map(|(_, patch)| *patch)
-                .collect();
-            // Stable: of two of one rank, the later read stays the later.
-            sources.sort_by_key(|patch| patch.aim().rank());
-            let [first, rest @ ..] = sources.as_slice() else {
-                unreachable!("every identity comes from at least one document")
-            };
-            let origin = sources
-                .iter()
-                .map(|patch| patch.aim().to_string())
-                .collect::<Vec<_>>()
-                .join(" and ");
-            // Sequences replace rather than append: Talos appends by a key only its types know.
-            let mut document = rest.iter().fold(first.value().clone(), |base, patch| {
-                sliplib_yaml::merge(base, patch.value())
-            });
+        .map(|(_, identity, places, mut document)| {
+            let origin = places.join(" and ");
             talos::contents_as_text(&mut document).with_context(|| origin.clone())?;
             Ok(HostDocument {
                 identity: identity.to_string(),
