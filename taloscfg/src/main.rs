@@ -131,18 +131,13 @@ fn generate(
     if let Some(n) = node {
         network.node_on(n, Platform::Talos)?;
     }
-    // A node a template does not reach was aimed past; a daemon no document gives a template at
-    // all was left out, and would start on every node without one.
-    let untemplated: Vec<String> = defaults::missing(&files)
-        .with_context(reading)?
-        .iter()
-        .map(|service| format!("`slipmesh-taloscfg template {service}`"))
-        .collect();
+    // A node no firewall template reaches gets no ruleset; one no router template reaches is
+    // refused on its own.
     anyhow::ensure!(
-        untemplated.is_empty(),
-        "{} gives no node a template for a daemon that takes one - {} prints the document to add",
-        config_path.display(),
-        untemplated.join(" and ")
+        defaults::has_firewall_template(&files).with_context(reading)?,
+        "{} gives no node a firewall template - `slipmesh-taloscfg template firewall` prints the \
+         document to add",
+        config_path.display()
     );
     let targets: Vec<&str> = match node {
         Some(n) => vec![n],

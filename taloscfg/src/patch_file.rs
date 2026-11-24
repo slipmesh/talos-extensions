@@ -11,7 +11,7 @@ use crate::talos::{self, ConfigFile, ExtensionServiceConfig, ServiceFile};
 use anyhow::{Context, Result, bail};
 use common::daemon::{AwgDaemonConfig, MetricsConfig, RouterDaemonConfig};
 use sliplib_config::router::RouterConfig;
-use sliplib_config::v2::File;
+use sliplib_config::v2::{AimedDocument, File};
 use sliplib_mesh::Mesh;
 use sliplib_mesh::render::{NodeConfigs, node_configs};
 use sliplib_yaml::Mapping;
@@ -132,28 +132,42 @@ struct Templates {
 }
 
 impl Templates {
-    /// Refuses any template reaching `host` that its daemon would fail on, the ones another
-    /// overrides there included: narrowing that other one hands the node this text. A router
-    /// template is rendered with `router`, the node's config.
+    /// Refuses a template the node gets that its daemon would fail on. A router template is
+    /// rendered with `router`, the node's config.
     fn of(files: &File, host: &str, router: &RouterConfig) -> Result<Self> {
-        let mut templates = Self::default();
+        let mut router_template = None;
+        let mut firewall_template = None;
         for document in files.templates_for(host) {
             let template: Template = document.read()?;
-            let service = template.daemon;
-            let invalid = || format!("{}: the {service} template is invalid", document.aim());
-            match service {
-                Service::Router => {
-                    validate_router_template(&template.content, router).with_context(invalid)?;
-                    templates.router = Some(template.content);
-                }
-                Service::Firewall => {
-                    nftables::template::compile(template.content.clone()).with_context(invalid)?;
-                    templates.firewall = Some(template.content);
-                }
-            }
+            let last = match template.daemon {
+                Service::Router => &mut router_template,
+                Service::Firewall => &mut firewall_template,
+            };
+            *last = Some((document, template.content));
         }
-        Ok(templates)
+        Ok(Self {
+            router: checked(router_template, Service::Router, |content| {
+                validate_router_template(content, router)
+            })?,
+            firewall: checked(firewall_template, Service::Firewall, |content| {
+                nftables::template::compile(content).map(drop)
+            })?,
+        })
     }
+}
+
+/// The content of `last`, the `service` template a node gets, once `check` accepts it.
+fn checked(
+    last: Option<(&AimedDocument, String)>,
+    service: Service,
+    check: impl FnOnce(&str) -> Result<()>,
+) -> Result<Option<String>> {
+    last.map(|(document, content)| {
+        check(&content)
+            .with_context(|| format!("{}: the {service} template is invalid", document.aim()))?;
+        Ok(content)
+    })
+    .transpose()
 }
 
 /// The patch file of `host`, a node of `talos`, as the text written to disk. A refusal names the
@@ -588,15 +602,15 @@ content: "table inet x {{}}"
     }
 
     #[test]
-    fn a_template_another_overrides_everywhere_is_still_checked() {
+    fn only_the_template_a_node_gets_is_checked_on_it() {
         let router = with_router_files(&[
             ("", "{% if false %}{{ lopback }}{% endif %}\n"),
-            ("  include: [a, b]\n", TEMPLATE),
+            ("  include: [a]\n", TEMPLATE),
         ]);
         let firewall = format!(
             "{}---\nslipmesh: {{kind: template, platform: talos}}\ndaemon: firewall\nbase: \
              {BASE}\ncontent: \"table inet t {{ {{{{ bogus }}}} }}\"\n---\nslipmesh: {{kind: \
-             template, platform: talos, include: [a, b]}}\ndaemon: firewall\nbase: {BASE}\n\
+             template, platform: talos, include: [a]}}\ndaemon: firewall\nbase: {BASE}\n\
              content: \"table inet y {{}}\"\n",
             with_router_files(&[("", TEMPLATE)])
         );
@@ -604,7 +618,8 @@ content: "table inet x {{}}"
             (&router, 0, &["router template", "lopback"][..]),
             (&firewall, 1, &["firewall template"][..]),
         ] {
-            let err = format!("{:#}", render_raw(raw, "a").unwrap_err());
+            render_raw(raw, "a").unwrap();
+            let err = format!("{:#}", render_raw(raw, "b").unwrap_err());
             let place = format!(
                 "`kind: template` document at line {}",
                 appended_line(raw, index)
