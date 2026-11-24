@@ -2,7 +2,7 @@ use nftables::ruleset;
 use nftables::template::{self, DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6, TEMPLATE_PATH};
 
 use anyhow::{Context, Result};
-use common::netlink::rt::RtClient;
+use common::netlink::rt::{Family, RtClient};
 use std::collections::HashMap;
 use std::future::Future;
 use std::process::Stdio;
@@ -47,11 +47,11 @@ async fn run() -> Result<()> {
     // `defaultroute_interface_ipv6`, and vice versa.
     let mut values: HashMap<&str, String> = HashMap::new();
     if referenced.contains(DEFAULT_ROUTE_IPV4) {
-        let iface = default_iface("IPv4", || rt.default_iface_v4()).await?;
+        let iface = default_iface("IPv4", || rt.default_iface(Family::Ipv4)).await?;
         values.insert(DEFAULT_ROUTE_IPV4, iface);
     }
     if referenced.contains(DEFAULT_ROUTE_IPV6) {
-        let iface = default_iface("IPv6", || rt.default_iface_v6()).await?;
+        let iface = default_iface("IPv6", || rt.default_iface(Family::Ipv6)).await?;
         values.insert(DEFAULT_ROUTE_IPV6, iface);
     }
 

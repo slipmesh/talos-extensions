@@ -113,7 +113,7 @@ pub fn render(
     dumps: &Dumps,
     snapshot: &ReconcileSnapshot,
     now: u64,
-) -> Result<String, std::fmt::Error> {
+) -> Result<String> {
     let mut registry = Registry::with_prefix("slipmesh");
 
     let build_info = Family::<BuildLabels, Gauge>::default();
@@ -231,7 +231,7 @@ pub fn render(
     }
 
     let mut out = String::new();
-    encode(&mut out, &registry)?;
+    encode(&mut out, &registry).context("encoding the metrics")?;
     Ok(out)
 }
 
@@ -387,7 +387,10 @@ async fn serve(
                     Ok(match render(&cfg, &dumps, &snapshot, now_unix()) {
                         Ok(body) => respond(StatusCode::OK, CONTENT_TYPE, body),
                         Err(e) => {
-                            tracing::warn!(error = %e, "metrics: encoding failed");
+                            tracing::warn!(
+                                error = %format_args!("{e:#}"),
+                                "metrics: encoding failed"
+                            );
                             respond(StatusCode::INTERNAL_SERVER_ERROR, TEXT, String::new())
                         }
                     })

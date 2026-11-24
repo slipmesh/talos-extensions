@@ -11,6 +11,7 @@ use rtnetlink::packet_route::route::{RouteMessage, RouteProtocol};
 use rtnetlink::{
     AddressMessageBuilder, Handle, LinkMessageBuilder, RouteMessageBuilder, new_connection,
 };
+pub use sliplib_config::v2::network::Family;
 use sliplib_net::IpNet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
@@ -20,8 +21,9 @@ use tokio::sync::Mutex;
 pub struct RtClient {
     handle: Handle,
     /// Serializes every netlink request issued through this client: a shared netlink socket under
-    /// concurrent requests can return kernel `EBUSY` even across unrelated links/request types. A `Mutex`
-    /// rather than a retry loop sidesteps picking a retry budget that's merely "probably enough".
+    /// concurrent requests can return kernel `EBUSY` even across unrelated links/request types. A
+    /// `Mutex` rather than a retry loop sidesteps picking a retry budget that's merely "probably
+    /// enough".
     ///
     /// Internal call sites that need what a locked public method already does (e.g. `ensure_link`
     /// needs `link_index`) go through a private `_inner` helper directly, not the public locked
@@ -326,15 +328,20 @@ impl RtClient {
         Ok(out)
     }
 
-    /// Shared by `default_iface_v4`/`default_iface_v6`: finds the first route in `routes` whose
-    /// destination prefix length is 0 (the default route for whichever family `routes` was built
-    /// for) and resolves its outgoing interface name. `Ok(None)` if no default route exists for
-    /// that family - a real, common case (many nodes are v4-only or v6-only), not an error.
-    async fn default_iface_of(&self, routes: rtnetlink::RouteGetRequest) -> Result<Option<String>> {
+    /// Name of the interface the `family` default route points at - equivalent to
+    /// `ip -4 route show default` or `ip -6 …`, then resolving the `dev` name. `Ok(None)` if that
+    /// family has none, a common case on a single-stack node. A dual-stack node's two default
+    /// routes need not share an interface.
+    pub async fn default_iface(&self, family: Family) -> Result<Option<String>> {
         use rtnetlink::packet_route::route::RouteAttribute;
 
+        let _guard = self.netlink_lock.lock().await;
+        let query = match family {
+            Family::Ipv4 => RouteMessageBuilder::<Ipv4Addr>::new().build(),
+            Family::Ipv6 => RouteMessageBuilder::<Ipv6Addr>::new().build(),
+        };
         let mut default_oif = None;
-        let mut stream = routes.execute();
+        let mut stream = self.handle.route().get(query).execute();
         while let Some(route) = stream.try_next().await.context("failed to list routes")? {
             if route.header.destination_prefix_length != 0 {
                 continue;
@@ -356,23 +363,6 @@ impl RtClient {
             .into_iter()
             .find(|(_, index, _)| *index == oif)
             .map(|(name, _, _)| name))
-    }
-
-    /// Name of the interface the IPv4 default route (0.0.0.0/0) points at - equivalent to
-    /// `ip -4 route show default` followed by resolving the `dev` name. `Ok(None)` if none exists.
-    pub async fn default_iface_v4(&self) -> Result<Option<String>> {
-        let _guard = self.netlink_lock.lock().await;
-        let msg = RouteMessageBuilder::<Ipv4Addr>::new().build();
-        self.default_iface_of(self.handle.route().get(msg)).await
-    }
-
-    /// Name of the interface the IPv6 default route (::/0) points at - same as `default_iface_v4`,
-    /// just the other family (a dual-stack node's v4/v6 default routes aren't guaranteed to share
-    /// an interface, so this is a genuinely separate lookup, not a v4 result reused).
-    pub async fn default_iface_v6(&self) -> Result<Option<String>> {
-        let _guard = self.netlink_lock.lock().await;
-        let msg = RouteMessageBuilder::<Ipv6Addr>::new().build();
-        self.default_iface_of(self.handle.route().get(msg)).await
     }
 }
 
