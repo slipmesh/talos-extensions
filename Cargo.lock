@@ -63,9 +63,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.104"
+version = "1.0.105"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
+checksum = "2cb931c189b85683d69a5cfad41d4d418671e1ac413dd209f3f2fc31e3cfd902"
 
 [[package]]
 name = "atomic-waker"
@@ -2323,9 +2323,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-rt"
-version = "0.3.3"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9860179b71d46ad0a748837d85389cc76b928219d8f7ec797ba76a0c5164ebe6"
+checksum = "b872c7a16b46994cf0ab4cd0d4a08d721f90908ebc34d105daf9a06c04ed9fd2"
 dependencies = [
  "yaml-rt-core",
  "yaml-rt-derive",
@@ -2333,9 +2333,9 @@ dependencies = [
 
 [[package]]
 name = "yaml-rt-core"
-version = "0.3.3"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8799292abae6f3464beb9e2c2b8ba7be371f6c026ce4b36e3b2f0ecb584bc47"
+checksum = "a19ce48dcf4166a27507e708cd1705603bf9eb7c77b815a9893f49312fc4d363"
 
 [[package]]
 name = "yaml-rt-derive"
