@@ -4,6 +4,7 @@ pub mod dns;
 /// it is Linux-only, and the generator has to build wherever it is run.
 #[cfg(feature = "netlink")]
 pub mod netlink;
+pub mod retry;
 pub mod template;
 
 /// The protocol number every route this project's `awg` daemon installs is tagged with -

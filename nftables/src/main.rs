@@ -10,12 +10,9 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-/// How many times to retry a default-route lookup before giving up, at startup only - a default
-/// route can genuinely not exist yet for a few seconds after this container starts (network
-/// bring-up on the node isn't synchronized with `depends: [{configuration: true}]`), but a route
-/// that never appears within the budget is a real configuration problem worth failing loudly over
-/// rather than silently looping on forever.
-const DEFAULT_ROUTE_RETRIES: u32 = 10;
+/// Tries of a default-route lookup at start: network bring-up on the node is not synchronized with
+/// `depends: [{configuration: true}]`, but a route that never appears is a configuration problem.
+const DEFAULT_ROUTE_TRIES: u32 = 10;
 const DEFAULT_ROUTE_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 /// Inside the 10 s Talos waits after SIGTERM before it sends SIGKILL.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -50,11 +47,11 @@ async fn run() -> Result<()> {
     // `defaultroute_interface_ipv6`, and vice versa.
     let mut values: HashMap<&str, String> = HashMap::new();
     if referenced.contains(DEFAULT_ROUTE_IPV4) {
-        let iface = retry_default_iface("IPv4", || rt.default_iface_v4()).await?;
+        let iface = default_iface("IPv4", || rt.default_iface_v4()).await?;
         values.insert(DEFAULT_ROUTE_IPV4, iface);
     }
     if referenced.contains(DEFAULT_ROUTE_IPV6) {
-        let iface = retry_default_iface("IPv6", || rt.default_iface_v6()).await?;
+        let iface = default_iface("IPv6", || rt.default_iface_v6()).await?;
         values.insert(DEFAULT_ROUTE_IPV6, iface);
     }
 
@@ -64,29 +61,21 @@ async fn run() -> Result<()> {
     watchdog(rendered).await
 }
 
-/// Retries `lookup` up to `DEFAULT_ROUTE_RETRIES` times, `DEFAULT_ROUTE_RETRY_INTERVAL` apart - a
-/// default route can genuinely not exist yet for a few seconds after this container starts
-/// (network bring-up on the node isn't synchronized with `depends: [{configuration: true}]`), but
-/// a route that never appears within the budget is a real configuration problem this can't paper
-/// over silently.
-async fn retry_default_iface<F, Fut>(label: &str, mut lookup: F) -> Result<String>
+/// The interface of the `family` default route, which `lookup` finds.
+async fn default_iface<Fut>(family: &str, lookup: impl Fn() -> Fut) -> Result<String>
 where
-    F: FnMut() -> Fut,
     Fut: Future<Output = Result<Option<String>>>,
 {
-    for attempt in 1..=DEFAULT_ROUTE_RETRIES {
-        match lookup().await? {
-            Some(iface) => return Ok(iface),
-            None if attempt < DEFAULT_ROUTE_RETRIES => {
-                tracing::warn!(family = label, attempt, "no default route yet, retrying");
-                tokio::time::sleep(DEFAULT_ROUTE_RETRY_INTERVAL).await;
-            }
-            None => anyhow::bail!(
-                "no {label} default route found after {DEFAULT_ROUTE_RETRIES} attempts"
-            ),
-        }
-    }
-    unreachable!("loop above always returns on its final iteration")
+    common::retry::retry(
+        DEFAULT_ROUTE_TRIES,
+        DEFAULT_ROUTE_RETRY_INTERVAL,
+        || async {
+            lookup()
+                .await?
+                .with_context(|| format!("no {family} default route"))
+        },
+    )
+    .await
 }
 
 /// Watches for our own tables disappearing and reapplies `rendered` when they do - see

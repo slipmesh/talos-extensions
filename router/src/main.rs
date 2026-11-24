@@ -181,56 +181,44 @@ async fn reconcile(ctx: &RouterState, bypass_routes: &[bird_conf::BypassRoute]) 
     .await
 }
 
-/// Bounded retry budget for a resolve failure with *nothing cached yet* - only relevant the very
-/// first time this is ever called (startup), since any later failure already has a last-known-good
-/// cache to fall back on immediately (see below). RIPEstat/DNS being unreachable in the first few
-/// seconds after this container starts is a real, already-anticipated race elsewhere in this
-/// workspace (see `nftables`'s `retry_default_iface`) - without this, a startup failure here used
-/// to wait for `bypass_refresh_loop`'s next tick to retry, which is a full `refresh_interval_secs`
-/// away (default 24h), leaving bypass routes silently missing for up to a day over what's often
-/// just a few seconds of network not-quite-up-yet.
-const BYPASS_STARTUP_RETRIES: u32 = 5;
+/// Tries of a resolve with nothing cached yet, at start: RIPEstat or DNS may not be reachable yet,
+/// and the next try is a whole `refresh_interval_secs` away.
+const BYPASS_STARTUP_TRIES: u32 = 5;
 const BYPASS_STARTUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Resolves `ctx.mesh.bypass` (if any) into concrete blackhole routes. A resolve failure keeps
 /// serving the last-known-good cached result rather than blanking the bypass out over a
-/// transient RIPEstat/DNS outage - same reasoning as the k8s original's `current_bypass_routes`,
-/// minus the per-node CRD status patching and multi-`BypassSource`-per-node conflict handling
-/// neither of which apply to a single static config block.
+/// transient RIPEstat/DNS outage.
 async fn current_bypass_routes(ctx: &RouterState) -> Vec<bird_conf::BypassRoute> {
     let Some(bypass_cfg) = &ctx.mesh.bypass else {
         return Vec::new();
     };
-    for attempt in 1..=BYPASS_STARTUP_RETRIES {
-        match resolver::resolve(&bypass_cfg.include, &bypass_cfg.exclude).await {
-            Ok(resolved) => {
-                let routes: Vec<bird_conf::BypassRoute> = resolved
-                    .into_iter()
-                    .map(|(net, label)| bird_conf::BypassRoute { net, label })
-                    .collect();
-                *ctx.bypass_cache.lock().await = Some(routes.clone());
-                return routes;
-            }
-            Err(e) => {
-                let cached = ctx.bypass_cache.lock().await.clone();
-                match cached {
-                    Some(routes) => {
-                        tracing::warn!(error = %e, "bypass resolution failed, keeping last-known-good routes");
-                        return routes;
-                    }
-                    None if attempt < BYPASS_STARTUP_RETRIES => {
-                        tracing::warn!(error = %e, attempt, "bypass resolution failed with nothing cached yet, retrying shortly");
-                        tokio::time::sleep(BYPASS_STARTUP_RETRY_INTERVAL).await;
-                    }
-                    None => {
-                        tracing::warn!(error = %e, attempt, "bypass resolution failed with nothing cached yet - serving no bypass routes this pass");
-                        return Vec::new();
-                    }
-                }
-            }
+    let resolve = || resolver::resolve(&bypass_cfg.include, &bypass_cfg.exclude);
+    let cached = ctx.bypass_cache.lock().await.clone();
+    let resolved = match cached {
+        Some(_) => resolve().await,
+        None => {
+            common::retry::retry(BYPASS_STARTUP_TRIES, BYPASS_STARTUP_RETRY_INTERVAL, resolve).await
+        }
+    };
+    match (resolved, cached) {
+        (Ok(resolved), _) => {
+            let routes: Vec<bird_conf::BypassRoute> = resolved
+                .into_iter()
+                .map(|(net, label)| bird_conf::BypassRoute { net, label })
+                .collect();
+            *ctx.bypass_cache.lock().await = Some(routes.clone());
+            routes
+        }
+        (Err(e), Some(routes)) => {
+            tracing::warn!(error = %e, "bypass resolution failed, keeping last-known-good routes");
+            routes
+        }
+        (Err(e), None) => {
+            tracing::warn!(error = %e, "bypass resolution failed with nothing cached yet - serving no bypass routes this pass");
+            Vec::new()
         }
     }
-    unreachable!("loop above always returns on its final iteration")
 }
 
 /// Runs forever as its own background task - only spawned when `ctx.mesh.bypass` is `Some` (see
