@@ -622,6 +622,8 @@ Install it with `cargo install --path taloscfg`.
 cargo test
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
+# the build taloscfg uses: features unify across the workspace, so only these packages alone show it
+cargo clippy -p common -p router -p nftables -p taloscfg --all-targets --no-default-features -- -D warnings
 cargo deny --locked check licenses bans sources
 ```
 

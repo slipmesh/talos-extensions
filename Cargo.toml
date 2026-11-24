@@ -12,9 +12,9 @@ repository = "https://github.com/slipmesh/talos-extensions"
 publish = false
 
 [workspace.dependencies]
-# default-features = false throughout: the netlink-backed halves are opt-in, so `taloscfg` - which
-# needs the config types alone - builds off Linux. The daemons re-enable them through their own
-# `runtime` feature, which is on by default for each of them.
+# default-features = false: the netlink-backed halves are opt-in, so `taloscfg`, which needs the
+# config types and the template checks, builds off Linux. `router` and `nftables` turn them on
+# through their `runtime` feature, `awg` through its `common` line.
 common = { path = "common", default-features = false }
 router = { path = "router", default-features = false }
 nftables = { path = "nftables", default-features = false }
