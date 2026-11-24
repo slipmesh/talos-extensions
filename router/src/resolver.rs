@@ -22,8 +22,8 @@ use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
-/// Per-call ceiling for one RIPEstat request or one DNS lookup. `reqwest`'s default is *no*
-/// request timeout at all unless configured, hence `RIPESTAT_CLIENT` below.
+/// Per-call ceiling for one RIPEstat request. `reqwest`'s default is *no* request timeout at all
+/// unless configured, hence `RIPESTAT_CLIENT` below.
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Ceiling on one whole `resolve()` call, not just its individual requests - see `core::resolver`'s
@@ -179,15 +179,9 @@ async fn collect_source(source: &BypassSourceEntry) -> Result<Vec<(String, Strin
                 .context("dns source requires `hostnames`")?;
             let mut entries = Vec::new();
             for host in hostnames {
-                let addrs = tokio::time::timeout(
-                    NETWORK_TIMEOUT,
-                    tokio::net::lookup_host((host.as_str(), 0)),
-                )
-                .await
-                .with_context(|| {
-                    format!("DNS lookup for {host} timed out after {NETWORK_TIMEOUT:?}")
-                })?
-                .with_context(|| format!("DNS lookup failed for {host}"))?;
+                let addrs = common::dns::lookup((host.as_str(), 0))
+                    .await
+                    .with_context(|| format!("DNS lookup failed for {host}"))?;
                 for addr in addrs {
                     if let std::net::SocketAddr::V4(v4) = addr {
                         entries.push((format!("{}/32", v4.ip()), label.clone()));

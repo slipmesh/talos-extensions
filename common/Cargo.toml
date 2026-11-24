@@ -23,7 +23,7 @@ sliplib-net.workspace = true
 sliplib-secrets.workspace = true
 sliplib-yaml.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "rt-multi-thread", "macros", "sync"] }
+tokio = { workspace = true, features = ["fs", "net", "rt-multi-thread", "macros", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
