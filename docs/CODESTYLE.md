@@ -36,9 +36,10 @@ The commands are in the README's [Development](../README.md#development) section
 - `unwrap`/`expect` only in tests.
 - A type read from text has no `serde(flatten)`, `untagged` or internal `tag`: serde reads them
   through a buffer, and the refusal loses its key and line. Where one text holds several types'
-  keys, each type is read from the text on its own, as `DaemonConfig::read` does. A value put
-  together in memory, such as merged patches, has no text, so each part is read from its own text
-  before the parts are merged. Writing through them loses nothing and stays allowed.
+  keys, each type is read from the text on its own, as `DaemonConfig::read` does. Writing through
+  them loses nothing and stays allowed.
+- A value put together in memory, such as merged patches, has no text, so each part is read from
+  its own text before the parts are merged.
 - `sliplib-yaml` refuses a YAML tag in what it reads, so no type takes one.
 - A tool reads only the keys it uses. A value it only passes on passes as written: no type check,
   no refusal and no test for it.
