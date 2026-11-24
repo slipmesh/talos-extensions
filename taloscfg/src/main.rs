@@ -319,9 +319,6 @@ mod tests {
     /// The key of node `a` in `SLIPMESH`.
     static KEY_OF_A: LazyLock<String> = LazyLock::new(key);
 
-    /// The key of node `d` in `SLIPMESH`.
-    static KEY_OF_D: LazyLock<String> = LazyLock::new(key);
-
     /// Files with everything `slipmesh mint` writes: four nodes of `talos`, `a-b` and `c-d`
     /// between them, `router1` of `routeros` on a link to `a`, and a `patch` for `a`.
     static SLIPMESH: LazyLock<String> = LazyLock::new(|| {
@@ -368,7 +365,7 @@ installer:
             a = *KEY_OF_A,
             b = key(),
             c = key(),
-            d = *KEY_OF_D,
+            d = key(),
             r = key(),
         )
     });
@@ -475,6 +472,14 @@ installer:
                 ),
                 None,
                 "has no Talos `kind`".to_owned(),
+                Also::Reading,
+            ),
+            (
+                setup(
+                    "---\nslipmesh: {kind: platform, platform: talos}\nmetrics: {mesh: {port: 0}}\n",
+                ),
+                None,
+                "metrics.mesh.port: invalid value".to_owned(),
                 Also::Reading,
             ),
             (

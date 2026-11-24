@@ -381,6 +381,21 @@ mod tests {
                 vec![k1.clone()],
                 vec![("k2".to_string(), None)],
             ),
+            // A bare 25 held is not the range of one value 25 desired.
+            (
+                vec![Peer {
+                    persistent_keepalive: BARE_25,
+                    ..at_2.clone()
+                }],
+                vec![Peer {
+                    persistent_keepalive: KEEPALIVE,
+                    ..at_2.clone()
+                }],
+                vec![replace(&Peer {
+                    persistent_keepalive: KEEPALIVE,
+                    ..at_2.clone()
+                })],
+            ),
             (
                 vec![peer("k1", &["203.0.113.1/32", "203.0.113.2/32"], None)],
                 vec![peer("k1", &["203.0.113.2/32", "203.0.113.1/32"], None)],

@@ -349,7 +349,10 @@ content: "table inet x {{}}"
         let a = rendered("a");
         assert!(a.starts_with(HEADER), "{a}");
         let disk = a.find("disk: /dev/vda").expect(&a);
-        assert!(disk < a.find("name: awg").unwrap(), "{a}");
+        let annotated = a.find("kind: KubeNodeConfig").expect(&a);
+        let awg = a.find("name: awg").expect(&a);
+        assert!(disk < annotated && annotated < awg, "{a}");
+        assert!(awg < a.find("name: router").unwrap(), "{a}");
         assert!(content(&generated_document(&a, "awg").unwrap()).contains("mesh-b"));
         assert!(generated_document(&a, "router").is_some());
         assert!(generated_document(&a, "nftables").is_some());
@@ -422,6 +425,13 @@ content: "table inet x {{}}"
         assert_eq!(configs.len(), 1, "{configs:?}");
         assert_eq!(configs[0]["nodeIP"]["validSubnets"][0], "192.0.2.0/24");
         assert_eq!(configs[0]["annotations"]["example.com/rack"], "r1");
+        assert_eq!(
+            configs[0]["annotations"]["slipmesh.net/endpoint"],
+            "192.0.2.10"
+        );
+
+        let unset = raw.replace("annotations:\n  example.com/rack: r1\n", "annotations:\n");
+        let configs = kube_node_configs(&render_raw(&unset, "a").unwrap());
         assert_eq!(
             configs[0]["annotations"]["slipmesh.net/endpoint"],
             "192.0.2.10"

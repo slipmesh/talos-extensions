@@ -255,10 +255,13 @@ mod tests {
 
     #[test]
     fn a_peer_reads_its_handshake_and_counters_a_negative_time_as_never_and_none_without_a_key() {
-        let peers = |attrs| {
-            vec![AmneziaWireguardAttribute::Peers(vec![
-                AmneziaWireguardPeer(attrs),
-            ])]
+        // Each piece in a message of its own, as the kernel splits a peer whose AllowedIPs do not
+        // fit one, resuming it with just the public key again.
+        let peers = |pieces: Vec<Vec<AmneziaWireguardPeerAttribute>>| {
+            pieces
+                .into_iter()
+                .map(|piece| AmneziaWireguardAttribute::Peers(vec![AmneziaWireguardPeer(piece)]))
+                .collect::<Vec<_>>()
         };
         let stats = |last_handshake, rx_bytes, tx_bytes| PeerStats {
             last_handshake,
@@ -268,21 +271,24 @@ mod tests {
         for (attrs, read) in [
             (
                 vec![
-                    AmneziaWireguardPeerAttribute::PublicKey(KEY),
-                    handshake_at(1_700_000_000),
-                    AmneziaWireguardPeerAttribute::RxBytes(4096),
-                    AmneziaWireguardPeerAttribute::TxBytes(2048),
+                    vec![
+                        AmneziaWireguardPeerAttribute::PublicKey(KEY),
+                        handshake_at(1_700_000_000),
+                        AmneziaWireguardPeerAttribute::RxBytes(4096),
+                        AmneziaWireguardPeerAttribute::TxBytes(2048),
+                    ],
+                    vec![AmneziaWireguardPeerAttribute::PublicKey(KEY)],
                 ],
                 Some(stats(1_700_000_000, 4096, 2048)),
             ),
             (
-                vec![
+                vec![vec![
                     AmneziaWireguardPeerAttribute::PublicKey(KEY),
                     handshake_at(-1),
-                ],
+                ]],
                 Some(stats(0, 0, 0)),
             ),
-            (vec![AmneziaWireguardPeerAttribute::RxBytes(1)], None),
+            (vec![vec![AmneziaWireguardPeerAttribute::RxBytes(1)]], None),
         ] {
             let merged = merge_peer_attrs(&peers(attrs));
             assert_eq!(merged.get(&key_b64()), read.as_ref());

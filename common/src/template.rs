@@ -89,8 +89,8 @@ mod tests {
         let source = "table inet t {\n  # \"quoted\" <tag> & co\n  iifname \"{{ i }}\"\n}\n";
         let t = Template::new(source, &["i"]).unwrap();
         assert_eq!(
-            t.render(context(&[("i", "eth0")])).unwrap(),
-            "table inet t {\n  # \"quoted\" <tag> & co\n  iifname \"eth0\"\n}\n"
+            t.render(context(&[("i", "eth0\"<&>")])).unwrap(),
+            "table inet t {\n  # \"quoted\" <tag> & co\n  iifname \"eth0\"<&>\"\n}\n"
         );
     }
 

@@ -523,7 +523,7 @@ mod tests {
     fn a_roadwarrior_alone_has_a_verdict_and_none_from_a_stale_snapshot() {
         // A loop wedged in netlink leaves a snapshot that stays plausible forever; serving it is
         // the exact failure the textfile collector was rejected for.
-        for (rw, connected_to, taken, verdict) in [
+        for (mesh, connected_to, taken, verdict) in [
             (
                 Some(stats(NOW - 10, 1, 2)),
                 &[("rw-north", RW_PEER)][..],
@@ -535,7 +535,7 @@ mod tests {
         ] {
             let out = render(
                 &config(),
-                &dumps(rw, Some(stats(NOW - 10, 3, 4))),
+                &dumps(mesh, Some(stats(NOW - 10, 3, 4))),
                 &snapshot(connected_to, taken),
                 NOW,
             );

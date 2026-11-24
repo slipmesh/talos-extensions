@@ -1,4 +1,2 @@
-# Golden files are compared byte for byte, whatever line endings a checkout would give them.
-*.yaml text eol=lf
 # The reference templates are hashed as they are: their `base` must not depend on the checkout.
 *.j2 text eol=lf

@@ -337,7 +337,7 @@ bgp_peers:
   - {name: node-b, address: "3fff::2"}
 bfd: {min_rx_ms: 300, min_tx_ms: 300, multiplier: 5}
 ospf_interfaces: [mesh-*]
-direct_interfaces: [lan0, mesh-*]
+direct_interfaces: [lan0, mesh-*, eth0.100]
 announce:
   - {net: 203.0.113.192/26}
 learn: [203.0.113.128/26]
@@ -358,8 +358,15 @@ learn: [203.0.113.128/26]
         assert!(out.contains("route 192.0.2.0/24 blackhole; # example"));
         assert!(out.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
         assert!(out.contains("min rx interval 300 ms;"));
-        assert!(out.contains("protocol direct direct_lan0 {"));
+        assert!(out.contains("timeformat protocol iso long;"));
+        assert!(out.contains(
+            "protocol direct direct1 {\n    interface \"router-lo\";\n    ipv4 { import all; };\n}"
+        ));
+        assert!(out.contains(
+            "protocol direct direct_lan0 {\n    interface \"lan0\";\n    ipv4 { import all; };\n}"
+        ));
         assert!(out.contains("protocol direct direct_mesh__ {"));
+        assert!(out.contains("protocol direct direct_eth0_100 {"));
     }
 
     /// `VARIABLES` is what a template is checked against, the context is what it gets - a field

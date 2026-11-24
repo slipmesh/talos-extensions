@@ -555,8 +555,12 @@ mod tests {
         let global: (Ipv6Addr, u8) = ("3fff::1".parse().unwrap(), 128);
         let link_local: (Ipv6Addr, u8) = ("fe80::1".parse().unwrap(), 64);
         let stale: (Ipv6Addr, u8) = ("fe80::dead".parse().unwrap(), 64);
-        let mut removed = to_remove(&[global, link_local, stale], &[global, link_local]);
+        let also_stale: (Ipv6Addr, u8) = ("fe80::beef".parse().unwrap(), 64);
+        let mut removed = to_remove(
+            &[global, stale, link_local, also_stale],
+            &[global, link_local],
+        );
         removed.sort();
-        assert_eq!(removed, vec![stale]);
+        assert_eq!(removed, vec![also_stale, stale]);
     }
 }
