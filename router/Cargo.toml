@@ -38,3 +38,4 @@ runtime = ["common/netlink", "dep:nix"]
 [dev-dependencies]
 tempfile.workspace = true
 sliplib-yaml.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

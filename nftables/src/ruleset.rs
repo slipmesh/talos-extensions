@@ -1,16 +1,13 @@
 //! Applies `NftablesConfig::ruleset` (already placeholder-substituted, see `main.rs`) via a
 //! vendored, statically-linked `nft` binary (subprocess) - raw NFNETLINK (`rustables`) can't
 //! express the MSS-clamp statement this workspace's first real ruleset needs (`tcp option maxseg
-//! size set rt mtu`), a limitation already hit and documented by the sibling k8s-operator this
-//! extension mirrors (`operators/nftables/src/nftables.rs`'s own doc comment).
+//! size set rt mtu`).
 //!
 //! Doesn't parse or understand the ruleset's *content* - only scans it for `table <family> <name>`
 //! declarations, to `delete table` each one (idempotent, ignores "doesn't exist yet") before
 //! reapplying. This is the whole answer to "how does this loader avoid piling up duplicate/stale
 //! rules on every reapply": identify by whatever the *current* config itself declares, not by a
-//! name hardcoded in this binary (unlike `operators/nftables`, which hardcodes
-//! `nftables_operator_filter`/`nftables_operator_nat` in Rust - here the table names live in the
-//! operator-authored `ruleset:` text instead). Not `flush ruleset`: something else on the same
+//! name hardcoded in this binary. Not `flush ruleset`: something else on the same
 //! node (kube-proxy, Talos's own ingress firewall, ...) may have its own nftables tables that must
 //! survive this.
 //!
@@ -81,7 +78,7 @@ pub async fn apply(ruleset: &str) -> Result<()> {
     child
         .stdin
         .take()
-        .expect("just configured with Stdio::piped()")
+        .context("nft has no stdin")?
         .write_all(ruleset.as_bytes())
         .await
         .context("failed to write ruleset to nft stdin")?;

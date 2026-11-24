@@ -41,8 +41,7 @@ async fn main() -> Result<()> {
 /// Shared state for the two background loops (`bypass_refresh_loop`, `bird_health_watchdog`) -
 /// everything here is either read-only for the process lifetime (config is never re-read; a
 /// config change means Talos restarts this whole container, same as `awg`) or behind its own
-/// lock. No `Store`/reflector/CRD-cache of any kind - unlike the k8s original's `reconcile::Context`,
-/// there's nothing here that's watched, only what `router.yaml` declared once at startup.
+/// lock: nothing here is watched, only what `router.yaml` declared once at startup.
 struct RouterState {
     mesh: config::RouterConfig,
     metrics: Option<MetricsConfig>,
@@ -85,8 +84,9 @@ async fn run(shutdown: Shutdown) -> Result<()> {
         () = shutdown.requested() => return bird_process::shut_down(bird_child).await,
     }
 
-    if ctx.mesh.bypass.is_some() {
-        tokio::spawn(bypass_refresh_loop(ctx.clone()));
+    if let Some(bypass) = &ctx.mesh.bypass {
+        let refresh_interval = Duration::from_secs(bypass.refresh_interval_secs);
+        tokio::spawn(bypass_refresh_loop(ctx.clone(), refresh_interval));
     }
     tokio::spawn(bird_health_watchdog(ctx.clone()));
 
@@ -114,11 +114,7 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
     let RouterDaemonConfig { mesh: cfg, metrics } = daemon;
     // Read before anything on the node is touched: without a template there is no bird.conf to
     // write, and nothing to fall back on - the template is the node's config, not this binary's.
-    let template_source = tokio::fs::read_to_string(bird_conf::TEMPLATE_PATH)
-        .await
-        .with_context(|| format!("failed to read template {}", bird_conf::TEMPLATE_PATH))?;
-    let template = bird_conf::compile(template_source)
-        .with_context(|| format!("template {} is invalid", bird_conf::TEMPLATE_PATH))?;
+    let template = common::template::load(bird_conf::TEMPLATE_PATH, bird_conf::compile).await?;
 
     tracing::info!(
         bgp_peers = cfg.bgp_peers.len(),
@@ -185,69 +181,62 @@ async fn reconcile(ctx: &RouterState, bypass_routes: &[bird_conf::BypassRoute]) 
     .await
 }
 
-/// Bounded retry budget for a resolve failure with *nothing cached yet* - only relevant the very
-/// first time this is ever called (startup), since any later failure already has a last-known-good
-/// cache to fall back on immediately (see below). RIPEstat/DNS being unreachable in the first few
-/// seconds after this container starts is a real, already-anticipated race elsewhere in this
-/// workspace (see `nftables`'s `retry_default_iface`) - without this, a startup failure here used
-/// to wait for `bypass_refresh_loop`'s next tick to retry, which is a full `refresh_interval_secs`
-/// away (default 24h), leaving bypass routes silently missing for up to a day over what's often
-/// just a few seconds of network not-quite-up-yet.
-const BYPASS_STARTUP_RETRIES: u32 = 5;
+/// Tries of a resolve with nothing cached yet, at start: RIPEstat or DNS may not be reachable yet,
+/// and the next try is a whole `refresh_interval_secs` away.
+const BYPASS_STARTUP_TRIES: u32 = 5;
 const BYPASS_STARTUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Resolves `ctx.mesh.bypass` (if any) into concrete blackhole routes. A resolve failure keeps
 /// serving the last-known-good cached result rather than blanking the bypass out over a
-/// transient RIPEstat/DNS outage - same reasoning as the k8s original's `current_bypass_routes`,
-/// minus the per-node CRD status patching and multi-`BypassSource`-per-node conflict handling
-/// neither of which apply to a single static config block.
+/// transient RIPEstat/DNS outage.
 async fn current_bypass_routes(ctx: &RouterState) -> Vec<bird_conf::BypassRoute> {
     let Some(bypass_cfg) = &ctx.mesh.bypass else {
         return Vec::new();
     };
-    for attempt in 1..=BYPASS_STARTUP_RETRIES {
-        match resolver::resolve(&bypass_cfg.include, &bypass_cfg.exclude).await {
-            Ok(resolved) => {
-                let routes: Vec<bird_conf::BypassRoute> = resolved
-                    .into_iter()
-                    .map(|(net, label)| bird_conf::BypassRoute { net, label })
-                    .collect();
-                *ctx.bypass_cache.lock().await = Some(routes.clone());
-                return routes;
-            }
-            Err(e) => {
-                let cached = ctx.bypass_cache.lock().await.clone();
-                match cached {
-                    Some(routes) => {
-                        tracing::warn!(error = %e, "bypass resolution failed, keeping last-known-good routes");
-                        return routes;
-                    }
-                    None if attempt < BYPASS_STARTUP_RETRIES => {
-                        tracing::warn!(error = %e, attempt, "bypass resolution failed with nothing cached yet, retrying shortly");
-                        tokio::time::sleep(BYPASS_STARTUP_RETRY_INTERVAL).await;
-                    }
-                    None => {
-                        tracing::warn!(error = %e, attempt, "bypass resolution failed with nothing cached yet - serving no bypass routes this pass");
-                        return Vec::new();
-                    }
-                }
-            }
+    let resolve = || resolver::resolve(&bypass_cfg.include, &bypass_cfg.exclude);
+    let cached = ctx.bypass_cache.lock().await.clone();
+    let resolved = match cached {
+        Some(_) => resolve().await,
+        None => {
+            common::retry::retry(
+                "bypass resolution",
+                BYPASS_STARTUP_TRIES,
+                BYPASS_STARTUP_RETRY_INTERVAL,
+                resolve,
+            )
+            .await
+        }
+    };
+    match (resolved, cached) {
+        (Ok(resolved), _) => {
+            let routes: Vec<bird_conf::BypassRoute> = resolved
+                .into_iter()
+                .map(|(net, label)| bird_conf::BypassRoute { net, label })
+                .collect();
+            *ctx.bypass_cache.lock().await = Some(routes.clone());
+            routes
+        }
+        (Err(e), Some(routes)) => {
+            tracing::warn!(
+                error = %format_args!("{e:#}"),
+                "bypass resolution failed, keeping last-known-good routes"
+            );
+            routes
+        }
+        (Err(e), None) => {
+            tracing::warn!(
+                error = %format_args!("{e:#}"),
+                "bypass resolution failed with nothing cached yet - serving no bypass routes this \
+                 pass"
+            );
+            Vec::new()
         }
     }
-    unreachable!("loop above always returns on its final iteration")
 }
 
-/// Runs forever as its own background task - only spawned when `ctx.mesh.bypass` is `Some` (see
-/// `run()`). The periodic re-resolve must happen even without any external trigger, since there's
-/// no watch mechanism at all in this daemon.
-async fn bypass_refresh_loop(ctx: Arc<RouterState>) -> ! {
-    let refresh_interval = Duration::from_secs(
-        ctx.mesh
-            .bypass
-            .as_ref()
-            .expect("only spawned when bypass is Some")
-            .refresh_interval_secs,
-    );
+/// Runs forever as its own background task, re-resolving every `refresh_interval`: nothing else
+/// triggers a re-resolve, since this daemon watches nothing.
+async fn bypass_refresh_loop(ctx: Arc<RouterState>, refresh_interval: Duration) -> ! {
     let mut tick = tokio::time::interval(refresh_interval);
     tick.tick().await; // first tick fires immediately; the real work already happened at startup
     loop {
@@ -316,5 +305,53 @@ async fn bird_health_watchdog(ctx: Arc<RouterState>) -> ! {
                 tracing::warn!(error = %e, "BIRD health check failed")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bird_conf::BypassRoute;
+
+    /// What `current_bypass_routes` serves with `cached`, and the time it took, when the bypass's
+    /// one source fails before any lookup: a literal without prefixes.
+    async fn served_with(cached: Option<Vec<BypassRoute>>) -> (Vec<BypassRoute>, Duration) {
+        let mesh: config::RouterConfig = sliplib_yaml::from_str(
+            r#"
+node: {loopback_addresses: ["198.51.100.1/32", "3fff::1/128"]}
+bgp_as: 64512
+bypass: {include: [{kind: literal}]}
+"#,
+        )
+        .unwrap();
+        let ctx = RouterState {
+            mesh,
+            metrics: None,
+            bypass_cache: Mutex::new(cached),
+            render_lock: Mutex::new(()),
+            template: bird_conf::compile(bird_conf::REFERENCE_TEMPLATE).unwrap(),
+        };
+        let start = tokio::time::Instant::now();
+        let served = current_bypass_routes(&ctx).await;
+        (served, start.elapsed())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_resolution_serves_the_cache_at_once_or_nothing_after_every_try() {
+        let cached = vec![BypassRoute {
+            net: "192.0.2.0/24".to_owned(),
+            label: "a".to_owned(),
+        }];
+        assert_eq!(
+            served_with(Some(cached.clone())).await,
+            (cached, Duration::ZERO)
+        );
+        assert_eq!(
+            served_with(None).await,
+            (
+                vec![],
+                BYPASS_STARTUP_RETRY_INTERVAL * (BYPASS_STARTUP_TRIES - 1)
+            )
+        );
     }
 }

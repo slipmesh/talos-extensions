@@ -1,14 +1,7 @@
 //! Applies one `InterfaceEntry` to the kernel: link/addresses/identity, then a point-wise peer
 //! diff against whatever's actually configured (read back from the kernel, not assumed empty -
 //! this process gets fully restarted on every config change, so there is no in-memory "previous"
-//! to carry over between runs).
-//!
-//! Ported and merged from slipmesh-operators' `mesh::awg`/`roadwarriors::awg` (same repo,
-//! ) - the two were nearly-identical device/peer-attribute-building
-//! code with different reconciliation shapes (mesh: exactly one peer, unconditional resend;
-//! roadwarriors: many peers, point-wise diff). One shape (point-wise diff) now covers both, since
-//! a diff against a single peer degenerates to exactly the same SetDevice call an unconditional
-//! resend would have made.
+//! to carry over between runs). A mesh link's one peer and a pool's many take the same diff.
 
 use anyhow::{Context, Result};
 use common::netlink::awg::{AwgClient, push_obfuscation_attrs, wire};
@@ -23,15 +16,6 @@ use sliplib_config::awg::{InterfaceEntry, PeerEntry};
 use sliplib_net::IpNet;
 use sliplib_secrets::wireguard::decode_key;
 use std::net::{IpAddr, SocketAddr};
-use std::time::Duration;
-
-/// Matches `router/src/resolver.rs`'s own `NETWORK_TIMEOUT` for DNS lookups - same "unreachable
-/// resolver, not NXDOMAIN" failure mode, same order-of-magnitude answer for how long to wait
-/// before giving up. Without this, a hung `tokio::net::lookup_host` used to block
-/// `converge_interface` for that interface forever - and since `main.rs::run()` converges
-/// interfaces one at a time, every interface *after* it in the config never converges either, and
-/// the process never exits for `restart: always` to get a chance to retry it.
-const ENDPOINT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// One peer, resolved to exactly what the kernel needs - `allowed_ips` is always concrete (the
 /// full-tunnel default if the config entry left it unset) and `endpoint` is already DNS-resolved.
@@ -83,15 +67,9 @@ async fn resolve_peer(entry: &PeerEntry, keepalive: AmneziaWireguardRange<u16>) 
 }
 
 async fn resolve_endpoint(host_port: &str) -> Result<String> {
-    let mut addrs = tokio::time::timeout(
-        ENDPOINT_RESOLVE_TIMEOUT,
-        tokio::net::lookup_host(host_port),
-    )
-    .await
-    .with_context(|| {
-        format!("resolving endpoint {host_port:?} exceeded its {ENDPOINT_RESOLVE_TIMEOUT:?} budget")
-    })?
-    .with_context(|| format!("failed to resolve endpoint {host_port:?}"))?;
+    let mut addrs = common::dns::lookup(host_port)
+        .await
+        .with_context(|| format!("failed to resolve endpoint {host_port:?}"))?;
     let addr: SocketAddr = addrs
         .next()
         .with_context(|| format!("no addresses found for endpoint {host_port:?}"))?;
@@ -317,13 +295,17 @@ pub async fn ensure_interface(
             Err(e) => match previous.iter().find(|p| p.public_key == peer.public_key) {
                 Some(existing) => {
                     tracing::warn!(
-                        interface = %iface.name, peer = %peer.public_key, error = %e,
+                        interface = %iface.name,
+                        peer = %peer.public_key,
+                        error = %format_args!("{e:#}"),
                         "failed to resolve peer, keeping its last-known-good state this pass"
                     );
                     desired.push(last_known_good(existing, keepalive));
                 }
                 None => tracing::warn!(
-                    interface = %iface.name, peer = %peer.public_key, error = %e,
+                    interface = %iface.name,
+                    peer = %peer.public_key,
+                    error = %format_args!("{e:#}"),
                     "failed to resolve new peer with no previous state, skipping it this pass"
                 ),
             },
@@ -635,5 +617,12 @@ mod tests {
         push_obfuscation_attrs(&mut expected, &obfuscation).unwrap();
         assert!(expected.contains(&AmneziaWireguardAttribute::Jc(4)));
         assert_eq!(check(&interface("awg-a", obfuscation)).unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn an_ip_endpoint_resolves_to_itself() {
+        for endpoint in ["198.51.100.4:51820", "[2001:db8::1]:51820"] {
+            assert_eq!(resolve_endpoint(endpoint).await.unwrap(), endpoint);
+        }
     }
 }

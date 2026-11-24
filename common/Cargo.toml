@@ -23,17 +23,17 @@ sliplib-net.workspace = true
 sliplib-secrets.workspace = true
 sliplib-yaml.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { workspace = true, features = ["fs", "net", "rt-multi-thread", "macros", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["test-util", "time"] }
 
 [features]
 default = ["netlink"]
-# The netlink stack is Linux-only. `taloscfg` needs this crate for Obfuscation and CIDR parsing
-# alone, and has to build wherever it is run, so the daemons keep the default and it opts out.
+# The netlink stack is Linux-only. `taloscfg` has to build wherever it is run, so the daemons keep
+# the default and it opts out.
 netlink = [
     "dep:genetlink",
     "dep:netlink-packet-amneziawg",

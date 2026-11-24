@@ -2,9 +2,6 @@
 //! module's own genl family ("amneziawg", not "wireguard") directly rather than shelling out to
 //! the `awg` CLI. This module only owns the raw `GetDevice`/`SetDevice` netlink transport;
 //! interface/address/route management is `rt.rs` (a different netlink family).
-//!
-//! Ported from slipmesh-operators' `common::netlink::awg` -
-//! functionally identical, just re-homed into a project with no Kubernetes dependency.
 
 use anyhow::{Context, Result};
 use futures::StreamExt;

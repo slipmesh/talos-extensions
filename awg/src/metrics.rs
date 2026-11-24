@@ -10,12 +10,13 @@
 //! a `Registry` is built fresh each time, so a peer removed from the config is simply never
 //! registered again.
 
-use crate::handshake::{PeerStats, ReconcileSnapshot, dump_peers};
+use crate::handshake::{PeerStats, ReconcileSnapshot, dump_peers, now_unix};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use common::netlink::awg::AwgClient;
 use http_body_util::Full;
 use hyper::body::Incoming;
+use hyper::header::HeaderValue;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
@@ -32,7 +33,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, watch};
 use tokio::time::timeout;
@@ -53,7 +54,9 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// What `prometheus-client`'s text encoder actually emits. Prometheus chooses its parser from this
 /// header, so it must say OpenMetrics rather than the older text format.
-const CONTENT_TYPE: &str = "application/openmetrics-text; version=1.0.0; charset=utf-8";
+const CONTENT_TYPE: HeaderValue =
+    HeaderValue::from_static("application/openmetrics-text; version=1.0.0; charset=utf-8");
+const TEXT: HeaderValue = HeaderValue::from_static("text/plain; charset=utf-8");
 
 /// One interface's dump, or `None` when reading it failed this scrape.
 pub type Dumps = BTreeMap<String, Option<HashMap<String, PeerStats>>>;
@@ -105,7 +108,12 @@ fn kind_of(peer: &sliplib_config::awg::PeerEntry) -> &'static str {
 
 /// The whole exposition, from the config (labels), the dump (values) and the loop's own verdict.
 /// Pure: everything that can be got wrong here is got wrong without a kernel in the room.
-pub fn render(cfg: &AwgConfig, dumps: &Dumps, snapshot: &ReconcileSnapshot, now: u64) -> String {
+pub fn render(
+    cfg: &AwgConfig,
+    dumps: &Dumps,
+    snapshot: &ReconcileSnapshot,
+    now: u64,
+) -> Result<String> {
     let mut registry = Registry::with_prefix("slipmesh");
 
     let build_info = Family::<BuildLabels, Gauge>::default();
@@ -223,9 +231,8 @@ pub fn render(cfg: &AwgConfig, dumps: &Dumps, snapshot: &ReconcileSnapshot, now:
     }
 
     let mut out = String::new();
-    // The encoder only fails if the sink does, and a String sink cannot.
-    encode(&mut out, &registry).expect("writing exposition into a String cannot fail");
-    out
+    encode(&mut out, &registry).context("encoding the metrics")?;
+    Ok(out)
 }
 
 /// Binds the listening socket, tolerating an address that does not exist yet.
@@ -252,13 +259,6 @@ fn bind(listen: SocketAddr) -> Result<TcpListener> {
         .with_context(|| format!("failed to bind the metrics socket to {listen}"))?;
     socket.listen(128).context("failed to listen")?;
     TcpListener::from_std(socket.into()).context("failed to hand the metrics socket to tokio")
-}
-
-fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before epoch")
-        .as_secs()
 }
 
 /// Dumps every configured interface for one scrape.
@@ -318,12 +318,13 @@ async fn collect(client: &Mutex<Option<AwgClient>>, cfg: &AwgConfig) -> Dumps {
     dumps
 }
 
-fn respond(status: StatusCode, content_type: &str, body: &str) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(status)
-        .header(hyper::header::CONTENT_TYPE, content_type)
-        .body(Full::new(Bytes::from(body.to_string())))
-        .expect("a response built from constants cannot be invalid")
+fn respond(status: StatusCode, content_type: HeaderValue, body: String) -> Response<Full<Bytes>> {
+    let mut response = Response::new(Full::new(Bytes::from(body)));
+    *response.status_mut() = status;
+    response
+        .headers_mut()
+        .insert(hyper::header::CONTENT_TYPE, content_type);
+    response
 }
 
 /// Serves `GET /metrics` until the process ends.
@@ -377,13 +378,22 @@ async fn serve(
                         // a wrong path must not cost a netlink round trip.
                         return Ok::<_, Infallible>(respond(
                             StatusCode::NOT_FOUND,
-                            "text/plain; charset=utf-8",
-                            "not found\n",
+                            TEXT,
+                            "not found\n".to_owned(),
                         ));
                     }
                     let dumps = collect(&client, &cfg).await;
-                    let body = render(&cfg, &dumps, &verdict.borrow().clone(), now_unix());
-                    Ok(respond(StatusCode::OK, CONTENT_TYPE, &body))
+                    let snapshot = verdict.borrow().clone();
+                    Ok(match render(&cfg, &dumps, &snapshot, now_unix()) {
+                        Ok(body) => respond(StatusCode::OK, CONTENT_TYPE, body),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %format_args!("{e:#}"),
+                                "metrics: encoding failed"
+                            );
+                            respond(StatusCode::INTERNAL_SERVER_ERROR, TEXT, String::new())
+                        }
+                    })
                 }
             });
 
@@ -501,7 +511,8 @@ mod tests {
             &dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4))),
             &snapshot(&[("rw-north", RW_PEER)], NOW),
             NOW,
-        );
+        )
+        .unwrap();
         let handshakes = series(&out, "slipmesh_awg_peer_last_handshake_seconds{");
         for (interface, kind) in [("mesh-node-a", "mesh"), ("rw-north", "roadwarrior")] {
             assert!(
@@ -538,7 +549,8 @@ mod tests {
                 &dumps(mesh, Some(stats(NOW - 10, 3, 4))),
                 &snapshot(connected_to, taken),
                 NOW,
-            );
+            )
+            .unwrap();
             let connected = series(&out, "slipmesh_awg_peer_connected{");
             assert_eq!(connected.len(), usize::from(verdict.is_some()), "{out}");
             if let Some(value) = verdict {
@@ -555,7 +567,8 @@ mod tests {
             &dumps(Some(stats(0, 0, 0)), Some(stats(NOW - 10, 3, 4))),
             &snapshot(&[], NOW),
             NOW,
-        );
+        )
+        .unwrap();
         assert!(
             !series(&out, "slipmesh_awg_peer_last_handshake_seconds{")
                 .iter()
@@ -568,7 +581,7 @@ mod tests {
     fn a_failed_dump_marks_that_interface_and_leaves_the_others_alone() {
         let mut d = dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4)));
         d.insert("mesh-node-a".to_string(), None);
-        let out = render(&config(), &d, &snapshot(&[], NOW), NOW);
+        let out = render(&config(), &d, &snapshot(&[], NOW), NOW).unwrap();
         let ok = series(&out, "slipmesh_awg_interface_dump_ok{");
         assert!(
             ok.iter()
@@ -590,7 +603,7 @@ mod tests {
 
     #[test]
     fn interface_peers_counts_what_the_config_declares_by_kind() {
-        let out = render(&config(), &dumps(None, None), &snapshot(&[], NOW), NOW);
+        let out = render(&config(), &dumps(None, None), &snapshot(&[], NOW), NOW).unwrap();
         let counts = series(&out, "slipmesh_awg_interface_peers{");
         assert!(
             counts.iter().any(|l| l.contains("mesh-node-a")
@@ -613,7 +626,8 @@ mod tests {
             &dumps(Some(stats(NOW - 10, 4096, 2048)), None),
             &snapshot(&[], NOW),
             NOW,
-        );
+        )
+        .unwrap();
         assert!(
             out.contains("# TYPE slipmesh_awg_peer_rx_bytes counter"),
             "{out}"
@@ -638,7 +652,7 @@ mod tests {
             (snapshot(&[], NOW), true),
             (ReconcileSnapshot::default(), false),
         ] {
-            let out = render(&config(), &dumps(None, None), &snapshot, NOW);
+            let out = render(&config(), &dumps(None, None), &snapshot, NOW).unwrap();
             assert!(out.contains("component=\"awg\""), "{out}");
             let freshness = series(&out, "slipmesh_awg_reconcile_last_success_seconds ");
             assert_eq!(

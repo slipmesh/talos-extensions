@@ -1,23 +1,18 @@
 //! Handshake polling + kernel route management for "tracked" peers (config entries with an
-//! explicit `allowed_ips` - see `config::PeerEntry`). Ported from slipmesh-operators'
-//! `roadwarriors::handshake`, generalized from one fixed shared
-//! interface to any number of interfaces, and with two changes this daemon's restart-heavy
-//! lifecycle needs that the original (a long-lived pod, rarely restarted) didn't:
+//! explicit `allowed_ips` - see `config::PeerEntry`), on any number of interfaces:
 //!
 //! - Routes are tagged with `common::ROUTE_PROTOCOL` on add/delete, and the in-memory
 //!   "what did I already install" tracking is *seeded from the kernel's own routes carrying that
-//!   tag* at startup, not assumed empty - Talos's own `handleRestart()` restarts this whole
-//!   process on every config change, far more often than a k8s pod restarts, so a route installed
-//!   by a previous run and left behind must still be recognized as ours.
+//!   tag* at startup, not assumed empty - Talos restarts this whole process on every config
+//!   change, so a route installed by a previous run and left behind must still be recognized as
+//!   ours.
 //! - The very first reconciliation pass runs immediately, not after waiting for the first 1Hz
 //!   tick - a route that went stale while the process was down (crashed, or between the old and
 //!   new instance across a config-driven restart) needs cleaning up as soon as the daemon starts
 //!   watching again, not up to a second later.
 //!
-//! No CRD status patch (the original's `RoadWarrior.status.connectedNode`/`lastHandshakeTime`) -
-//! not available without Kubernetes, and not needed: the route's mere presence in the kernel is
-//! itself the observable "this peer is currently connected" signal, visible via `talosctl get
-//! routes` with no code here at all.
+//! The route's presence in the kernel is the observable "this peer is currently connected"
+//! signal, visible via `talosctl get routes` with no code here at all.
 
 use anyhow::Result;
 use common::ROUTE_PROTOCOL;
@@ -39,11 +34,11 @@ pub struct TrackedInterface {
     pub peers: HashMap<String, Vec<IpNet>>,
 }
 
-fn now_unix() -> u64 {
+/// A clock before 1970 reads as 0.
+pub(crate) fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system clock before epoch")
-        .as_secs()
+        .map_or(0, |since| since.as_secs())
 }
 
 /// Everything one peer's `GetDevice` dump says that anything here reads: the handshake the route

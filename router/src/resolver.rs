@@ -1,19 +1,9 @@
 //! Resolution pipeline: resolve each source (asn -> RIPEstat, literal -> verbatim, geoip ->
 //! RIPEstat, dns -> A record) into (net, label) pairs, dedupe/collapse per label, then punch out
-//! every excluded network (resolved the same way). Ported from `slipmesh/core`'s `resolver.rs`,
-//! which carried no `kube`/`k8s-openapi` import, so this is close to verbatim; the only
-//! structural change is `BypassSourceEntry` (`sliplib_config::router`), a plain
-//! `#[derive(Deserialize)]` struct read straight out of `router.yaml` instead of
-//! the CRD-schema'd version in `core/src/router_types.rs` (which derives `JsonSchema`/
-//! `CustomResource` via `kube`'s macros - exactly the dependency this workspace refuses to take).
+//! every excluded network (resolved the same way).
 //!
-//! One behavioral change versus the k8s original, worth calling out explicitly rather than
-//! silently dropping: `core::resolver::self_and_cluster_exclude_entry` isn't ported. It punched
-//! every cluster node's own endpoint out of the bypass automatically, sourced from every
-//! `NodeConfig` - there's no cluster-wide node list available to a static, per-node config file.
-//! Whoever authors `router.yaml`'s `bypass.exclude` is responsible for excluding this node's own
-//! (and any peer's) public endpoint if it could otherwise fall inside `bypass.include`, the same
-//! "config-authoring concern" pattern `awg`'s README already documents for private keys.
+//! No node's endpoint is excluded on its own: a per-node config holds no list of the others, so
+//! `bypass.exclude` has to name every public endpoint that could fall inside `bypass.include`.
 
 use anyhow::{Context, Result};
 use sliplib_config::router::BypassSourceEntry;
@@ -22,13 +12,12 @@ use std::sync::LazyLock;
 use std::time::Duration;
 use tokio::sync::Semaphore;
 
-/// Per-call ceiling for one RIPEstat request or one DNS lookup. `reqwest`'s default is *no*
-/// request timeout at all unless configured, hence `RIPESTAT_CLIENT` below.
+/// Per-call ceiling for one RIPEstat request. `reqwest`'s default is *no* request timeout at all
+/// unless configured, hence `RIPESTAT_CLIENT` below.
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Ceiling on one whole `resolve()` call, not just its individual requests - see `core::resolver`'s
-/// original doc comment for the full reasoning (a caller typically holds some render lock across
-/// this whole call).
+/// Ceiling on one whole `resolve()` call, not just its individual requests: a caller may hold a
+/// lock across the whole call.
 pub const RESOLVE_TOTAL_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// One shared client for every RIPEstat call - connection/TLS reuse across the lookups a single
@@ -64,7 +53,7 @@ async fn ripestat_get(url: &str) -> Result<serde_json::Value> {
     let _permit = RIPESTAT_CONCURRENCY
         .acquire()
         .await
-        .expect("RIPESTAT_CONCURRENCY semaphore is never closed");
+        .context("the RIPEstat request limit is closed")?;
     client
         .get(format!("{url}&sourceapp={RIPESTAT_SOURCEAPP}"))
         .send()
@@ -179,15 +168,9 @@ async fn collect_source(source: &BypassSourceEntry) -> Result<Vec<(String, Strin
                 .context("dns source requires `hostnames`")?;
             let mut entries = Vec::new();
             for host in hostnames {
-                let addrs = tokio::time::timeout(
-                    NETWORK_TIMEOUT,
-                    tokio::net::lookup_host((host.as_str(), 0)),
-                )
-                .await
-                .with_context(|| {
-                    format!("DNS lookup for {host} timed out after {NETWORK_TIMEOUT:?}")
-                })?
-                .with_context(|| format!("DNS lookup failed for {host}"))?;
+                let addrs = common::dns::lookup((host.as_str(), 0))
+                    .await
+                    .with_context(|| format!("DNS lookup failed for {host}"))?;
                 for addr in addrs {
                     if let std::net::SocketAddr::V4(v4) = addr {
                         entries.push((format!("{}/32", v4.ip()), label.clone()));
@@ -252,9 +235,8 @@ async fn resolve_entries(sources: &[BypassSourceEntry]) -> Result<Vec<(Ipv4Net, 
 /// Full pipeline: resolve `sources` and `exclude` (identical resolution logic for both, via
 /// `resolve_entries`), then punch every exclusion out of every included prefix.
 ///
-/// Any resolution failure fails the whole call rather than returning a partial result - see
-/// `core::resolver::resolve`'s original doc comment for the full "fails closed, toward 'no
-/// blackholing'" reasoning, which applies unchanged here.
+/// Any resolution failure fails the whole call rather than returning a partial result: a partial
+/// exclusion list would blackhole what it missed, so a failure fails closed, toward no blackholing.
 pub async fn resolve(
     sources: &[BypassSourceEntry],
     exclude: &[BypassSourceEntry],
@@ -306,6 +288,7 @@ fn exclude_all(included: Vec<(Ipv4Net, String)>, exclude: Vec<Ipv4Net>) -> Vec<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sliplib_config::router::LabeledPrefix;
 
     fn entries(list: &[(&str, &str)]) -> Vec<(String, String)> {
         list.iter()
@@ -400,5 +383,44 @@ mod tests {
         for country in ["D", "DEU", "D1"] {
             assert!(validate_country(country).is_err(), "{country}");
         }
+    }
+
+    fn source(kind: &str) -> BypassSourceEntry {
+        BypassSourceEntry {
+            kind: kind.to_owned(),
+            label: None,
+            asns: None,
+            prefixes: None,
+            country: None,
+            hostnames: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_literal_source_gives_its_prefixes_and_a_dns_source_an_ipv4_host_as_itself() {
+        let literal = BypassSourceEntry {
+            prefixes: Some(
+                [("192.0.2.0/24", Some("a")), ("198.51.100.0/24", None)]
+                    .map(|(net, label)| LabeledPrefix {
+                        net: net.to_owned(),
+                        label: label.map(str::to_owned),
+                    })
+                    .into(),
+            ),
+            ..source("literal")
+        };
+        assert_eq!(
+            collect_source(&literal).await.unwrap(),
+            entries(&[("192.0.2.0/24", "a"), ("198.51.100.0/24", "")])
+        );
+        let dns = BypassSourceEntry {
+            label: Some("b".to_owned()),
+            hostnames: Some(vec!["192.0.2.7".to_owned(), "2001:db8::1".to_owned()]),
+            ..source("dns")
+        };
+        assert_eq!(
+            collect_source(&dns).await.unwrap(),
+            entries(&[("192.0.2.7/32", "b")])
+        );
     }
 }

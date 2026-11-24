@@ -11,9 +11,7 @@
 //!   code as the previous one (BIRD elides repeating it).
 //!
 //! Table-style responses (`show protocols`, `show ospf interface`) end with a trailing `0000 `
-//! (empty message) sentinel line that `birdc`'s own interactive display filters out - easy to
-//! miss by only ever looking at `birdc`'s human-facing output, as the doc comment on `command`'s
-//! first draft did, before catching this against the raw socket.
+//! (empty message) sentinel line that `birdc`'s own interactive display filters out.
 //!
 //! Reply codes are stable per BIRD's own convention (confirmed empirically: `0003`/`1002`/`2002`/
 //! `1015`/`0000` for various successful replies, `8002` for a config syntax error) - codes `>=
@@ -23,10 +21,6 @@
 //! On connect, BIRD immediately sends a one-line greeting (e.g. `0001 BIRD 2.19.2 ready.`, itself
 //! a normal final-line-only reply) before any command is sent - `command` consumes and discards
 //! it as part of every fresh connection.
-//!
-//! Ported from `slipmesh/operators`' `router/src/birdc.rs` -
-//! verbatim, no changes: this module has zero coupling to Kubernetes or to how `router.yaml` is
-//! shaped, it's a pure client for BIRD's own wire protocol.
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
