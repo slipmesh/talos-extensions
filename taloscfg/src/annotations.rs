@@ -66,39 +66,38 @@ mod tests {
     }
 
     #[test]
-    fn a_node_publishes_each_value_under_the_namespace_in_order() {
+    fn a_node_publishes_each_value_it_has_under_the_namespace_in_order() {
         // Neither sorted by name nor by number: the order they are given in.
         let classes =
             sliplib_yaml::from_str("{transit: {protocol: 153}, egress: {protocol: 152}}").unwrap();
-        let annotations = for_node(&Values {
-            interface_prefix: "wg-",
-            classes: &classes,
-            endpoint: Some("node-a.example.com"),
-            mesh_mtu: Some(1420),
-        });
-        assert_eq!(
-            names_and_values(&annotations),
-            [
-                ("slipmesh.net/interface_prefix.mesh", "wg-"),
-                ("slipmesh.net/route_proto_id.transit", "153"),
-                ("slipmesh.net/route_proto_id.egress", "152"),
-                ("slipmesh.net/endpoint", "node-a.example.com"),
-                ("slipmesh.net/mesh_mtu", "1420"),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_value_the_node_does_not_have_is_not_published() {
-        let annotations = for_node(&Values {
-            interface_prefix: "mesh-",
-            classes: &Map::new(),
-            endpoint: None,
-            mesh_mtu: None,
-        });
-        assert_eq!(
-            names_and_values(&annotations),
-            [("slipmesh.net/interface_prefix.mesh", "mesh-")]
-        );
+        let none = Map::new();
+        for (values, published) in [
+            (
+                Values {
+                    interface_prefix: "wg-",
+                    classes: &classes,
+                    endpoint: Some("node-a.example.com"),
+                    mesh_mtu: Some(1420),
+                },
+                vec![
+                    ("slipmesh.net/interface_prefix.mesh", "wg-"),
+                    ("slipmesh.net/route_proto_id.transit", "153"),
+                    ("slipmesh.net/route_proto_id.egress", "152"),
+                    ("slipmesh.net/endpoint", "node-a.example.com"),
+                    ("slipmesh.net/mesh_mtu", "1420"),
+                ],
+            ),
+            (
+                Values {
+                    interface_prefix: "mesh-",
+                    classes: &none,
+                    endpoint: None,
+                    mesh_mtu: None,
+                },
+                vec![("slipmesh.net/interface_prefix.mesh", "mesh-")],
+            ),
+        ] {
+            assert_eq!(names_and_values(&for_node(&values)), published);
+        }
     }
 }

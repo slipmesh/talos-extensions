@@ -104,30 +104,26 @@ fn with_an_old_firewall_template() -> String {
 }
 
 #[test]
-fn a_template_of_another_base_is_warned_about_with_how_it_differs_from_the_reference() {
+fn a_template_of_another_base_is_warned_about_to_a_run_for_a_node_it_reaches_with_how_it_differs() {
     let dir = tempfile::tempdir().unwrap();
-    let run = generate(
-        dir.path(),
-        &with_an_old_firewall_template(),
-        &["--check", "--node", "c"],
-    );
-    assert!(run.success, "{}", run.stderr);
+    let run = |node: &str| {
+        let run = generate(
+            dir.path(),
+            &with_an_old_firewall_template(),
+            &["--check", "--node", node],
+        );
+        assert!(run.success, "{}", run.stderr);
+        run.stderr
+    };
+    let reached = run("c");
     assert!(
-        run.stderr
-            .contains("warning: the `kind: template` document at line"),
-        "{}",
-        run.stderr
+        reached.contains("warning: the `kind: template` document at line")
+            && reached.contains(&Service::Firewall.base())
+            && reached.contains("\n-# added by hand\n"),
+        "{reached}"
     );
-    assert!(
-        run.stderr.contains(&Service::Firewall.base()),
-        "{}",
-        run.stderr
-    );
-    assert!(
-        run.stderr.contains("\n-# added by hand\n"),
-        "{}",
-        run.stderr
-    );
+    let elsewhere = run("a");
+    assert!(!elsewhere.contains("kind: template"), "{elsewhere}");
 }
 
 #[test]
@@ -167,29 +163,13 @@ fn a_reference_template_of_another_base_is_told_to_set_its_base_alone() {
 }
 
 #[test]
-fn a_template_of_another_base_is_not_told_of_to_a_run_for_a_node_it_does_not_reach() {
-    let dir = tempfile::tempdir().unwrap();
-    let run = generate(
-        dir.path(),
-        &with_an_old_firewall_template(),
-        &["--check", "--node", "a"],
-    );
-    assert!(run.success, "{}", run.stderr);
-    assert!(!run.stderr.contains("kind: template"), "{}", run.stderr);
-}
-
-#[test]
-fn a_link_that_loses_packets_is_warned_about_once_and_the_run_still_passes() {
-    let warned = warned(None);
-    assert_eq!(warned.len(), 1, "{warned:?}");
+fn a_link_that_loses_packets_is_warned_about_once_to_a_run_for_its_nodes_and_the_run_passes() {
+    let all = warned(None);
+    assert_eq!(all.len(), 1, "{all:?}");
     assert!(
-        warned[0].starts_with("warning: mesh link a-b: ") && warned[0].contains("102 packets"),
-        "{warned:?}"
+        all[0].starts_with("warning: mesh link a-b: ") && all[0].contains("102 packets"),
+        "{all:?}"
     );
-}
-
-#[test]
-fn a_run_for_one_node_warns_about_that_nodes_links_alone() {
     assert_eq!(warned(Some("b")).len(), 1);
     assert_eq!(warned(Some("c")), [] as [String; 0]);
 }

@@ -431,44 +431,87 @@ installer:
     const MODES: [(bool, bool); 3] = [(false, false), (true, false), (false, true)];
 
     #[test]
-    fn a_file_lacking_a_secret_is_refused_in_every_mode_naming_the_command_that_creates_it() {
+    fn a_refused_file_is_refused_in_every_mode_naming_what_cures_it_and_nothing_is_written() {
         let without = |part: &str, put: &str| {
             assert!(SLIPMESH.contains(part), "{part}");
             SLIPMESH.replace(part, put)
         };
         let key_of_a = format!("wireguard: {{private_key: \"{}\"}}", *KEY_OF_A);
         let key_of_a_is_not_set = "node \"a\": wireguard.private_key is not set";
+        let router = defaults::document(defaults::Service::Router);
+        let firewall = defaults::document(defaults::Service::Firewall);
+        /// What a refusal holds besides its name of the defect.
+        enum Also {
+            /// One line, ending in the command that cures it.
+            Minted,
+            /// The file it read.
+            Reading,
+            Nothing,
+        }
+        // The file, the node asked for, what the refusal names, and what else it holds.
         let cases = [
             (
-                key_of_a_is_not_set,
-                without(&key_of_a, "wireguard: null"),
-                "a",
+                setup_from(&without(&key_of_a, "wireguard: null"), ""),
+                Some("a"),
+                key_of_a_is_not_set.to_owned(),
+                Also::Minted,
             ),
             (
-                key_of_a_is_not_set,
-                without(&key_of_a, "wireguard: null"),
-                "b",
+                setup_from(&without(&key_of_a, "wireguard: null"), ""),
+                Some("b"),
+                key_of_a_is_not_set.to_owned(),
+                Also::Minted,
             ),
             (
-                "mesh link a-b: obfuscation lacks",
-                without(OBFUSCATION, ""),
-                "a",
+                setup_from(&without(OBFUSCATION, ""), ""),
+                Some("a"),
+                "mesh link a-b: obfuscation lacks".to_owned(),
+                Also::Minted,
+            ),
+            (
+                setup(
+                    "---\nslipmesh:\n  kind: patch\n  platform: talos\nmachine:\n  install: \
+                     {disk: /dev/vda}\n",
+                ),
+                None,
+                "has no Talos `kind`".to_owned(),
+                Also::Reading,
+            ),
+            (
+                holding(&format!("{}---\n{router}", *SLIPMESH)),
+                None,
+                "`slipmesh-taloscfg template firewall`".to_owned(),
+                Also::Nothing,
+            ),
+            (
+                holding(&format!("{}---\n{firewall}", *SLIPMESH)),
+                None,
+                "`slipmesh-taloscfg template router`".to_owned(),
+                Also::Nothing,
             ),
         ];
-        for (missing, network, node) in cases {
+        for (paths, node, named, also) in cases {
+            let before = paths.snapshot();
             for (check, diff) in MODES {
-                let paths = setup_from(&network, "");
-                let before = paths.snapshot();
-                let err = paths.generate(Some(node), check, diff).unwrap_err();
-                // `main` prints it with `{:?}`, on one line only without causes.
-                assert_eq!(err.chain().count(), 1, "{missing}: {err:?}");
-                let err = err.to_string();
-                assert!(err.contains(missing), "{missing}: {err}");
-                assert!(
-                    err.ends_with(" - `slipmesh mint` creates it"),
-                    "{missing}: {err}"
-                );
-                assert_eq!(paths.snapshot(), before, "{missing}");
+                let err = paths.generate(node, check, diff).unwrap_err();
+                let shown = format!("{err:#}");
+                assert!(shown.contains(&named), "{named}: {shown}");
+                match also {
+                    Also::Minted => {
+                        // `main` prints it with `{:?}`, on one line only without causes.
+                        assert_eq!(err.chain().count(), 1, "{named}: {err:?}");
+                        assert!(
+                            shown.ends_with(" - `slipmesh mint` creates it"),
+                            "{named}: {shown}"
+                        );
+                    }
+                    Also::Reading => assert!(
+                        shown.starts_with(&format!("reading {}", paths.config.display())),
+                        "{named}: {shown}"
+                    ),
+                    Also::Nothing => {}
+                }
+                assert_eq!(paths.snapshot(), before, "{named}");
             }
         }
     }
@@ -484,39 +527,6 @@ installer:
         paths.generate(None, false, false).unwrap();
         assert!(paths.patch("a").is_some());
         assert!(paths.patch("router1").is_none());
-    }
-
-    #[test]
-    fn a_patch_talos_could_not_key_is_refused_in_every_mode_and_nothing_is_written() {
-        for (check, diff) in MODES {
-            let paths = setup(
-                "---\nslipmesh:\n  kind: patch\n  platform: talos\nmachine:\n  install: {disk: /dev/vda}\n",
-            );
-            let before = paths.snapshot();
-            let err = format!("{:#}", paths.generate(None, check, diff).unwrap_err());
-            assert!(err.contains("has no Talos `kind`"), "{err}");
-            assert!(
-                err.starts_with(&format!("reading {}", paths.config.display())),
-                "{err}"
-            );
-            assert_eq!(paths.snapshot(), before);
-        }
-    }
-
-    #[test]
-    fn a_file_in_which_no_document_sets_a_template_is_refused_in_every_mode_naming_template() {
-        let router = defaults::document(defaults::Service::Router);
-        let firewall = defaults::document(defaults::Service::Firewall);
-        for (lacking, present) in [("firewall", &router), ("router", &firewall)] {
-            for (check, diff) in MODES {
-                let paths = holding(&format!("{}---\n{present}", *SLIPMESH));
-                let before = paths.snapshot();
-                let err = format!("{:#}", paths.generate(None, check, diff).unwrap_err());
-                let command = format!("`slipmesh-taloscfg template {lacking}`");
-                assert!(err.contains(&command), "{lacking}: {err}");
-                assert_eq!(paths.snapshot(), before, "{lacking}");
-            }
-        }
     }
 
     #[test]

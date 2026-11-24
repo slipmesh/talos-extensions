@@ -261,23 +261,12 @@ mod tests {
     }
 
     #[test]
-    fn a_delete_directive_on_the_overlay_replaces_the_result() {
-        let overlay = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete");
-        let merged = merge(
-            yaml("apiVersion: v1alpha1\nkind: KubeletConfig\nextraArgs: {a: b}"),
-            &overlay,
-        );
-        assert_eq!(merged, overlay);
-    }
-
-    #[test]
-    fn a_document_over_a_delete_directive_replaces_it() {
-        let overlay = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\nextraArgs: {a: b}");
-        let merged = merge(
-            yaml("apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete"),
-            &overlay,
-        );
-        assert_eq!(merged, overlay);
+    fn a_delete_directive_on_either_side_leaves_the_overlay_as_the_result() {
+        let deletion = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete");
+        let edit = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\nextraArgs: {a: b}");
+        for (base, overlay) in [(&edit, &deletion), (&deletion, &edit)] {
+            assert_eq!(merge(base.clone(), overlay), *overlay);
+        }
     }
 
     #[test]

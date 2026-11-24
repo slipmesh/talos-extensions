@@ -578,40 +578,32 @@ content: "table inet x {{}}"
     }
 
     #[test]
-    fn a_router_template_another_overrides_everywhere_is_still_checked() {
-        let raw = with_router_files(&[
+    fn a_template_another_overrides_everywhere_is_still_checked() {
+        let router = with_router_files(&[
             ("", "{% if false %}{{ lopback }}{% endif %}\n"),
             ("  include: [a, b]\n", TEMPLATE),
         ]);
-        let err = format!("{:#}", render_raw(&raw, "a").unwrap_err());
-        let place = format!(
-            "`kind: template` document at line {}",
-            appended_line(&raw, 0)
-        );
-        assert!(
-            err.contains(&place) && err.contains("router template") && err.contains("lopback"),
-            "{place}: {err}"
-        );
-    }
-
-    #[test]
-    fn a_firewall_template_another_overrides_everywhere_is_still_checked() {
-        let raw = format!(
+        let firewall = format!(
             "{}---\nslipmesh: {{kind: template, platform: talos}}\ndaemon: firewall\nbase: \
              {BASE}\ncontent: \"table inet t {{ {{{{ bogus }}}} }}\"\n---\nslipmesh: {{kind: \
              template, platform: talos, include: [a, b]}}\ndaemon: firewall\nbase: {BASE}\n\
              content: \"table inet y {{}}\"\n",
             with_router_files(&[("", TEMPLATE)])
         );
-        let err = format!("{:#}", render_raw(&raw, "a").unwrap_err());
-        let place = format!(
-            "`kind: template` document at line {}",
-            appended_line(&raw, 1)
-        );
-        assert!(
-            err.contains(&place) && err.contains("firewall template"),
-            "{place}: {err}"
-        );
+        for (raw, index, named) in [
+            (&router, 0, &["router template", "lopback"][..]),
+            (&firewall, 1, &["firewall template"][..]),
+        ] {
+            let err = format!("{:#}", render_raw(raw, "a").unwrap_err());
+            let place = format!(
+                "`kind: template` document at line {}",
+                appended_line(raw, index)
+            );
+            assert!(
+                err.contains(&place) && named.iter().all(|part| err.contains(part)),
+                "{place}: {err}"
+            );
+        }
     }
 
     #[test]
