@@ -10,8 +10,8 @@
 //! Ported from `slipmesh/operators`' `router/src/bird.rs`, with
 //! the Kubernetes-only pieces dropped (CNI conflist rendering, the `DIRECT_CNI` protocol block,
 //! `ospf_ifaces`/`bgp_peers` derived from CRDs) and replaced by what `router.yaml` declares
-//! directly - see `talos-extensions/README.md`'s design notes and `config.rs`'s doc comments for
-//! the static-config shape this now renders from.
+//! directly - see `talos-extensions/README.md`'s design notes and `sliplib_config::router` for the
+//! static-config shape this now renders from.
 
 use anyhow::{Context, Result};
 use common::netlink::rt::RtClient;
@@ -28,8 +28,8 @@ pub const BIRD_CONTROL_SOCKET: &str = "/run/bird.ctl";
 /// Name of this daemon's rendered OSPFv3 protocol block - see `render()`.
 const OSPF_PROTOCOL: &str = "mesh6";
 
-async fn run_birdc_configure() -> Result<()> {
-    let reply = crate::birdc::command(Path::new(BIRD_CONTROL_SOCKET), "configure").await?;
+async fn run_birdc_configure(control_socket: &Path) -> Result<()> {
+    let reply = crate::birdc::command(control_socket, "configure").await?;
     anyhow::ensure!(!reply.is_error(), "birdc configure failed: {}", reply.text);
     Ok(())
 }
@@ -84,11 +84,11 @@ pub async fn protocols_healthy(exact_ospf_ifaces: &[String]) -> Result<bool> {
         .all(|iface| configured.contains(iface.as_str())))
 }
 
-pub async fn reconcile(path: &Path, desired: &str) -> Result<()> {
+pub async fn reconcile(path: &Path, control_socket: &Path, desired: &str) -> Result<()> {
     if sliplib_fs::write_if_changed(path, desired)
         .with_context(|| format!("failed to write {}", path.display()))?
     {
-        run_birdc_configure().await?;
+        run_birdc_configure(control_socket).await?;
     }
     Ok(())
 }
@@ -103,7 +103,7 @@ pub async fn reconcile(path: &Path, desired: &str) -> Result<()> {
 /// startup-only timer. Cheap and safe even as a false-positive nudge: BIRD re-applying the same
 /// config doesn't tear down any session already up.
 pub async fn force_reconfigure() -> Result<()> {
-    run_birdc_configure().await
+    run_birdc_configure(Path::new(BIRD_CONTROL_SOCKET)).await
 }
 
 /// Ensures the dedicated router loopback (`router-lo`, a dummy interface) exists and carries this
@@ -158,7 +158,11 @@ mod tests {
     async fn a_changed_config_is_written_before_bird_is_told() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bird.conf");
-        let _ = reconcile(&path, "router id 198.51.100.1;\n").await;
+        let no_bird = dir.path().join("bird.ctl");
+        let err = reconcile(&path, &no_bird, "router id 198.51.100.1;\n")
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("bird.ctl"), "{err:#}");
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             "router id 198.51.100.1;\n"

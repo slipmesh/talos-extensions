@@ -185,7 +185,12 @@ async fn wait_for_control_socket() -> Result<()> {
 async fn reconcile(ctx: &RouterState, bypass_routes: &[bird_conf::BypassRoute]) -> Result<()> {
     let _guard = ctx.render_lock.lock().await;
     let desired = ctx.inputs.render(&ctx.template, bypass_routes)?;
-    bird::reconcile(Path::new(BIRD_CONF_PATH), &desired).await
+    bird::reconcile(
+        Path::new(BIRD_CONF_PATH),
+        Path::new(bird::BIRD_CONTROL_SOCKET),
+        &desired,
+    )
+    .await
 }
 
 /// Bounded retry budget for a resolve failure with *nothing cached yet* - only relevant the very
