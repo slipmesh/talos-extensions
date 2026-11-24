@@ -165,13 +165,41 @@ mod tests {
     }
 
     #[test]
-    fn each_daemon_refuses_a_wildcard_metrics_listener() {
+    fn each_daemon_refuses_a_shared_config_sliplib_refuses_and_a_wildcard_listener() {
+        let refusal = |cfg: anyhow::Result<()>| cfg.unwrap_err();
+        let awg =
+            |text: &str| refusal(AwgDaemonConfig::read(file(text).path()).unwrap().validate());
+        let router = |text: &str| {
+            refusal(
+                RouterDaemonConfig::read(file(text).path())
+                    .unwrap()
+                    .validate(),
+            )
+        };
+        let unnamed = awg(
+            "interfaces:\n  - {name: \"\", listen_port: 51820, addresses: [], \
+                           private_key: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}\n",
+        );
+        assert!(
+            matches!(
+                unnamed.downcast_ref(),
+                Some(sliplib_config::awg::Invalid::EmptyInterfaceName)
+            ),
+            "{unnamed}"
+        );
+        let as_zero = router(&ROUTER.replace("bgp_as: 64512", "bgp_as: 0"));
+        assert!(
+            matches!(
+                as_zero.downcast_ref(),
+                Some(sliplib_config::router::Invalid::BgpAsZero)
+            ),
+            "{as_zero}"
+        );
+
         let wildcard = "metrics:\n  listen: 0.0.0.0:9324\n";
-        let awg = AwgDaemonConfig::read(file(&format!("interfaces: []\n{wildcard}")).path());
-        let router = RouterDaemonConfig::read(file(&format!("{ROUTER}{wildcard}")).path());
         for err in [
-            awg.unwrap().validate().unwrap_err(),
-            router.unwrap().validate().unwrap_err(),
+            awg(&format!("interfaces: []\n{wildcard}")),
+            router(&format!("{ROUTER}{wildcard}")),
         ] {
             assert!(
                 matches!(err.downcast_ref(), Some(MetricsError::Wildcard(_))),
