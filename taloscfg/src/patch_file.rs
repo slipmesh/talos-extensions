@@ -528,7 +528,12 @@ content: "table inet x {{}}"
             "/etc/talos-extensions/extra"
         );
         let err = format!("{:#}", render_raw(&raw, "b").unwrap_err());
-        assert!(err.contains("nftables") && err.contains("\"b\""), "{err}");
+        assert!(
+            err.contains("nftables")
+                && err.contains("\"b\"")
+                && err.contains("the `kind: patch` document at line"),
+            "{err}"
+        );
     }
 
     #[test]

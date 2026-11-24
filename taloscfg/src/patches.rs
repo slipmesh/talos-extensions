@@ -282,13 +282,18 @@ nodes:
             "  include: [node-a]\n",
             "apiVersion: v1alpha1\nkind: UnattendedInstallConfig\n",
         );
-        let parsed = parse(&[NETWORK, &install, &kubelet("", "    v: \"4\"\n")]);
+        // Of another `apiVersion`, a document of one kind and name is another document.
+        let later = patch("", "apiVersion: v1alpha2\nkind: KubeletConfig\n");
+        let parsed = parse(&[NETWORK, &install, &kubelet("", "    v: \"4\"\n"), &later]);
         let identities: Vec<_> = for_host(&parsed, "node-a")
             .unwrap()
             .into_iter()
             .map(|d| d.identity)
             .collect();
-        assert_eq!(identities, ["UnattendedInstallConfig", "KubeletConfig"]);
+        assert_eq!(
+            identities,
+            ["UnattendedInstallConfig", "KubeletConfig", "KubeletConfig"]
+        );
     }
 
     #[test]
