@@ -137,32 +137,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn declared_tables_finds_every_table_header() {
-        let ruleset = "table inet talos_filter {\n    chain forward { }\n}\ntable ip talos_nat {\n    chain postrouting { }\n}\n";
-        assert_eq!(
-            declared_tables(ruleset),
-            vec![
-                ("inet".to_string(), "talos_filter".to_string()),
-                ("ip".to_string(), "talos_nat".to_string()),
-            ]
-        );
-    }
-
-    #[test]
-    fn declared_tables_ignores_commented_lines() {
-        let ruleset = "# table ip6 not_real {\ntable ip6 talos_nat6 {\n";
-        assert_eq!(
-            declared_tables(ruleset),
-            vec![("ip6".to_string(), "talos_nat6".to_string())]
-        );
-    }
-
-    #[test]
-    fn declared_tables_handles_indentation() {
-        let ruleset = "    table inet talos_filter {\n";
-        assert_eq!(
-            declared_tables(ruleset),
-            vec![("inet".to_string(), "talos_filter".to_string())]
-        );
+    fn declared_tables_finds_every_table_header_indented_or_not_and_no_comment() {
+        let table = |family: &str, name: &str| (family.to_string(), name.to_string());
+        for (ruleset, tables) in [
+            (
+                "table inet talos_filter {\n    chain forward { }\n}\ntable ip talos_nat {\n    chain postrouting { }\n}\n",
+                vec![table("inet", "talos_filter"), table("ip", "talos_nat")],
+            ),
+            (
+                "# table ip6 not_real {\ntable ip6 talos_nat6 {\n",
+                vec![table("ip6", "talos_nat6")],
+            ),
+            (
+                "    table inet talos_filter {\n",
+                vec![table("inet", "talos_filter")],
+            ),
+        ] {
+            assert_eq!(declared_tables(ruleset), tables, "{ruleset}");
+        }
     }
 }

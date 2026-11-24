@@ -210,12 +210,8 @@ Interface mesh-b (198.51.100.194/31)
 ";
 
     #[test]
-    fn detects_no_listening_socket() {
+    fn a_protocol_without_a_listening_socket_is_told_from_a_healthy_list() {
         assert!(has_no_listening_socket(SHOW_PROTOCOLS_NO_LISTENING_SOCKET));
-    }
-
-    #[test]
-    fn no_listening_socket_absent_when_healthy() {
         assert!(!has_no_listening_socket(SHOW_PROTOCOLS_HEALTHY));
     }
 
