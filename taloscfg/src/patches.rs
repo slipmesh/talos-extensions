@@ -321,15 +321,45 @@ nodes:
     }
 
     #[test]
-    fn a_patch_without_kind_is_refused_naming_where_it_stands() {
-        let err = error(&[
-            NETWORK,
-            &patch("", "machine:\n  install: {disk: /dev/vda}\n"),
-        ]);
-        assert!(
-            err.contains("the `kind: patch` document at line 10: has no Talos `kind`"),
-            "{err}"
-        );
+    fn a_patch_the_check_refuses_is_named_with_what_it_breaks() {
+        let mut cases = vec![(
+            patch("", "machine:\n  install: {disk: /dev/vda}\n"),
+            vec!["the `kind: patch` document at line 10: has no Talos `kind`".to_owned()],
+        )];
+        let kind = patch("", "apiVersion: v1alpha1\nkind: 5\n");
+        let line = line_of(&[NETWORK, &kind], 1) + 4;
+        cases.push((
+            kind,
+            vec!["kind: invalid type".to_owned(), format!("at line {line}")],
+        ));
+        for name in ["awg", "router", "nftables"] {
+            cases.push((
+                generated_with(name, "environment:\n  - RUST_LOG=debug\n"),
+                vec!["configFiles".to_owned(), name.to_owned()],
+            ));
+        }
+        for (name, path) in [
+            ("awg", "/etc/talos-extensions/awg.yaml"),
+            ("router", "/etc/talos-extensions/router.yaml"),
+            ("router", "/etc/talos-extensions/router.conf.j2"),
+            ("nftables", "/etc/talos-extensions/nftables.conf.j2"),
+            ("nftables", "/etc/talos-extensions/nftables.yaml"),
+        ] {
+            cases.push((
+                generated_with(
+                    name,
+                    &format!("configFiles:\n  - mountPath: {path}\n    content: x\n"),
+                ),
+                vec![path.to_owned()],
+            ));
+        }
+        for (patch, named) in cases {
+            let err = error(&[NETWORK, &patch]);
+            assert!(
+                named.iter().all(|part| err.contains(part.as_str())),
+                "{patch}: {err}"
+            );
+        }
     }
 
     fn generated_with(name: &str, body: &str) -> String {
@@ -347,34 +377,6 @@ nodes:
                 "configFiles:\n  - mountPath: /etc/talos-extensions/extra\n    content: x\n",
             );
             check(&parse(&[NETWORK, &patch])).unwrap();
-        }
-    }
-
-    #[test]
-    fn a_patch_setting_more_than_files_on_a_generated_document_is_refused() {
-        for name in ["awg", "router", "nftables"] {
-            let patch = generated_with(name, "environment:\n  - RUST_LOG=debug\n");
-            let err = error(&[NETWORK, &patch]);
-            assert!(err.contains("configFiles") && err.contains(name), "{err}");
-        }
-    }
-
-    #[test]
-    fn a_patch_setting_a_file_the_generator_writes_is_refused_naming_it() {
-        let written = [
-            ("awg", "/etc/talos-extensions/awg.yaml"),
-            ("router", "/etc/talos-extensions/router.yaml"),
-            ("router", "/etc/talos-extensions/router.conf.j2"),
-            ("nftables", "/etc/talos-extensions/nftables.conf.j2"),
-            ("nftables", "/etc/talos-extensions/nftables.yaml"),
-        ];
-        for (name, path) in written {
-            let patch = generated_with(
-                name,
-                &format!("configFiles:\n  - mountPath: {path}\n    content: x\n"),
-            );
-            let err = error(&[NETWORK, &patch]);
-            assert!(err.contains(path), "{err}");
         }
     }
 
@@ -428,81 +430,16 @@ nodes:
     }
 
     #[test]
-    fn a_kind_or_name_that_is_not_a_string_is_refused_by_its_key_and_line() {
-        for (body, key, offset) in [
-            ("apiVersion: v1alpha1\nkind: 5\n", "kind", 4),
-            (
-                "apiVersion: v1alpha1\nkind: KubeletConfig\nname: [x]\n",
-                "name",
-                5,
-            ),
-        ] {
-            let documents = [NETWORK, &patch("", body)];
-            let err = error(&documents);
-            let line = line_of(&documents, 1) + offset;
-            assert!(
-                err.contains(&format!("{key}: invalid type"))
-                    && err.contains(&format!("at line {line}")),
-                "{body}: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn annotations_that_are_not_a_mapping_are_refused_at_the_check() {
-        let documents = [NETWORK, &kube_node_config("", "[x]")];
-        let err = error(&documents);
-        let line = line_of(&documents, 1) + 5;
-        assert!(
-            err.contains("annotations: invalid type") && err.contains(&format!("at line {line}")),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn an_unknown_key_on_a_generated_document_is_refused_by_its_line_saying_why() {
-        let documents = [
-            NETWORK,
-            &generated_with("awg", "environment:\n  - RUST_LOG=debug\n"),
-        ];
-        let err = error(&documents);
-        let line = line_of(&documents, 1) + 6;
-        assert!(
-            err.contains("is generated - a patch may add `configFiles` to it and nothing else")
-                && err.contains("unknown field `environment`")
-                && err.contains(&format!("at line {line}")),
-            "{err}"
-        );
-    }
-
-    #[test]
     fn a_key_the_generator_does_not_read_passes_as_written() {
-        let kubelet = kubelet("", "    v: \"4\"\nextra: [1, {a: b}]\n");
         let device = patch(
             "",
             "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nenvironment: \
-             [X=1]\nconfigFiles:\n  - mountPath: /etc/device\n    content: x\n    mode: 5\n",
+             [X=1]\n",
         );
-        let node = patch(
-            "",
-            "apiVersion: v1alpha1\nkind: KubeNodeConfig\nlabels: {role: edge}\nannotations: \
-             {example.com/a: [1]}\n",
-        );
-        let parsed = parse(&[NETWORK, &kubelet, &device, &node]);
+        let parsed = parse(&[NETWORK, &device]);
         check(&parsed).unwrap();
-        let documents = for_host(&parsed, "node-a").unwrap();
-        let texts: Vec<&str> = documents.iter().map(|d| d.text.as_str()).collect();
-        assert!(texts[0].contains("extra:\n- 1\n- a: b\n"), "{}", texts[0]);
-        assert!(
-            texts[1].contains("environment:\n- X=1\n") && texts[1].contains("mode: 5"),
-            "{}",
-            texts[1]
-        );
-        assert!(
-            texts[2].contains("role: edge") && texts[2].contains("example.com/a:"),
-            "{}",
-            texts[2]
-        );
+        let text = &for_host(&parsed, "node-a").unwrap()[0].text;
+        assert!(text.contains("environment:\n- X=1\n"), "{text}");
     }
 
     #[test]

@@ -84,8 +84,8 @@ fn base_warnings(files: &File, targets: &[&str]) -> Result<Vec<String>> {
         if !targets.iter().any(|target| document.aim().reaches(target)) {
             continue;
         }
-        let template = Template::of(document)?;
-        let service = defaults::Service::of(template.daemon);
+        let template: Template = document.read()?;
+        let service = template.daemon;
         if template.base.digest() == service.digest() {
             continue;
         }
@@ -185,9 +185,7 @@ fn generate(
     std::fs::create_dir_all(patches_dir)
         .with_context(|| format!("creating {}", patches_dir.display()))?;
     for host in &hosts {
-        if sliplib_fs::write_if_changed(&host.path, &host.after)
-            .with_context(|| format!("writing the patch file of {}", host.host))?
-        {
+        if sliplib_fs::write_if_changed(&host.path, &host.after)? {
             println!("wrote {}", host.path.display());
         } else {
             println!("{}: no changes", host.host);
@@ -648,17 +646,6 @@ installer:
             }
             assert_eq!(paths.snapshot(), before);
         }
-    }
-
-    #[test]
-    fn a_missing_interface_prefix_is_refused_before_a_talos_body_that_does_not_read() {
-        let network = SLIPMESH.replace("  interface_prefix: mesh-\n", "");
-        let paths = setup_from(
-            &network,
-            "---\nslipmesh: {kind: platform, platform: talos}\nlisten: true\n",
-        );
-        let err = format!("{:#}", paths.generate(None, false, false).unwrap_err());
-        assert!(err.contains("mesh.interface_prefix"), "{err}");
     }
 
     #[test]

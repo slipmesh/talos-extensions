@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
 use std::collections::HashSet;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,8 +16,6 @@ use tokio::sync::watch;
 /// var or CLI flag: everything comes from the `ExtensionServiceConfig`, nothing else.
 const CONFIG_PATH: &str = "/etc/talos-extensions/awg.yaml";
 
-/// Seconds after its last handshake that a tracked peer's routes go.
-const HANDSHAKE_STALE_SECS: u64 = 180;
 /// Inside the 10 s Talos waits after SIGTERM before it sends SIGKILL.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -110,14 +107,7 @@ fn spawn_metrics(
         tracing::info!("no metrics section in the config - not listening");
         return;
     };
-    let listen: SocketAddr = match metrics.listen.parse() {
-        Ok(listen) => listen,
-        Err(e) => {
-            // `validate` already parsed it: the two disagree.
-            tracing::error!(listen = metrics.listen, error = %e, "metrics: unusable listen address");
-            return;
-        }
-    };
+    let listen = metrics.listen;
     let cfg = Arc::clone(cfg);
     tokio::spawn(async move {
         if let Err(e) = metrics::run(listen, cfg, verdict).await {
@@ -195,7 +185,6 @@ fn tracked(iface: &config::InterfaceEntry, index: u32) -> handshake::TrackedInte
     handshake::TrackedInterface {
         name: iface.name.clone(),
         index,
-        stale_secs: HANDSHAKE_STALE_SECS,
         peers,
     }
 }
@@ -223,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn an_interface_tracks_the_peers_with_allowed_ips_for_180_seconds() {
+    fn an_interface_tracks_the_peers_with_allowed_ips() {
         let iface = InterfaceEntry {
             name: "rw-north".to_owned(),
             listen_port: 51820,
@@ -236,11 +225,8 @@ mod tests {
                 peer("mesh", None),
             ],
         };
-        let tracked = tracked(&iface, 7);
-        assert_eq!((tracked.name.as_str(), tracked.index), ("rw-north", 7));
-        assert_eq!(tracked.stale_secs, 180);
         assert_eq!(
-            tracked.peers,
+            tracked(&iface, 7).peers,
             HashMap::from([(
                 "tracked".to_owned(),
                 vec!["203.0.113.2/32".parse().unwrap()]
@@ -251,19 +237,13 @@ mod tests {
     #[tokio::test]
     async fn the_metrics_endpoint_is_served_at_its_listen_address() {
         let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let listen = free.local_addr().unwrap().to_string();
+        let listen = free.local_addr().unwrap();
         drop(free);
         let (_tx, rx) = watch::channel(ReconcileSnapshot::default());
         let cfg = Arc::new(config::AwgConfig { interfaces: vec![] });
-        spawn_metrics(
-            Some(&MetricsConfig {
-                listen: listen.clone(),
-            }),
-            &cfg,
-            rx,
-        );
+        spawn_metrics(Some(&MetricsConfig { listen }), &cfg, rx);
         for _ in 0..200 {
-            if tokio::net::TcpStream::connect(&listen).await.is_ok() {
+            if tokio::net::TcpStream::connect(listen).await.is_ok() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

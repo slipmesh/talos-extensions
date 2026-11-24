@@ -6,7 +6,7 @@ use anyhow::Result;
 use common::template::Template;
 use serde::Serialize;
 use sliplib_config::Prefix4;
-use sliplib_config::router::{InterfacePattern, ROUTER_LOOPBACK};
+use sliplib_config::router::{BgpPeerEntry, InterfacePattern, ROUTER_LOOPBACK, RouterConfig};
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 /// This node's own OSPF/BGP-standard IPv4 loopback plus its IPv6 loopback (the OSPFv3/RFC 8950
@@ -21,14 +21,6 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 pub struct RouterIdentity {
     pub loopback: Ipv4Addr,
     pub ipv6_loopback: Ipv6Addr,
-}
-
-/// One iBGP peer, straight from `config::BgpPeerEntry` - `name` is free-form (unlike the k8s
-/// original's `short_id`, which was hex-only by construction from a `node_id`), so it goes through
-/// `sanitize_protocol_id` before becoming part of a BIRD protocol name.
-pub struct BgpPeer {
-    pub name: String,
-    pub address: Ipv6Addr,
 }
 
 /// A BIRD `#` comment runs to the end of the line - an embedded newline breaks out of the comment
@@ -123,7 +115,7 @@ pub struct RenderInputs<'a> {
     /// route's next-hop interface offers Linux no source address to pick, and without the hint a
     /// reply leaves with whatever address route selection chose and is dropped by the peer as a
     /// bogon.
-    pub bgp_peers: &'a [BgpPeer],
+    pub bgp_peers: &'a [BgpPeerEntry],
     /// Exported to iBGP peers only, never installed in this node's own kernel table: unlike the
     /// service subnet, `bypass.include` resolves to real Internet prefixes that this node also
     /// reaches on its own behalf (image pulls, DNS). Installing the blackhole/relay routes
@@ -205,63 +197,36 @@ pub fn render(
     template.render(BirdConfigContext::new(identity, as_number, inputs))
 }
 
-/// Everything `render` takes that `router.yaml` fixes for the life of the process - all of it but
-/// the bypass routes, which only the node can resolve.
-pub struct StaticInputs {
-    pub identity: RouterIdentity,
-    pub as_number: u32,
-    pub ospf_interfaces: Vec<InterfacePattern>,
-    pub direct_interfaces: Vec<InterfacePattern>,
-    pub bgp_peers: Vec<BgpPeer>,
-    pub announce: Vec<AnnounceRoute>,
-    pub learn: Vec<Prefix4>,
-    pub bfd: Option<sliplib_config::router::BfdSettings>,
-}
-
-impl StaticInputs {
-    pub fn from_config(cfg: &sliplib_config::router::RouterConfig) -> Self {
-        let loopbacks = cfg.node.loopback_addresses;
-        Self {
-            identity: RouterIdentity {
-                loopback: loopbacks.ipv4.0.addr(),
-                ipv6_loopback: loopbacks.ipv6.0.addr(),
-            },
-            as_number: cfg.bgp_as,
-            ospf_interfaces: cfg.ospf_interfaces.clone(),
-            direct_interfaces: cfg.direct_interfaces.clone(),
-            bgp_peers: cfg
-                .bgp_peers
-                .iter()
-                .map(|p| BgpPeer {
-                    name: p.name.clone(),
-                    address: p.address,
-                })
-                .collect(),
-            announce: cfg
-                .announce
-                .iter()
-                .map(|a| AnnounceRoute {
-                    net: a.net.0.to_string(),
-                    label: a.label.clone().unwrap_or_default(),
-                })
-                .collect(),
-            learn: cfg.learn.clone(),
-            bfd: cfg.bfd.clone(),
-        }
-    }
-
-    pub fn render(&self, template: &Template, bypass: &[BypassRoute]) -> Result<String> {
-        let inputs = RenderInputs {
-            ospf_interfaces: &self.ospf_interfaces,
-            bgp_peers: &self.bgp_peers,
-            bypass,
-            announce: &self.announce,
-            learn: &self.learn,
-            direct_interfaces: &self.direct_interfaces,
-            bfd: self.bfd.as_ref(),
-        };
-        render(template, self.identity, self.as_number, &inputs)
-    }
+/// `cfg`, what `router.yaml` fixes for the life of the process, with the bypass routes only the node
+/// can resolve.
+pub fn render_config(
+    template: &Template,
+    cfg: &RouterConfig,
+    bypass: &[BypassRoute],
+) -> Result<String> {
+    let loopbacks = cfg.node.loopback_addresses;
+    let identity = RouterIdentity {
+        loopback: loopbacks.ipv4.0.addr(),
+        ipv6_loopback: loopbacks.ipv6.0.addr(),
+    };
+    let announce: Vec<AnnounceRoute> = cfg
+        .announce
+        .iter()
+        .map(|a| AnnounceRoute {
+            net: a.net.0.to_string(),
+            label: a.label.clone().unwrap_or_default(),
+        })
+        .collect();
+    let inputs = RenderInputs {
+        ospf_interfaces: &cfg.ospf_interfaces,
+        bgp_peers: &cfg.bgp_peers,
+        bypass,
+        announce: &announce,
+        learn: &cfg.learn,
+        direct_interfaces: &cfg.direct_interfaces,
+        bfd: cfg.bfd.as_ref(),
+    };
+    render(template, identity, cfg.bgp_as, &inputs)
 }
 
 #[derive(Serialize)]
@@ -362,14 +327,17 @@ mod tests {
     }
 
     #[test]
-    fn static_inputs_render_what_router_yaml_declares() {
-        let cfg: sliplib_config::router::RouterConfig = sliplib_yaml::from_str(
+    fn a_config_renders_what_router_yaml_declares() {
+        let cfg: RouterConfig = sliplib_yaml::from_str(
             r#"
 node:
   loopback_addresses: ["198.51.100.1/32", "3fff::1/128"]
 bgp_as: 64512
 bgp_peers:
   - {name: node-b, address: "3fff::2"}
+bfd: {min_rx_ms: 300, min_tx_ms: 300, multiplier: 5}
+ospf_interfaces: [mesh-*]
+direct_interfaces: [lan0]
 announce:
   - {net: 203.0.113.192/26}
 learn: [203.0.113.128/26]
@@ -380,9 +348,7 @@ learn: [203.0.113.128/26]
             net: "192.0.2.0/24".to_string(),
             label: "example".to_string(),
         }];
-        let out = StaticInputs::from_config(&cfg)
-            .render(&compile(REFERENCE_TEMPLATE).unwrap(), &bypass)
-            .unwrap();
+        let out = render_config(&compile(REFERENCE_TEMPLATE).unwrap(), &cfg, &bypass).unwrap();
         assert!(out.contains("router id 198.51.100.1;"));
         assert!(out.contains("local 3fff::1 as 64512;"));
         assert!(out.contains("protocol bgp ibgp6_node_b {"));
@@ -390,6 +356,9 @@ learn: [203.0.113.128/26]
         assert!(out.contains("route 203.0.113.192/26 via \"router-lo\";"));
         assert!(out.contains("if net ~ [ 203.0.113.128/26+ ] then accept;"));
         assert!(out.contains("route 192.0.2.0/24 blackhole; # example"));
+        assert!(out.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
+        assert!(out.contains("min rx interval 300 ms;"));
+        assert!(out.contains("protocol direct direct_lan0 {"));
     }
 
     /// `VARIABLES` is what a template is checked against, the context is what it gets - a field
@@ -439,7 +408,7 @@ learn: [203.0.113.128/26]
     /// test case only names the slices it actually varies.
     fn inputs<'a>(
         ospf_interfaces: &'a [InterfacePattern],
-        bgp_peers: &'a [BgpPeer],
+        bgp_peers: &'a [BgpPeerEntry],
         bypass: &'a [BypassRoute],
         announce: &'a [AnnounceRoute],
         learn: &'a [Prefix4],
@@ -450,7 +419,7 @@ learn: [203.0.113.128/26]
     #[allow(clippy::too_many_arguments)]
     fn inputs_with_direct<'a>(
         ospf_interfaces: &'a [InterfacePattern],
-        bgp_peers: &'a [BgpPeer],
+        bgp_peers: &'a [BgpPeerEntry],
         bypass: &'a [BypassRoute],
         announce: &'a [AnnounceRoute],
         learn: &'a [Prefix4],
@@ -608,7 +577,7 @@ learn: [203.0.113.128/26]
 
     #[test]
     fn render_includes_bgp_peer_with_sanitized_protocol_id() {
-        let peers = vec![BgpPeer {
+        let peers = vec![BgpPeerEntry {
             name: "east-1".to_string(),
             address: "3fff::2".parse().unwrap(),
         }];
@@ -658,7 +627,7 @@ learn: [203.0.113.128/26]
 
     #[test]
     fn empty_learn_still_learns_and_announces_the_routes_awg_installs() {
-        let peers = vec![BgpPeer {
+        let peers = vec![BgpPeerEntry {
             name: "peer1".to_string(),
             address: "3fff::2".parse().unwrap(),
         }];
@@ -676,7 +645,7 @@ learn: [203.0.113.128/26]
 
     #[test]
     fn nonempty_learn_scopes_kernel_import_with_plus_modifier_and_exports_rts_inherit() {
-        let peers = vec![BgpPeer {
+        let peers = vec![BgpPeerEntry {
             name: "peer1".to_string(),
             address: "3fff::2".parse().unwrap(),
         }];

@@ -400,8 +400,7 @@ A file of format version 1 is refused, naming the document that converts it.
 
 The format is the specification's. Of it, the generator serves the nodes of `talos`, and on them:
 
-- the network, as every tool reads it, and the metrics ports of the `talos` `platform` document,
-  whose body it reads itself;
+- the network, as every tool reads it;
 - the `template` documents: of those that reach a node, the last by rank for each daemon,
   `router` and `firewall`;
 - the `patch` documents of `talos`, merged for each node.
@@ -530,8 +529,7 @@ So `slipmesh.yaml` holds private keys in the clear, as the patch files it render
 where those are kept.
 
 Each node's configs are rendered and validated by `sliplib-mesh`, on the config types the daemons
-read, so the generator and the daemons check one definition. The `metrics` section is the
-generator's own: it writes each listener from the `talos` `platform` document.
+read, so the generator and the daemons check one definition.
 
 ```sh
 slipmesh-taloscfg generate                      # every node of talos, into ./patches

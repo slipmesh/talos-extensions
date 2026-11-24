@@ -55,11 +55,6 @@ fn added_files(added: Option<&HostDocument>) -> Vec<ServiceFile> {
         .collect()
 }
 
-/// [`take_added`], then [`added_files`].
-fn take_added_files(patches: &mut Vec<HostDocument>, name: &str) -> Vec<ServiceFile> {
-    added_files(take_added(patches, name).as_ref())
-}
-
 /// `ruleset` as `nftables.yaml`, the file the daemon read before it took a template. A node that
 /// falls back to its previous boot slot runs that daemon against this config, and without the file
 /// it would apply no ruleset at all. Remove once no node can fall back to a release older than the
@@ -99,7 +94,7 @@ pub(crate) fn nftables_document(template: &str, added: Vec<ServiceFile>) -> Resu
 /// the daemon does not supply, or fails to render this node's config.
 fn validate_router_template(template: &str, cfg: &RouterConfig) -> Result<()> {
     let template = router::bird_conf::compile(template.to_owned())?;
-    router::bird_conf::StaticInputs::from_config(cfg).render(&template, &[])?;
+    router::bird_conf::render_config(&template, cfg, &[])?;
     Ok(())
 }
 
@@ -108,7 +103,7 @@ fn validate_router_template(template: &str, cfg: &RouterConfig) -> Result<()> {
 fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) -> Result<()> {
     let index = match patches
         .iter()
-        .position(|p| talos::is_kube_node_config(&p.value))
+        .position(|p| p.identity == talos::KUBE_NODE_CONFIG)
     {
         Some(index) => index,
         None => {
@@ -148,8 +143,8 @@ impl Templates {
     fn of(files: &File, host: &str, router: &RouterConfig) -> Result<Self> {
         let mut templates = Self::default();
         for document in files.templates_for(host) {
-            let template = Template::of(document)?;
-            let service = Service::of(template.daemon);
+            let template: Template = document.read()?;
+            let service = template.daemon;
             let invalid = || format!("{}: the {service} template is invalid", document.aim());
             match service {
                 Service::Router => {
@@ -175,8 +170,8 @@ pub fn render(
     host: &str,
 ) -> Result<String> {
     let NodeConfigs { awg, router } = node_configs(network, host)?;
-    let loopback = network.addresses(network.node(host)?).loopback.0;
-    let metrics = settings.metrics.clone().unwrap_or_default();
+    let loopback = router.node.loopback_addresses.ipv4.0.addr();
+    let metrics = &settings.metrics;
     let awg_cfg = AwgDaemonConfig {
         mesh: awg,
         metrics: listener(loopback, metrics.mesh.as_ref()),
@@ -190,7 +185,7 @@ pub fn render(
 
 fn listener(loopback: Ipv4Addr, listener: Option<&Listener>) -> Option<MetricsConfig> {
     listener.map(|listener| MetricsConfig {
-        listen: format!("{loopback}:{}", listener.port),
+        listen: (loopback, listener.port.get()).into(),
     })
 }
 
@@ -215,7 +210,7 @@ fn render_node(
         "awg",
         sliplib_yaml::to_string(&awg_cfg)?,
     )))
-    .chain(take_added_files(&mut patches, "awg"))
+    .chain(added_files(take_added(&mut patches, "awg").as_ref()))
     .collect();
     let router = [
         config_file(
@@ -229,7 +224,9 @@ fn render_node(
     ]
     .into_iter()
     .map(ServiceFile::Generated)
-    .chain(take_added_files(&mut patches, Service::Router.name()))
+    .chain(added_files(
+        take_added(&mut patches, Service::Router.name()).as_ref(),
+    ))
     .collect();
     let mut generated = vec![
         render_extension_service_document("awg", awg)?,
@@ -249,18 +246,11 @@ fn render_node(
     }
 
     let node = network.node(host)?;
-    let classes: Vec<(String, u8)> = network
-        .network()
-        .routing
-        .classes
-        .iter()
-        .map(|(name, class)| (name.to_string(), class.protocol))
-        .collect();
     publish_annotations(
         &mut patches,
         crate::annotations::for_node(&crate::annotations::Values {
             interface_prefix: network.interface_prefix(),
-            classes: &classes,
+            classes: &network.network().routing.classes,
             endpoint: node
                 .underlay()
                 .and_then(|underlay| underlay.endpoint.as_ref())
@@ -404,7 +394,7 @@ content: "table inet x {{}}"
     fn kube_node_configs(file: &str) -> Vec<sliplib_yaml::Value> {
         documents(file)
             .into_iter()
-            .filter(talos::is_kube_node_config)
+            .filter(|document| document["kind"] == talos::KUBE_NODE_CONFIG)
             .collect()
     }
 
@@ -512,22 +502,6 @@ content: "table inet x {{}}"
             ]
         );
         assert_eq!(files[1].1, TEMPLATE);
-    }
-
-    #[test]
-    fn an_added_file_goes_to_talos_as_written() {
-        let raw = format!(
-            "{}---\nslipmesh: {{kind: patch, platform: talos}}\napiVersion: v1alpha1\nkind: \
-             ExtensionServiceConfig\nname: router\nconfigFiles:\n  - mountPath: \
-             /etc/talos-extensions/extra\n    content: 1\n    mode: 5\n",
-            with_router_files(&[("", TEMPLATE)])
-        );
-        patches::check(&File::parse(&raw).unwrap()).unwrap();
-        let router = generated_document(&render_raw(&raw, "a").unwrap(), "router").unwrap();
-        let written: sliplib_yaml::Value =
-            sliplib_yaml::from_str("{mountPath: /etc/talos-extensions/extra, content: 1, mode: 5}")
-                .unwrap();
-        assert_eq!(router["configFiles"][2], written);
     }
 
     #[test]

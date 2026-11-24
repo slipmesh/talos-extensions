@@ -13,7 +13,7 @@
 //! directly - see `talos-extensions/README.md`'s design notes and `sliplib_config::router` for the
 //! static-config shape this now renders from.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use common::netlink::rt::RtClient;
 use sliplib_config::router::ROUTER_LOOPBACK;
 use sliplib_net::Ipv6Net;
@@ -85,9 +85,7 @@ pub async fn protocols_healthy(exact_ospf_ifaces: &[String]) -> Result<bool> {
 }
 
 pub async fn reconcile(path: &Path, control_socket: &Path, desired: &str) -> Result<()> {
-    if sliplib_fs::write_if_changed(path, desired)
-        .with_context(|| format!("failed to write {}", path.display()))?
-    {
+    if sliplib_fs::write_if_changed(path, desired)? {
         run_birdc_configure(control_socket).await?;
     }
     Ok(())

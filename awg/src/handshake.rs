@@ -34,7 +34,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub struct TrackedInterface {
     pub name: String,
     pub index: u32,
-    pub stale_secs: u64,
     /// public_key (base64) -> allowed_ips, only for peers with an explicit `allowed_ips` in the
     /// config.
     pub peers: HashMap<String, Vec<IpNet>>,
@@ -153,8 +152,11 @@ async fn reconcile_pass(
     }
 }
 
-fn is_fresh(stats: &PeerStats, now: u64, stale_secs: u64) -> bool {
-    stats.last_handshake > 0 && now.saturating_sub(stats.last_handshake) < stale_secs
+/// Seconds after its last handshake that a tracked peer's routes go.
+const STALE_SECS: u64 = 180;
+
+fn is_fresh(stats: &PeerStats, now: u64) -> bool {
+    stats.last_handshake > 0 && now.saturating_sub(stats.last_handshake) < STALE_SECS
 }
 
 /// What a pass changes: the routes of fresh peers it does not hold, and every other it holds.
@@ -175,7 +177,7 @@ fn route_plan(
         .iter()
         .filter(|(public_key, _)| {
             dump.get(*public_key)
-                .is_some_and(|stats| is_fresh(stats, now, iface.stale_secs))
+                .is_some_and(|stats| is_fresh(stats, now))
         })
         .flat_map(|(_, allowed_ips)| allowed_ips)
         .collect();
@@ -312,7 +314,6 @@ mod tests {
         TrackedInterface {
             name: format!("iface{index}"),
             index,
-            stale_secs: 180,
             peers: peers
                 .iter()
                 .map(|(k, cidrs)| {
@@ -393,10 +394,10 @@ mod tests {
     #[test]
     fn a_peer_is_fresh_for_stale_secs_after_its_handshake_and_never_without_one() {
         let now = 1_700_000_000;
-        assert!(!is_fresh(&PeerStats::default(), now, 180));
-        assert!(!is_fresh(&PeerStats::default(), 100, 180));
-        assert!(is_fresh(&handshake_secs_ago(now, 179), now, 180));
-        assert!(!is_fresh(&handshake_secs_ago(now, 180), now, 180));
+        assert!(!is_fresh(&PeerStats::default(), now));
+        assert!(!is_fresh(&PeerStats::default(), 100));
+        assert!(is_fresh(&handshake_secs_ago(now, 179), now));
+        assert!(!is_fresh(&handshake_secs_ago(now, 180), now));
     }
 
     #[test]

@@ -1,26 +1,20 @@
 //! The reference template of each daemon that takes one. A template reaches a node from a
 //! `template` document of the files; the reference is what such a document starts from.
 
-use crate::documents::{Daemon, Template};
+use crate::documents::Template;
 use sliplib_config::v2::{Error, File};
 
 /// A daemon with a reference template, as the `template` command and a `template` document name
 /// it. `firewall` is the daemon of the `nftables` service: this is the one place the two names
 /// meet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Service {
     Router,
     Firewall,
 }
 
 impl Service {
-    pub fn of(daemon: Daemon) -> Self {
-        match daemon {
-            Daemon::Router => Self::Router,
-            Daemon::Firewall => Self::Firewall,
-        }
-    }
-
     /// The `ExtensionServiceConfig` the template is a file of.
     pub const fn name(self) -> &'static str {
         match self {
@@ -91,7 +85,7 @@ pub fn missing(files: &File) -> Result<Vec<Service>, Error> {
     let written = files
         .templates()
         .iter()
-        .map(|template| Ok(Service::of(Template::of(template)?.daemon)))
+        .map(|template| Ok(template.read::<Template>()?.daemon))
         .collect::<Result<Vec<Service>, Error>>()?;
     Ok([Service::Router, Service::Firewall]
         .into_iter()
@@ -175,8 +169,8 @@ nodes:
             let files = File::parse(&text).unwrap();
             for node in ["node-a", "node-b"] {
                 let [reaching] = files.templates_for(node).try_into().unwrap();
-                let template = Template::of(reaching).unwrap();
-                assert_eq!(Service::of(template.daemon), service, "{node}");
+                let template: Template = reaching.read().unwrap();
+                assert_eq!(template.daemon, service, "{node}");
                 assert_eq!(template.content, service.reference(), "{node}: {service}");
                 assert_eq!(template.base.digest(), service.digest(), "{service}");
             }

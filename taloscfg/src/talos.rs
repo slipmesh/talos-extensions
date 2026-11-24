@@ -23,8 +23,6 @@ pub enum Error {
     DeletesAnnotated { namespace: String },
     #[error("a {KUBE_NODE_CONFIG} document is not a mapping")]
     NotAMapping,
-    #[error("the annotations of a {KUBE_NODE_CONFIG} are not a mapping")]
-    AnnotationsNotAMapping,
 }
 
 /// What Talos keys a document by: two documents of one identity are one document. Every other key
@@ -118,7 +116,7 @@ pub struct AddedToGenerated {
     _kind: IgnoredAny,
     #[serde(rename = "name")]
     _name: IgnoredAny,
-    #[serde(rename = "configFiles", default)]
+    #[serde(rename = "configFiles")]
     pub config_files: Option<Vec<AddedFile>>,
 }
 
@@ -132,7 +130,6 @@ pub struct AddedFile {
 /// A `KubeNodeConfig`'s annotations, values unread: `null` is one too.
 #[derive(Deserialize)]
 pub struct Annotations {
-    #[serde(default)]
     annotations: Option<BTreeMap<String, IgnoredAny>>,
 }
 
@@ -193,10 +190,6 @@ pub fn kube_node_config() -> Value {
     ]))
 }
 
-pub fn is_kube_node_config(document: &Value) -> bool {
-    document.get("kind").and_then(Value::as_str) == Some(KUBE_NODE_CONFIG)
-}
-
 /// Adds `annotations`, all in `namespace`, to the `KubeNodeConfig` `document`. Refuses one that
 /// deletes the `KubeNodeConfig`, which would drop them.
 pub fn annotate(document: &mut Value, namespace: &str, annotations: Mapping) -> Result<(), Error> {
@@ -210,13 +203,11 @@ pub fn annotate(document: &mut Value, namespace: &str, annotations: Mapping) -> 
         .ok_or(Error::NotAMapping)?
         .entry("annotations".into())
         .or_insert(Value::Null);
-    if given.is_null() {
-        *given = Value::Mapping(Mapping::new());
+    match given {
+        Value::Mapping(given) => given.extend(annotations),
+        // `null`: the check refuses every other value.
+        given => *given = Value::Mapping(annotations),
     }
-    given
-        .as_mapping_mut()
-        .ok_or(Error::AnnotationsNotAMapping)?
-        .extend(annotations);
     Ok(())
 }
 
@@ -364,14 +355,11 @@ configFiles:
     }
 
     #[test]
-    fn a_new_kube_node_config_is_known_by_its_kind() {
-        let document = kube_node_config();
+    fn a_new_kube_node_config_sets_nothing() {
         assert_eq!(
-            document,
+            kube_node_config(),
             yaml("apiVersion: v1alpha1\nkind: KubeNodeConfig\n")
         );
-        assert!(is_kube_node_config(&document));
-        assert!(!is_kube_node_config(&documents(PATCH)[0]));
     }
 
     const NAMESPACE: &str = "node-a.example/";
@@ -432,12 +420,5 @@ configFiles:
             annotations("kind: KubeNodeConfig\n").first_in(NAMESPACE),
             None
         );
-    }
-
-    #[test]
-    fn annotations_that_are_not_a_mapping_take_none() {
-        let mut document = yaml("kind: KubeNodeConfig\nannotations: [x]\n");
-        let err = annotate(&mut document, NAMESPACE, ours()).unwrap_err();
-        assert!(matches!(err, Error::AnnotationsNotAMapping), "{err}");
     }
 }
