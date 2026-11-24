@@ -16,7 +16,7 @@ use sliplib_config::router::RouterConfig;
 use sliplib_config::v2::{AimedDocument, File};
 use sliplib_mesh::Mesh;
 use sliplib_mesh::render::{NodeConfigs, node_configs};
-use sliplib_yaml::Mapping;
+use sliplib_yaml::{Mapping, Value};
 use std::net::Ipv4Addr;
 
 /// What opens every patch file this tool writes.
@@ -87,26 +87,19 @@ fn validate_router_template(template: &str, cfg: &RouterConfig) -> Result<()> {
     Ok(())
 }
 
-/// Puts `annotations` into the `KubeNodeConfig` among `patches`, or into a new one when they have
-/// none: Talos takes one.
-fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) {
-    let index = match patches
+/// The documents of `patches`, `annotations` put into their `KubeNodeConfig`, or into a new one
+/// when they have none: Talos takes one.
+fn publish_annotations(patches: Vec<HostDocument>, annotations: Mapping) -> Vec<Value> {
+    let given = patches
         .iter()
-        .position(|p| p.identity == talos::KUBE_NODE_CONFIG)
-    {
-        Some(index) => index,
-        None => {
-            let value = talos::kube_node_config();
-            patches.push(HostDocument {
-                identity: talos::KUBE_NODE_CONFIG.to_owned(),
-                origin: "the KubeNodeConfig the generator adds".to_owned(),
-                value,
-            });
-            patches.len() - 1
-        }
-    };
-    let document = &mut patches[index];
-    document.value = talos::annotate(std::mem::take(&mut document.value), annotations);
+        .position(|p| p.identity == talos::KUBE_NODE_CONFIG);
+    let mut documents: Vec<Value> = patches.into_iter().map(|patch| patch.value).collect();
+    let index = given.unwrap_or_else(|| {
+        documents.push(talos::kube_node_config());
+        documents.len() - 1
+    });
+    documents[index] = talos::annotate(std::mem::take(&mut documents[index]), annotations);
+    documents
 }
 
 /// The templates a node gets: of those that reach it, the last by rank for each daemon.
@@ -243,8 +236,8 @@ fn render_node(
     }
 
     let node = network.node(host)?;
-    publish_annotations(
-        &mut patches,
+    let patches = publish_annotations(
+        patches,
         crate::annotations::for_node(&crate::annotations::Values {
             interface_prefix: network.interface_prefix(),
             classes: &network.network().routing.classes,
@@ -257,7 +250,7 @@ fn render_node(
     );
     let patches = patches
         .iter()
-        .map(|patch| sliplib_yaml::to_string(&patch.value).context("serializing a patch document"))
+        .map(|patch| sliplib_yaml::to_string(patch).context("serializing a patch document"))
         .collect::<Result<Vec<String>>>()?;
 
     Ok(format!(
