@@ -562,6 +562,11 @@ release that reads it before and this one after. `template` prints a `template` 
 `template nftables` is `template firewall`. A node of another platform gets no patch file any
 more: delete the one version 1 wrote for it.
 
+After v1.15.0-beta.0+sm.5, `slipmesh-taloscfg` reads no `$patch`: it merges `$patch: delete` with
+the other documents of its identity key by key and writes it as it stands, and Talos applies it. A
+narrower patch over a broader `$patch: delete` no longer undoes the deletion, and a `KubeNodeConfig`
+with it is no longer refused: the node drops it, the annotations with it.
+
 After v1.15.0-beta.0+sm.5, `awg` reads no `handshake_stale_secs`: a config that has it is read and
 the key ignored, and a tracked peer's routes go 180 seconds after its last handshake.
 

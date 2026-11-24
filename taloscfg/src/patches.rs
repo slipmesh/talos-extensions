@@ -142,8 +142,9 @@ pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
                 .map(|patch| patch.aim().to_string())
                 .collect::<Vec<_>>()
                 .join(" and ");
+            // Sequences replace rather than append: Talos appends by a key only its types know.
             let mut document = rest.iter().fold(first.value().clone(), |base, patch| {
-                talos::merge(base, patch.value())
+                sliplib_yaml::merge(base, patch.value())
             });
             talos::contents_as_text(&mut document).with_context(|| origin.clone())?;
             let text =
@@ -259,21 +260,6 @@ nodes:
         ]);
         let merged = for_host(&parsed, "node-a").unwrap();
         assert_eq!(merged[0].value["extraArgs"]["v"].as_str(), Some("narrower"));
-    }
-
-    #[test]
-    fn a_narrower_patch_that_deletes_a_document_deletes_it_on_its_nodes() {
-        let parsed = parse(&[
-            NETWORK,
-            &kubelet("", "    v: \"4\"\n"),
-            &patch(
-                "  include: [node-a]\n",
-                "apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete\n",
-            ),
-        ]);
-        let deleted = &for_host(&parsed, "node-a").unwrap()[0].value;
-        assert_eq!(deleted["$patch"].as_str(), Some("delete"));
-        assert!(deleted["extraArgs"].is_null(), "{deleted:?}");
     }
 
     #[test]

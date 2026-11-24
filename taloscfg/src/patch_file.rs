@@ -118,12 +118,7 @@ fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) ->
         }
     };
     let document = &mut patches[index];
-    talos::annotate(
-        &mut document.value,
-        crate::annotations::NAMESPACE,
-        annotations,
-    )
-    .with_context(|| document.origin.clone())?;
+    document.value = talos::annotate(std::mem::take(&mut document.value), annotations);
     document.text =
         sliplib_yaml::to_string(&document.value).context("serializing the KubeNodeConfig")?;
     Ok(())
