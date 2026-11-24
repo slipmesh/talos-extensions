@@ -277,6 +277,32 @@ nodes:
     }
 
     #[test]
+    fn a_narrower_patch_written_first_sets_a_key_over_the_one_for_all() {
+        let parsed = parse(&[
+            NETWORK,
+            &kubelet("  include: [node-a]\n", "    v: \"narrower\"\n"),
+            &kubelet("", "    v: \"for all\"\n"),
+        ]);
+        let merged = for_host(&parsed, "node-a").unwrap();
+        assert_eq!(merged[0].value["extraArgs"]["v"].as_str(), Some("narrower"));
+    }
+
+    #[test]
+    fn a_narrower_patch_that_deletes_a_document_deletes_it_on_its_nodes() {
+        let parsed = parse(&[
+            NETWORK,
+            &kubelet("", "    v: \"4\"\n"),
+            &patch(
+                "  include: [node-a]\n",
+                "apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete\n",
+            ),
+        ]);
+        let deleted = &for_host(&parsed, "node-a").unwrap()[0].value;
+        assert_eq!(deleted["$patch"].as_str(), Some("delete"));
+        assert!(deleted["extraArgs"].is_null(), "{deleted:?}");
+    }
+
+    #[test]
     fn of_two_patches_of_one_identity_and_one_rank_the_later_in_the_files_wins() {
         for aim in ["", "  include: [node-a]\n"] {
             let parsed = parse(&[

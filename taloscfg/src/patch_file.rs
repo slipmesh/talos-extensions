@@ -505,6 +505,25 @@ content: "table inet x {{}}"
     }
 
     #[test]
+    fn files_added_to_awg_follow_its_config_in_its_one_document() {
+        let raw = format!(
+            "{}{}",
+            with_router_files(&[("", TEMPLATE)]),
+            adding_to("awg")
+        );
+        let a = render_raw(&raw, "a").unwrap();
+        let awg: Vec<_> = documents(&a)
+            .into_iter()
+            .filter(|document| document["name"] == "awg")
+            .collect();
+        assert_eq!(awg.len(), 1, "{a}");
+        assert_eq!(
+            awg[0]["configFiles"][1]["mountPath"],
+            "/etc/talos-extensions/extra"
+        );
+    }
+
+    #[test]
     fn files_added_to_nftables_need_a_firewall_template_that_reaches_the_node() {
         let raw = format!(
             "{}{}",
