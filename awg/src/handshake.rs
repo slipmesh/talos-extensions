@@ -39,11 +39,11 @@ pub struct TrackedInterface {
     pub peers: HashMap<String, Vec<IpNet>>,
 }
 
-fn now_unix() -> u64 {
+/// A clock before 1970 reads as 0, which every reader takes as "never".
+pub(crate) fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("system clock before epoch")
-        .as_secs()
+        .map_or(0, |since| since.as_secs())
 }
 
 /// Everything one peer's `GetDevice` dump says that anything here reads: the handshake the route
