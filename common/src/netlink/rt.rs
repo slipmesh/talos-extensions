@@ -433,4 +433,39 @@ mod tests {
         removed.sort();
         assert_eq!(removed, vec![also_stale, stale]);
     }
+
+    #[test]
+    fn a_route_and_an_address_message_carry_the_family_link_and_protocol_of_either_kind() {
+        use rtnetlink::packet_route::AddressFamily;
+        use rtnetlink::packet_route::address::AddressAttribute;
+        use rtnetlink::packet_route::route::{RouteAttribute, RouteHeader, RouteScope, RouteType};
+        for (cidr, family) in [
+            ("192.0.2.0/24", AddressFamily::Inet),
+            ("2001:db8::/32", AddressFamily::Inet6),
+        ] {
+            let cidr: IpNet = cidr.parse().unwrap();
+            let route = route_message(7, cidr, crate::ROUTE_PROTOCOL).unwrap();
+            assert_eq!(route.header.address_family, family, "{cidr}");
+            assert_eq!(route.header.protocol, crate::ROUTE_PROTOCOL, "{cidr}");
+            assert_eq!(route.header.table, RouteHeader::RT_TABLE_MAIN, "{cidr}");
+            assert_eq!(route.header.scope, RouteScope::Universe, "{cidr}");
+            assert_eq!(route.header.kind, RouteType::Unicast, "{cidr}");
+            assert_eq!(
+                destination_of(&route),
+                Some((cidr.addr(), cidr.prefix_len()))
+            );
+            assert!(route.attributes.contains(&RouteAttribute::Oif(7)), "{cidr}");
+
+            let address = address_message(7, cidr);
+            assert_eq!(address.header.family, family, "{cidr}");
+            assert_eq!(address.header.index, 7, "{cidr}");
+            assert_eq!(address.header.prefix_len, cidr.prefix_len(), "{cidr}");
+            assert!(
+                address
+                    .attributes
+                    .contains(&AddressAttribute::Address(cidr.addr())),
+                "{cidr}"
+            );
+        }
+    }
 }
