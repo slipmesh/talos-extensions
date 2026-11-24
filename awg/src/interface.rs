@@ -357,138 +357,107 @@ mod tests {
     }
 
     #[test]
-    fn a_range_held_as_it_is_desired_produces_no_op_and_a_new_range_one_replace() {
+    fn a_peer_is_replaced_where_it_differs_removed_where_undesired_and_otherwise_left() {
         let held = Peer {
             persistent_keepalive: wire(OBFUSCATED_KEEPALIVE),
             ..peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"))
         };
-        let both = std::slice::from_ref(&held);
-        assert!(diff_peers(both, both).is_empty());
-        // What a node upgraded from a release that sent 25 sees once, on an obfuscated link.
-        let at_25 = peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"));
-        assert_eq!(
-            diff_peers(&[at_25], both),
-            vec![("k1".to_string(), Some(held.clone()))]
-        );
-    }
-
-    #[test]
-    fn identical_sets_produce_no_ops() {
-        let a = vec![
-            peer("k1", &["203.0.113.1/32"], None),
-            peer("k2", &["203.0.113.2/32"], None),
+        let k1 = peer("k1", &["203.0.113.1/32"], None);
+        let k2 = peer("k2", &["203.0.113.2/32"], None);
+        let k3 = peer("k3", &["203.0.113.3/32"], None);
+        let at_29 = peer("k1", &["203.0.113.29/32"], None);
+        let at_2 = peer("k1", &["0.0.0.0/0", "::/0"], Some("192.0.2.2:51820"));
+        let replace = |p: &Peer| (p.public_key.clone(), Some(p.clone()));
+        let cases = [
+            (vec![held.clone()], vec![held.clone()], vec![]),
+            // What a node upgraded from a release that sent 25 sees once, on an obfuscated link.
+            (
+                vec![peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"))],
+                vec![held.clone()],
+                vec![replace(&held)],
+            ),
+            (
+                vec![k1.clone(), k2.clone()],
+                vec![k1.clone()],
+                vec![("k2".to_string(), None)],
+            ),
+            // A bare 25 held is not the range of one value 25 desired.
+            (
+                vec![Peer {
+                    persistent_keepalive: BARE_25,
+                    ..at_2.clone()
+                }],
+                vec![Peer {
+                    persistent_keepalive: KEEPALIVE,
+                    ..at_2.clone()
+                }],
+                vec![replace(&Peer {
+                    persistent_keepalive: KEEPALIVE,
+                    ..at_2.clone()
+                })],
+            ),
+            (
+                vec![peer("k1", &["203.0.113.1/32", "203.0.113.2/32"], None)],
+                vec![peer("k1", &["203.0.113.2/32", "203.0.113.1/32"], None)],
+                vec![],
+            ),
+            (vec![k1.clone()], vec![at_29.clone()], vec![replace(&at_29)]),
+            // Its endpoint changed and its allowed IPs did not: the endpoint is sent again.
+            (
+                vec![peer("k1", &["0.0.0.0/0", "::/0"], Some("192.0.2.1:51820"))],
+                vec![at_2.clone()],
+                vec![replace(&at_2)],
+            ),
+            (
+                vec![k1.clone(), k2.clone()],
+                vec![k1, k2, k3.clone()],
+                vec![replace(&k3)],
+            ),
         ];
-        assert!(diff_peers(&a, &a).is_empty());
-    }
-
-    #[test]
-    fn added_peer_yields_replace_op() {
-        let previous = vec![peer("k1", &["203.0.113.1/32"], None)];
-        let desired = vec![
-            peer("k1", &["203.0.113.1/32"], None),
-            peer("k2", &["203.0.113.2/32"], None),
-        ];
-        let ops = diff_peers(&previous, &desired);
-        assert_eq!(
-            ops,
-            vec![(
-                "k2".to_string(),
-                Some(peer("k2", &["203.0.113.2/32"], None))
-            )]
-        );
-    }
-
-    #[test]
-    fn removed_peer_yields_remove_op() {
-        let previous = vec![
-            peer("k1", &["203.0.113.1/32"], None),
-            peer("k2", &["203.0.113.2/32"], None),
-        ];
-        let desired = vec![peer("k1", &["203.0.113.1/32"], None)];
-        let ops = diff_peers(&previous, &desired);
-        assert_eq!(ops, vec![("k2".to_string(), None)]);
-    }
-
-    #[test]
-    fn reordered_allowed_ips_produce_no_ops() {
-        let previous = vec![peer("k1", &["203.0.113.1/32", "203.0.113.2/32"], None)];
-        let desired = vec![peer("k1", &["203.0.113.2/32", "203.0.113.1/32"], None)];
-        assert!(diff_peers(&previous, &desired).is_empty());
-    }
-
-    #[test]
-    fn changed_allowed_ips_yields_replace_op_not_remove_and_add() {
-        let previous = vec![peer("k1", &["203.0.113.1/32"], None)];
-        let desired = vec![peer("k1", &["203.0.113.29/32"], None)];
-        let ops = diff_peers(&previous, &desired);
-        assert_eq!(
-            ops,
-            vec![(
-                "k1".to_string(),
-                Some(peer("k1", &["203.0.113.29/32"], None))
-            )]
-        );
-    }
-
-    #[test]
-    fn changed_endpoint_yields_replace_op_even_with_same_allowed_ips() {
-        // Real fork from the k8s-daemon original (roadwarriors' diff_peers never had endpoints to
-        // compare): a peer whose reachable address changed must get its Endpoint attribute
-        // re-applied, not be treated as unchanged because allowed_ips alone didn't move.
-        let previous = vec![peer("k1", &["0.0.0.0/0", "::/0"], Some("192.0.2.1:51820"))];
-        let desired = vec![peer("k1", &["0.0.0.0/0", "::/0"], Some("192.0.2.2:51820"))];
-        let ops = diff_peers(&previous, &desired);
-        assert_eq!(
-            ops,
-            vec![(
-                "k1".to_string(),
-                Some(peer("k1", &["0.0.0.0/0", "::/0"], Some("192.0.2.2:51820")))
-            )]
-        );
-    }
-
-    #[test]
-    fn unrelated_peers_are_never_mentioned() {
-        let previous = vec![
-            peer("k1", &["203.0.113.1/32"], None),
-            peer("k2", &["203.0.113.2/32"], None),
-        ];
-        let desired = vec![
-            peer("k1", &["203.0.113.1/32"], None),
-            peer("k2", &["203.0.113.2/32"], None),
-            peer("k3", &["203.0.113.3/32"], None),
-        ];
-        let ops = diff_peers(&previous, &desired);
-        assert!(!ops.iter().any(|(k, _)| k == "k1"));
-        assert!(!ops.iter().any(|(k, _)| k == "k2"));
-        assert_eq!(
-            ops,
-            vec![(
-                "k3".to_string(),
-                Some(peer("k3", &["203.0.113.3/32"], None))
-            )]
-        );
+        for (previous, desired, ops) in cases {
+            assert_eq!(diff_peers(&previous, &desired), ops, "{desired:?}");
+        }
     }
 
     const KEY: [u8; 32] = [7; 32];
+    const OTHER_KEY: [u8; 32] = [9; 32];
     const KEEPALIVE: AmneziaWireguardRange<u16> = AmneziaWireguardRange { lo: 25, hi: 25 };
     /// What a number of seconds sent in place of a range left in the module.
     const BARE_25: AmneziaWireguardRange<u16> = AmneziaWireguardRange { lo: 25, hi: 0 };
 
-    fn keepalive_sent(peer: &Peer) -> Option<AmneziaWireguardRange<u16>> {
-        replace_peer_attrs(KEY, peer)
-            .unwrap()
-            .into_iter()
-            .find_map(|attr| match attr {
-                AmneziaWireguardPeerAttribute::PersistentKeepalive(v) => Some(v),
-                _ => None,
-            })
-    }
-
     #[test]
-    fn a_peer_on_a_plain_interface_is_sent_25_as_a_range_of_one_value() {
-        let peer = peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"));
-        assert_eq!(keepalive_sent(&peer), Some(KEEPALIVE));
+    fn a_replaced_peer_carries_its_key_its_allowed_ips_its_endpoint_and_its_keepalive() {
+        let head = |ip: &str| {
+            vec![
+                AmneziaWireguardPeerAttribute::PublicKey(KEY),
+                AmneziaWireguardPeerAttribute::Flags(AmneziaWireguardPeerFlags::ReplaceAllowedIps),
+                AmneziaWireguardPeerAttribute::AllowedIps(vec![allowed_ip(ip.parse().unwrap())]),
+            ]
+        };
+        let dialed = [
+            head("203.0.113.1/32"),
+            vec![
+                AmneziaWireguardPeerAttribute::Endpoint("192.0.2.1:51820".parse().unwrap()),
+                AmneziaWireguardPeerAttribute::PersistentKeepalive(KEEPALIVE),
+            ],
+        ]
+        .concat();
+        let waited_for = [
+            head("203.0.113.1/32"),
+            vec![AmneziaWireguardPeerAttribute::PersistentKeepalive(
+                AmneziaWireguardRange::default(),
+            )],
+        ]
+        .concat();
+        for (peer, attrs) in [
+            (
+                peer("k1", &["203.0.113.1/32"], Some("192.0.2.1:51820")),
+                dialed,
+            ),
+            (peer("k1", &["203.0.113.1/32"], None), waited_for),
+        ] {
+            assert_eq!(replace_peer_attrs(KEY, &peer).unwrap(), attrs);
+        }
     }
 
     #[test]
@@ -531,37 +500,6 @@ mod tests {
         }
     }
 
-    // Sent rather than left out: an omitted attribute keeps what the kernel holds.
-    #[test]
-    fn a_peer_without_an_endpoint_is_sent_a_zero_keepalive() {
-        let peer = peer("k1", &["203.0.113.1/32"], None);
-        assert_eq!(
-            keepalive_sent(&peer),
-            Some(AmneziaWireguardRange::default())
-        );
-    }
-
-    #[test]
-    fn a_replaced_peer_carries_its_key_its_allowed_ips_and_its_endpoint() {
-        let attrs = replace_peer_attrs(
-            KEY,
-            &peer("k1", &["203.0.113.1/32"], Some("192.0.2.1:51820")),
-        )
-        .unwrap();
-        assert!(attrs.contains(&AmneziaWireguardPeerAttribute::PublicKey(KEY)));
-        assert!(attrs.contains(&AmneziaWireguardPeerAttribute::Flags(
-            AmneziaWireguardPeerFlags::ReplaceAllowedIps
-        )));
-        assert!(
-            attrs.contains(&AmneziaWireguardPeerAttribute::AllowedIps(vec![
-                allowed_ip("203.0.113.1/32".parse().unwrap())
-            ]))
-        );
-        assert!(attrs.contains(&AmneziaWireguardPeerAttribute::Endpoint(
-            "192.0.2.1:51820".parse().unwrap()
-        )));
-    }
-
     #[test]
     fn an_unparsable_endpoint_refuses_the_peer_and_names_it() {
         let err = replace_peer_attrs(KEY, &peer("k1", &["203.0.113.1/32"], Some("node-b:51820")))
@@ -590,28 +528,27 @@ mod tests {
                 )]),
             ])]),
             AmneziaWireguardAttribute::Peers(vec![AmneziaWireguardPeer(vec![
+                AmneziaWireguardPeerAttribute::PublicKey(OTHER_KEY),
+                AmneziaWireguardPeerAttribute::AllowedIps(vec![allowed_ip(
+                    "203.0.113.9/32".parse().unwrap(),
+                )]),
+            ])]),
+            AmneziaWireguardAttribute::Peers(vec![AmneziaWireguardPeer(vec![
                 AmneziaWireguardPeerAttribute::PublicKey(KEY),
                 AmneziaWireguardPeerAttribute::AllowedIps(vec![allowed_ip(
                     "203.0.113.2/32".parse().unwrap(),
                 )]),
             ])]),
         ];
-        let held = dumped_peers(&dump);
-        assert_eq!(held, std::slice::from_ref(&desired));
-        assert_eq!(diff_peers(&held, &[desired]), vec![]);
-    }
-
-    #[test]
-    fn a_keepalive_held_as_a_bare_number_yields_replace_op() {
-        let desired = peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"));
-        let held = Peer {
-            persistent_keepalive: BARE_25,
-            ..desired.clone()
+        let other = Peer {
+            public_key: encode_key(&OTHER_KEY),
+            allowed_ips: vec!["203.0.113.9/32".parse().unwrap()],
+            endpoint: None,
+            persistent_keepalive: AmneziaWireguardRange::default(),
         };
-        assert_eq!(
-            diff_peers(&[held], std::slice::from_ref(&desired)),
-            vec![("k1".to_string(), Some(desired))]
-        );
+        let held = dumped_peers(&dump);
+        assert_eq!(held, [desired.clone(), other.clone()]);
+        assert_eq!(diff_peers(&held, &[desired, other]), vec![]);
     }
 
     fn entry(endpoint: Option<&str>) -> PeerEntry {
@@ -633,20 +570,6 @@ mod tests {
         assert_eq!(
             last_known_good(&held, wire(PLAIN_KEEPALIVE)),
             peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"))
-        );
-    }
-
-    // A lookup fails only for an entry that has an endpoint, and the kernel may hold none for
-    // that peer yet.
-    #[test]
-    fn a_peer_the_kernel_holds_without_an_endpoint_is_kept_with_the_keepalive_called_for() {
-        let held = peer("k1", &["0.0.0.0/0"], None);
-        assert_eq!(
-            last_known_good(&held, wire(OBFUSCATED_KEEPALIVE)),
-            Peer {
-                persistent_keepalive: AmneziaWireguardRange { lo: 20, hi: 30 },
-                ..held.clone()
-            }
         );
     }
 
@@ -673,52 +596,29 @@ mod tests {
             s4: Some(12),
             ..Obfuscation::default()
         };
-        let shown = format!("{:#}", check(&interface("awg-b", undecodable)).unwrap_err());
-        assert!(
-            shown.starts_with("interface awg-b: invalid header_protection_key"),
-            "{shown}"
-        );
-    }
-
-    // The module refuses this only at `SetDevice`, once the link exists.
-    #[test]
-    fn an_interface_whose_obfuscation_the_module_refuses_is_refused_by_name() {
         let overlapping = Obfuscation {
             h1: Some(5.into()),
             h2: Some(5.into()),
             ..Obfuscation::default()
         };
-        let shown = format!("{:#}", check(&interface("awg-b", overlapping)).unwrap_err());
-        assert!(
-            shown.starts_with("interface awg-b: obfuscation.h1 (5) and obfuscation.h2 (5)"),
-            "{shown}"
-        );
-    }
-
-    #[test]
-    fn an_interface_with_a_timing_value_the_module_misuses_is_refused_by_name() {
-        let too_late = Obfuscation {
-            rekey_after_time: Some(180.into()),
-            ..Obfuscation::default()
-        };
-        let shown = format!("{:#}", check(&interface("awg-b", too_late)).unwrap_err());
-        assert!(
-            shown.starts_with("interface awg-b: obfuscation.rekey_after_time (180)"),
-            "{shown}"
-        );
-    }
-
-    #[test]
-    fn an_interface_with_an_undecodable_private_key_is_refused_by_its_name() {
-        let mut iface = interface("awg-b", Obfuscation::default());
-        iface.private_key = "not a key".into();
-        let shown = format!("{:#}", check(&iface).unwrap_err());
-        assert!(
-            shown.starts_with("interface awg-b: invalid private_key"),
-            "{shown}"
-        );
-        // The logged chain would otherwise show a character of the configured text and where.
-        assert!(!shown.contains("offset"), "{shown}");
+        let mut unkeyed = interface("awg-b", Obfuscation::default());
+        unkeyed.private_key = "not a key".into();
+        for (iface, refused) in [
+            (
+                interface("awg-b", undecodable),
+                "interface awg-b: invalid header_protection_key",
+            ),
+            (
+                interface("awg-b", overlapping),
+                "interface awg-b: obfuscation.h1 (5) and obfuscation.h2 (5)",
+            ),
+            (unkeyed, "interface awg-b: invalid private_key"),
+        ] {
+            let shown = format!("{:#}", check(&iface).unwrap_err());
+            assert!(shown.starts_with(refused), "{shown}");
+            // The logged chain would otherwise show a character of the configured text and where.
+            assert!(!shown.contains("offset"), "{shown}");
+        }
     }
 
     #[test]

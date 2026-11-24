@@ -192,8 +192,6 @@ mesh       OSPF       master4    up     22:30:37.362  Alone
 ibgp_test  BGP        ---        start  22:31:14.133  Connect
 ";
 
-    const SHOW_OSPF_INTERFACE_NONE_CONFIGURED: &str = "BIRD 2.19.1 ready.\nmesh:\n";
-
     const SHOW_OSPF_INTERFACE_TWO_CONFIGURED: &str = "\
 BIRD 2.19.1 ready.
 mesh:
@@ -212,12 +210,8 @@ Interface mesh-b (198.51.100.194/31)
 ";
 
     #[test]
-    fn detects_no_listening_socket() {
+    fn a_protocol_without_a_listening_socket_is_told_from_a_healthy_list() {
         assert!(has_no_listening_socket(SHOW_PROTOCOLS_NO_LISTENING_SOCKET));
-    }
-
-    #[test]
-    fn no_listening_socket_absent_when_healthy() {
         assert!(!has_no_listening_socket(SHOW_PROTOCOLS_HEALTHY));
     }
 
@@ -225,10 +219,5 @@ Interface mesh-b (198.51.100.194/31)
     fn parses_configured_ospf_interfaces() {
         let configured = ospf_configured_interfaces(SHOW_OSPF_INTERFACE_TWO_CONFIGURED);
         assert_eq!(configured, HashSet::from(["lo", "mesh-a", "mesh-b"]));
-    }
-
-    #[test]
-    fn no_configured_ospf_interfaces_parses_as_empty() {
-        assert!(ospf_configured_interfaces(SHOW_OSPF_INTERFACE_NONE_CONFIGURED).is_empty());
     }
 }

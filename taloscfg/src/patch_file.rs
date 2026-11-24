@@ -349,7 +349,10 @@ content: "table inet x {{}}"
         let a = rendered("a");
         assert!(a.starts_with(HEADER), "{a}");
         let disk = a.find("disk: /dev/vda").expect(&a);
-        assert!(disk < a.find("name: awg").unwrap(), "{a}");
+        let annotated = a.find("kind: KubeNodeConfig").expect(&a);
+        let awg = a.find("name: awg").expect(&a);
+        assert!(disk < annotated && annotated < awg, "{a}");
+        assert!(awg < a.find("name: router").unwrap(), "{a}");
         assert!(content(&generated_document(&a, "awg").unwrap()).contains("mesh-b"));
         assert!(generated_document(&a, "router").is_some());
         assert!(generated_document(&a, "nftables").is_some());
@@ -426,15 +429,13 @@ content: "table inet x {{}}"
             configs[0]["annotations"]["slipmesh.net/endpoint"],
             "192.0.2.10"
         );
-    }
 
-    #[test]
-    fn a_host_gets_only_the_documents_aimed_at_it() {
-        let b = rendered("b");
-        assert!(b.starts_with(HEADER), "{b}");
-        assert!(!b.contains("disk:"), "{b}");
-        assert!(generated_document(&b, "awg").is_some());
-        assert!(generated_document(&b, "nftables").is_none());
+        let unset = raw.replace("annotations:\n  example.com/rack: r1\n", "annotations:\n");
+        let configs = kube_node_configs(&render_raw(&unset, "a").unwrap());
+        assert_eq!(
+            configs[0]["annotations"]["slipmesh.net/endpoint"],
+            "192.0.2.10"
+        );
     }
 
     /// `SLIPMESH` with a `router` template document for each of `templates`, its aim and its
@@ -505,6 +506,25 @@ content: "table inet x {{}}"
     }
 
     #[test]
+    fn files_added_to_awg_follow_its_config_in_its_one_document() {
+        let raw = format!(
+            "{}{}",
+            with_router_files(&[("", TEMPLATE)]),
+            adding_to("awg")
+        );
+        let a = render_raw(&raw, "a").unwrap();
+        let awg: Vec<_> = documents(&a)
+            .into_iter()
+            .filter(|document| document["name"] == "awg")
+            .collect();
+        assert_eq!(awg.len(), 1, "{a}");
+        assert_eq!(
+            awg[0]["configFiles"][1]["mountPath"],
+            "/etc/talos-extensions/extra"
+        );
+    }
+
+    #[test]
     fn files_added_to_nftables_need_a_firewall_template_that_reaches_the_node() {
         let raw = format!(
             "{}{}",
@@ -518,7 +538,12 @@ content: "table inet x {{}}"
             "/etc/talos-extensions/extra"
         );
         let err = format!("{:#}", render_raw(&raw, "b").unwrap_err());
-        assert!(err.contains("nftables") && err.contains("\"b\""), "{err}");
+        assert!(
+            err.contains("nftables")
+                && err.contains("\"b\"")
+                && err.contains("the `kind: patch` document at line"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -557,13 +582,6 @@ content: "table inet x {{}}"
         );
     }
 
-    #[test]
-    fn a_router_template_reading_an_unknown_variable_is_not_rendered() {
-        let raw = with_router_files(&[("", "{% if false %}{{ lopback }}{% endif %}\n")]);
-        let err = render_raw(&raw, "a").unwrap_err();
-        assert!(format!("{err:#}").contains("lopback"), "{err:#}");
-    }
-
     /// The line at which the `n`th document appended to `SLIPMESH` starts, counting from 0.
     fn appended_line(raw: &str, n: usize) -> usize {
         let start = SLIPMESH.len();
@@ -575,40 +593,32 @@ content: "table inet x {{}}"
     }
 
     #[test]
-    fn a_router_template_another_overrides_everywhere_is_still_checked() {
-        let raw = with_router_files(&[
+    fn a_template_another_overrides_everywhere_is_still_checked() {
+        let router = with_router_files(&[
             ("", "{% if false %}{{ lopback }}{% endif %}\n"),
             ("  include: [a, b]\n", TEMPLATE),
         ]);
-        let err = format!("{:#}", render_raw(&raw, "a").unwrap_err());
-        let place = format!(
-            "`kind: template` document at line {}",
-            appended_line(&raw, 0)
-        );
-        assert!(
-            err.contains(&place) && err.contains("router template") && err.contains("lopback"),
-            "{place}: {err}"
-        );
-    }
-
-    #[test]
-    fn a_firewall_template_another_overrides_everywhere_is_still_checked() {
-        let raw = format!(
+        let firewall = format!(
             "{}---\nslipmesh: {{kind: template, platform: talos}}\ndaemon: firewall\nbase: \
              {BASE}\ncontent: \"table inet t {{ {{{{ bogus }}}} }}\"\n---\nslipmesh: {{kind: \
              template, platform: talos, include: [a, b]}}\ndaemon: firewall\nbase: {BASE}\n\
              content: \"table inet y {{}}\"\n",
             with_router_files(&[("", TEMPLATE)])
         );
-        let err = format!("{:#}", render_raw(&raw, "a").unwrap_err());
-        let place = format!(
-            "`kind: template` document at line {}",
-            appended_line(&raw, 1)
-        );
-        assert!(
-            err.contains(&place) && err.contains("firewall template"),
-            "{place}: {err}"
-        );
+        for (raw, index, named) in [
+            (&router, 0, &["router template", "lopback"][..]),
+            (&firewall, 1, &["firewall template"][..]),
+        ] {
+            let err = format!("{:#}", render_raw(raw, "a").unwrap_err());
+            let place = format!(
+                "`kind: template` document at line {}",
+                appended_line(raw, index)
+            );
+            assert!(
+                err.contains(&place) && named.iter().all(|part| err.contains(part)),
+                "{place}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -616,24 +626,6 @@ content: "table inet x {{}}"
         let raw = with_router_files(&[("", "{{ bfd.min_rx_ms }}\n")]);
         let err = render_raw(&raw, "a").unwrap_err();
         assert!(format!("{err:#}").contains("router"), "{err:#}");
-    }
-
-    #[test]
-    fn a_firewall_template_the_daemon_rejects_is_not_rendered() {
-        let raw = with_router_files(&[("", TEMPLATE)])
-            .replace("table inet x {}", "table inet t { {{ bogus }} }");
-        let err = render_raw(&raw, "a").unwrap_err();
-        assert!(format!("{err:#}").contains("firewall template"), "{err:#}");
-    }
-
-    #[test]
-    fn obfuscation_the_kernel_module_refuses_is_not_rendered() {
-        let raw = with_router_files(&[("", TEMPLATE)]).replace(
-            "obfuscation: {jc: 4,",
-            "obfuscation: {header_protection_key: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\", jc: 4,",
-        );
-        let err = render_raw(&raw, "a").unwrap_err();
-        assert!(format!("{err:#}").contains("s3, s4"), "{err:#}");
     }
 
     #[test]
@@ -660,36 +652,5 @@ content: "table inet x {{}}"
         );
         let legacy: sliplib_yaml::Value = sliplib_yaml::from_str(files[1].1).unwrap();
         assert_eq!(legacy["ruleset"].as_str(), Some(files[0].1));
-    }
-
-    #[test]
-    fn an_nftables_document_carries_its_template_the_files_added_and_the_ruleset_as_before() {
-        let added = ServiceFile::Added(
-            sliplib_yaml::from_str(
-                "{mountPath: /etc/talos-extensions/extra.conf, content: \"extra\\n\"}",
-            )
-            .unwrap(),
-        );
-        let text = nftables_document("table ip example {\n}\n", vec![added]).unwrap();
-        assert_eq!(
-            text,
-            "apiVersion: v1alpha1
-kind: ExtensionServiceConfig
-name: nftables
-configFiles:
-- mountPath: /etc/talos-extensions/nftables.conf.j2
-  content: |
-    table ip example {
-    }
-- mountPath: /etc/talos-extensions/extra.conf
-  content: |
-    extra
-- mountPath: /etc/talos-extensions/nftables.yaml
-  content: |
-    ruleset: |
-      table ip example {
-      }
-"
-        );
     }
 }

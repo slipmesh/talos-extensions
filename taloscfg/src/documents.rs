@@ -108,7 +108,8 @@ mod tests {
     }
 
     #[test]
-    fn two_listeners_on_one_port_are_refused_naming_it() {
+    fn a_listener_takes_a_port_of_its_own_that_is_not_zero() {
+        assert!(read::<TalosSettings>("metrics: {mesh: {port: 0}}").is_err());
         let refused = read::<TalosSettings>("metrics: {mesh: {port: 9586}, router: {port: 9586}}")
             .unwrap_err();
         assert!(

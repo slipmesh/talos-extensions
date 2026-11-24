@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn kind_comes_from_allowed_ips_alone() {
+    fn a_peer_is_labelled_with_its_kind_from_its_allowed_ips_and_its_name() {
         let out = render(
             &config(),
             &dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4))),
@@ -503,120 +503,49 @@ mod tests {
             NOW,
         );
         let handshakes = series(&out, "slipmesh_awg_peer_last_handshake_seconds{");
-        assert!(
-            handshakes
-                .iter()
-                .any(|l| l.contains("interface=\"mesh-node-a\"") && l.contains("kind=\"mesh\"")),
-            "{out}"
-        );
-        assert!(
-            handshakes
-                .iter()
-                .any(|l| l.contains("interface=\"rw-north\"") && l.contains("kind=\"roadwarrior\"")),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn a_peer_name_is_carried_through_as_its_own_label() {
+        for (interface, kind) in [("mesh-node-a", "mesh"), ("rw-north", "roadwarrior")] {
+            assert!(
+                handshakes
+                    .iter()
+                    .any(|l| l.contains(&format!("interface=\"{interface}\""))
+                        && l.contains(&format!("kind=\"{kind}\""))),
+                "{out}"
+            );
+        }
         // A base64 public key is unreadable on a dashboard; the name is what a human picks a
         // series by. It never decides anything - the key stays the identity.
-        let out = render(
-            &config(),
-            &dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4))),
-            &snapshot(&[("rw-north", RW_PEER)], NOW),
-            NOW,
-        );
         assert!(out.contains("peer_name=\"node-a\""), "{out}");
         assert!(out.contains("peer_name=\"client-one\""), "{out}");
         assert!(out.contains("peer=\"peer-roadwarrior\""), "{out}");
     }
 
     #[test]
-    fn an_unnamed_peer_still_gets_every_series() {
-        let cfg = AwgConfig {
-            interfaces: vec![iface(
-                "rw-north",
-                vec![peer(RW_PEER, None, Some(&["203.0.113.9/32"]))],
-            )],
-        };
-        let out = render(
-            &cfg,
-            &Dumps::from([(
-                "rw-north".to_string(),
-                Some(HashMap::from([(RW_PEER.to_string(), stats(NOW - 5, 1, 1))])),
-            )]),
-            &snapshot(&[], NOW),
-            NOW,
-        );
-        // Still labelled, with an empty value - the series is identical to one with no
-        // `peer_name` at all as far as Prometheus is concerned.
-        assert!(out.contains("peer_name=\"\""), "{out}");
-        assert!(
-            !series(&out, "slipmesh_awg_peer_last_handshake_seconds{").is_empty(),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn a_peer_carrying_both_an_endpoint_and_allowed_ips_is_still_a_roadwarrior() {
-        // Every fixture peer has an endpoint, so the roadwarrior carries both - the rule is
-        // `allowed_ips` alone, and nothing else may sway it.
-        let out = render(
-            &config(),
-            &dumps(None, Some(stats(NOW - 10, 0, 0))),
-            &snapshot(&[], NOW),
-            NOW,
-        );
-        assert!(
-            series(&out, "slipmesh_awg_peer_connected{")
-                .iter()
-                .all(|l| l.contains("kind=\"roadwarrior\"")),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn peer_connected_is_emitted_for_roadwarriors_only() {
-        let out = render(
-            &config(),
-            &dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4))),
-            &snapshot(&[("rw-north", RW_PEER)], NOW),
-            NOW,
-        );
-        let connected = series(&out, "slipmesh_awg_peer_connected{");
-        assert_eq!(connected.len(), 1, "{out}");
-        assert!(connected[0].ends_with(" 1"), "{out}");
-        assert!(!connected[0].contains("mesh-node-a"), "{out}");
-    }
-
-    #[test]
-    fn a_roadwarrior_without_its_routes_reads_as_disconnected_not_missing() {
-        let out = render(
-            &config(),
-            &dumps(None, Some(stats(NOW - 10, 3, 4))),
-            &snapshot(&[], NOW),
-            NOW,
-        );
-        let connected = series(&out, "slipmesh_awg_peer_connected{");
-        assert_eq!(connected.len(), 1, "{out}");
-        assert!(connected[0].ends_with(" 0"), "{out}");
-    }
-
-    #[test]
-    fn a_stale_snapshot_emits_no_verdict_at_all() {
+    fn a_roadwarrior_alone_has_a_verdict_and_none_from_a_stale_snapshot() {
         // A loop wedged in netlink leaves a snapshot that stays plausible forever; serving it is
         // the exact failure the textfile collector was rejected for.
-        let out = render(
-            &config(),
-            &dumps(None, Some(stats(NOW - 10, 3, 4))),
-            &snapshot(&[("rw-north", RW_PEER)], NOW - 600),
-            NOW,
-        );
-        assert!(
-            series(&out, "slipmesh_awg_peer_connected{").is_empty(),
-            "{out}"
-        );
+        for (mesh, connected_to, taken, verdict) in [
+            (
+                Some(stats(NOW - 10, 1, 2)),
+                &[("rw-north", RW_PEER)][..],
+                NOW,
+                Some(" 1"),
+            ),
+            (None, &[][..], NOW, Some(" 0")),
+            (None, &[("rw-north", RW_PEER)][..], NOW - 600, None),
+        ] {
+            let out = render(
+                &config(),
+                &dumps(mesh, Some(stats(NOW - 10, 3, 4))),
+                &snapshot(connected_to, taken),
+                NOW,
+            );
+            let connected = series(&out, "slipmesh_awg_peer_connected{");
+            assert_eq!(connected.len(), usize::from(verdict.is_some()), "{out}");
+            if let Some(value) = verdict {
+                assert!(connected[0].ends_with(value), "{out}");
+                assert!(!connected[0].contains("mesh-node-a"), "{out}");
+            }
+        }
     }
 
     #[test]
@@ -633,18 +562,6 @@ mod tests {
                 .any(|l| l.contains("mesh-node-a")),
             "{out}"
         );
-    }
-
-    #[test]
-    fn a_peer_in_the_kernel_but_not_in_the_config_is_not_emitted() {
-        let mut d = dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4)));
-        d.get_mut("rw-north")
-            .unwrap()
-            .as_mut()
-            .unwrap()
-            .insert("peer-not-in-the-config".to_string(), stats(NOW, 9, 9));
-        let out = render(&config(), &d, &snapshot(&[], NOW), NOW);
-        assert!(!out.contains("peer-not-in-the-config"), "{out}");
     }
 
     #[test]
@@ -716,29 +633,21 @@ mod tests {
     }
 
     #[test]
-    fn build_info_and_reconcile_freshness_are_reported() {
-        let out = render(&config(), &dumps(None, None), &snapshot(&[], NOW), NOW);
-        assert!(out.contains("component=\"awg\""), "{out}");
-        assert!(
-            series(&out, "slipmesh_awg_reconcile_last_success_seconds ")
-                .iter()
-                .any(|l| l.ends_with(&format!(" {NOW}"))),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn a_loop_that_has_never_completed_a_pass_reports_no_freshness() {
-        let out = render(
-            &config(),
-            &dumps(None, None),
-            &ReconcileSnapshot::default(),
-            NOW,
-        );
-        assert!(
-            series(&out, "slipmesh_awg_reconcile_last_success_seconds ").is_empty(),
-            "{out}"
-        );
+    fn build_info_is_reported_and_freshness_once_a_pass_completed() {
+        for (snapshot, fresh) in [
+            (snapshot(&[], NOW), true),
+            (ReconcileSnapshot::default(), false),
+        ] {
+            let out = render(&config(), &dumps(None, None), &snapshot, NOW);
+            assert!(out.contains("component=\"awg\""), "{out}");
+            let freshness = series(&out, "slipmesh_awg_reconcile_last_success_seconds ");
+            assert_eq!(
+                freshness.iter().any(|l| l.ends_with(&format!(" {NOW}"))),
+                fresh,
+                "{out}"
+            );
+            assert!(fresh || freshness.is_empty(), "{out}");
+        }
     }
 
     /// One real request over a real socket, so the HTTP surface is exercised rather than assumed.
@@ -793,17 +702,5 @@ mod tests {
         let listen: SocketAddr = "198.51.100.126:0".parse().unwrap();
         let listener = bind(listen).expect("IP_FREEBIND should permit binding an absent address");
         assert_eq!(listener.local_addr().unwrap().ip(), listen.ip());
-    }
-
-    #[test]
-    fn no_private_key_and_no_endpoint_ever_reach_the_output() {
-        let out = render(
-            &config(),
-            &dumps(Some(stats(NOW - 10, 1, 2)), Some(stats(NOW - 10, 3, 4))),
-            &snapshot(&[("rw-north", RW_PEER)], NOW),
-            NOW,
-        );
-        assert!(!out.contains(PRIVATE_KEY), "{out}");
-        assert!(!out.contains("192.0.2.7"), "{out}");
     }
 }

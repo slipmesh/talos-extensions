@@ -240,6 +240,7 @@ impl AwgClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sliplib_secrets::wireguard::encode_key;
 
     fn push(o: &Obfuscation) -> Vec<AmneziaWireguardAttribute> {
         let mut attrs = Vec::new();
@@ -248,214 +249,116 @@ mod tests {
     }
 
     /// The bug this whole function's doc comment describes: an all-`None` `Obfuscation` (a
-    /// `plain: true` mesh link) must still emit real, explicit
-    /// attributes - never nothing - since AmneziaWG's `SetDevice` treats an omitted attribute as
-    /// "leave the kernel's current value alone", not "reset to default".
+    /// `plain: true` mesh link) must still emit real, explicit attributes - never nothing - since
+    /// AmneziaWG's `SetDevice` treats an omitted attribute as "leave the kernel's current value
+    /// alone", not "reset to default". The headers are the real WireGuard message types, not zero;
+    /// the decoys and the header protection key are left out.
     #[test]
-    fn default_obfuscation_still_pushes_every_junk_and_header_attribute() {
-        let attrs = push(&Obfuscation::default());
-        assert!(attrs.contains(&AmneziaWireguardAttribute::Jc(0)));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::Jmin(0)));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::Jmax(0)));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::S1(0)));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::S2(0)));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::S3(0)));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::S4(0)));
-    }
-
-    /// `h1..h4` default to WireGuard's own real per-packet-type magic values (`1..4`), not `0` -
-    /// `0` would just be a different, still-wrong magic value, not "no header obfuscation". See
-    /// `obfuscation::DEFAULT_MAGIC_HEADERS`'s doc comment for where `1..4` comes from.
-    #[test]
-    fn default_obfuscation_headers_are_the_real_wireguard_message_types_not_zero() {
-        let attrs = push(&Obfuscation::default());
-        assert!(
-            attrs.contains(&AmneziaWireguardAttribute::H1(AmneziaWireguardRange::from(
-                1
-            )))
-        );
-        assert!(
-            attrs.contains(&AmneziaWireguardAttribute::H2(AmneziaWireguardRange::from(
-                2
-            )))
-        );
-        assert!(
-            attrs.contains(&AmneziaWireguardAttribute::H3(AmneziaWireguardRange::from(
-                3
-            )))
-        );
-        assert!(
-            attrs.contains(&AmneziaWireguardAttribute::H4(AmneziaWireguardRange::from(
-                4
-            )))
+    fn default_obfuscation_still_pushes_every_junk_header_tuning_and_31_attribute() {
+        use AmneziaWireguardAttribute as A;
+        let unset = AmneziaWireguardRange::default();
+        assert_eq!(
+            push(&Obfuscation::default()),
+            [
+                A::Jc(0),
+                A::Jmin(0),
+                A::Jmax(0),
+                A::S1(0),
+                A::S2(0),
+                A::S3(0),
+                A::S4(0),
+                A::H1(AmneziaWireguardRange::from(1)),
+                A::H2(AmneziaWireguardRange::from(2)),
+                A::H3(AmneziaWireguardRange::from(3)),
+                A::H4(AmneziaWireguardRange::from(4)),
+                A::ContentPaddingAddition(unset),
+                A::RekeyAfterTime(unset),
+                A::RekeyTimeout(unset),
+                A::RejectAfterTime(unset),
+                A::KeepaliveTimeout(unset),
+                A::MaxHandshakeAttempts(unset),
+                A::RandomTrailers(false),
+                A::DisableCookies(false),
+            ]
         );
     }
 
-    // The logged chain would otherwise show a character of the configured text and where.
     #[test]
-    fn an_undecodable_header_protection_key_is_refused_without_its_text() {
-        let o = Obfuscation {
-            header_protection_key: Some("not a key".into()),
-            ..Obfuscation::default()
-        };
-        let shown = format!(
-            "{:#}",
-            push_obfuscation_attrs(&mut Vec::new(), &o).unwrap_err()
-        );
-        assert!(
-            shown.starts_with("invalid header_protection_key"),
-            "{shown}"
-        );
-        assert!(!shown.contains("offset"), "{shown}");
-    }
-
-    #[test]
-    fn stripping_the_31_attributes_leaves_everything_else_in_order() {
+    fn stripping_the_31_attributes_leaves_everything_else_in_order_and_none_without_them() {
         let attrs = push(&Obfuscation::default());
         let stripped = without_31_attributes(&attrs).expect("3.1 attributes were present");
-        assert!(!stripped.iter().any(|a| matches!(
-            a,
-            AmneziaWireguardAttribute::RandomTrailers(_)
-                | AmneziaWireguardAttribute::DisableCookies(_)
-        )));
-        assert_eq!(stripped.len(), attrs.len() - 2);
-        assert!(stripped.contains(&AmneziaWireguardAttribute::Jc(0)));
+        assert_eq!(stripped, attrs[..attrs.len() - 2]);
+        assert!(without_31_attributes(&[AmneziaWireguardAttribute::Jc(4)]).is_none());
     }
 
     #[test]
-    fn stripping_reports_nothing_to_strip_when_the_31_attributes_are_absent() {
-        let attrs = vec![AmneziaWireguardAttribute::Jc(4)];
-        assert!(without_31_attributes(&attrs).is_none());
-    }
-
-    /// Same reasoning as the junk attributes above, applied to AmneziaWG 3.1's two device
-    /// flags: an omitted attribute leaves the kernel's current value in place, so a link that
-    /// once had them on would keep them on after they were dropped from the config.
-    #[test]
-    fn default_obfuscation_pushes_both_31_flags_explicitly_off() {
-        let attrs = push(&Obfuscation::default());
-        assert!(attrs.contains(&AmneziaWireguardAttribute::RandomTrailers(false)));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::DisableCookies(false)));
-    }
-
-    #[test]
-    fn explicit_31_flags_are_used_verbatim() {
-        let o = Obfuscation {
-            random_trailers: Some(true),
-            disable_cookies: Some(true),
-            ..Obfuscation::default()
-        };
-        let attrs = push(&o);
-        assert!(attrs.contains(&AmneziaWireguardAttribute::RandomTrailers(true)));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::DisableCookies(true)));
-    }
-
-    #[test]
-    fn explicit_obfuscation_values_are_used_verbatim() {
+    fn every_obfuscation_value_set_is_sent_as_it_is() {
+        use AmneziaWireguardAttribute as A;
+        let key = [7; 32];
         let o = Obfuscation {
             jc: Some(4),
             jmin: Some(40),
             jmax: Some(70),
-            h1: Some(12345.into()),
-            ..Obfuscation::default()
-        };
-        let attrs = push(&o);
-        assert!(attrs.contains(&AmneziaWireguardAttribute::Jc(4)));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::Jmin(40)));
-        assert!(attrs.contains(&AmneziaWireguardAttribute::Jmax(70)));
-        assert!(
-            attrs.contains(&AmneziaWireguardAttribute::H1(AmneziaWireguardRange::from(
-                12345
-            )))
-        );
-        // Untouched h2 still falls back to its own real default, independent of h1 being set.
-        assert!(
-            attrs.contains(&AmneziaWireguardAttribute::H2(AmneziaWireguardRange::from(
-                2
-            )))
-        );
-    }
-
-    // The module has no way to take a key off an interface, and whether an empty decoy spec
-    // clears a decoy is not known, so an unset one is left out of the request.
-    #[test]
-    fn unset_decoy_specs_and_the_header_protection_key_are_omitted() {
-        let attrs = push(&Obfuscation::default());
-        assert!(
-            !attrs
-                .iter()
-                .any(|a| matches!(a, AmneziaWireguardAttribute::I1(_)))
-        );
-        assert!(
-            !attrs
-                .iter()
-                .any(|a| matches!(a, AmneziaWireguardAttribute::HeaderProtectionKey(_)))
-        );
-    }
-
-    fn range<T: sliplib_config::End>(text: &str) -> Option<sliplib_config::Range<T>> {
-        Some(text.parse().unwrap())
-    }
-
-    #[test]
-    fn a_header_range_is_sent_with_both_its_ends() {
-        let attrs = push(&Obfuscation {
+            s1: Some(11),
+            s2: Some(12),
+            s3: Some(13),
+            s4: Some(14),
             h1: range("5-9"),
+            h3: range("12345"),
             h4: range("4000000000-4294967295"),
-            ..Obfuscation::default()
-        });
-        use AmneziaWireguardAttribute as A;
-        assert!(
-            attrs.contains(&A::H1(AmneziaWireguardRange { lo: 5, hi: 9 })),
-            "{attrs:?}"
-        );
-        let h4 = AmneziaWireguardRange {
-            lo: 4_000_000_000,
-            hi: 4_294_967_295,
-        };
-        assert!(attrs.contains(&A::H4(h4)), "{attrs:?}");
-    }
-
-    #[test]
-    fn a_tuning_value_is_sent_with_both_ends_of_its_range() {
-        let attrs = push(&Obfuscation {
+            i1: Some("<b 0x01>".into()),
+            i2: Some("<b 0x02>".into()),
+            i3: Some("<b 0x03>".into()),
+            i4: Some("<b 0x04>".into()),
+            i5: Some("<b 0x05>".into()),
+            header_protection_key: Some(encode_key(&key).as_str().into()),
             content_padding_addition: range("0-128"),
             rekey_after_time: range("120"),
             rekey_timeout: range("5-7"),
             reject_after_time: range("200-220"),
             keepalive_timeout: range("12"),
             max_handshake_attempts: range("20-65535"),
+            random_trailers: Some(true),
+            disable_cookies: Some(true),
             ..Obfuscation::default()
-        });
-        use AmneziaWireguardAttribute as A;
-        for expected in [
-            A::ContentPaddingAddition(AmneziaWireguardRange { lo: 0, hi: 128 }),
-            A::RekeyAfterTime(AmneziaWireguardRange::from(120)),
-            A::RekeyTimeout(AmneziaWireguardRange { lo: 5, hi: 7 }),
-            A::RejectAfterTime(AmneziaWireguardRange { lo: 200, hi: 220 }),
-            A::KeepaliveTimeout(AmneziaWireguardRange::from(12)),
-            A::MaxHandshakeAttempts(AmneziaWireguardRange { lo: 20, hi: 65535 }),
-        ] {
-            let times = attrs.iter().filter(|attr| **attr == expected).count();
-            assert_eq!(times, 1, "{expected:?} in {attrs:?}");
-        }
+        };
+        assert_eq!(
+            push(&o),
+            [
+                A::Jc(4),
+                A::Jmin(40),
+                A::Jmax(70),
+                A::S1(11),
+                A::S2(12),
+                A::S3(13),
+                A::S4(14),
+                A::H1(AmneziaWireguardRange { lo: 5, hi: 9 }),
+                // Left unset, h2 keeps its own default whatever the others are.
+                A::H2(AmneziaWireguardRange::from(2)),
+                A::H3(AmneziaWireguardRange::from(12345)),
+                A::H4(AmneziaWireguardRange {
+                    lo: 4_000_000_000,
+                    hi: 4_294_967_295,
+                }),
+                A::I1("<b 0x01>".into()),
+                A::I2("<b 0x02>".into()),
+                A::I3("<b 0x03>".into()),
+                A::I4("<b 0x04>".into()),
+                A::I5("<b 0x05>".into()),
+                A::HeaderProtectionKey(key),
+                A::ContentPaddingAddition(AmneziaWireguardRange { lo: 0, hi: 128 }),
+                A::RekeyAfterTime(AmneziaWireguardRange::from(120)),
+                A::RekeyTimeout(AmneziaWireguardRange { lo: 5, hi: 7 }),
+                A::RejectAfterTime(AmneziaWireguardRange { lo: 200, hi: 220 }),
+                A::KeepaliveTimeout(AmneziaWireguardRange::from(12)),
+                A::MaxHandshakeAttempts(AmneziaWireguardRange { lo: 20, hi: 65535 }),
+                A::RandomTrailers(true),
+                A::DisableCookies(true),
+            ]
+        );
     }
 
-    // Zero is the module's "not set", and an omitted attribute keeps what the kernel holds.
-    #[test]
-    fn an_unset_tuning_value_is_sent_as_zero() {
-        let attrs = push(&Obfuscation::default());
-        use AmneziaWireguardAttribute as A;
-        for expected in [
-            A::ContentPaddingAddition(AmneziaWireguardRange::default()),
-            A::RekeyAfterTime(AmneziaWireguardRange::default()),
-            A::RekeyTimeout(AmneziaWireguardRange::default()),
-            A::RejectAfterTime(AmneziaWireguardRange::default()),
-            A::KeepaliveTimeout(AmneziaWireguardRange::default()),
-            A::MaxHandshakeAttempts(AmneziaWireguardRange::default()),
-        ] {
-            let times = attrs.iter().filter(|attr| **attr == expected).count();
-            assert_eq!(times, 1, "{expected:?} in {attrs:?}");
-        }
+    fn range<T: sliplib_config::End>(text: &str) -> Option<sliplib_config::Range<T>> {
+        Some(text.parse().unwrap())
     }
 }

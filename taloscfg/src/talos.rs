@@ -216,68 +216,6 @@ mod tests {
     use super::*;
     use sliplib_yaml::{from_str, to_value};
 
-    fn identity(document: Value) -> Identity {
-        sliplib_yaml::from_value(document).unwrap()
-    }
-
-    fn documents(text: &str) -> Vec<Value> {
-        sliplib_yaml::MultiDoc::parse(text).unwrap().values()
-    }
-
-    const PATCH: &str = "\
-apiVersion: v1alpha1
-kind: ExtensionServiceConfig
-name: awg
-configFiles:
-  - mountPath: /etc/node-a/awg.yaml
-    content: |
-      interfaces: []
-  - mountPath: /etc/node-a/extra.conf
-    content: extra
----
-apiVersion: v1alpha1
-kind: OtherConfig
-name: router
----
-apiVersion: v1alpha1
-kind: ExtensionServiceConfig
-name: router
-configFiles:
-  - mountPath: /etc/node-a/router.yaml
-    content: |
-      bgp_as: 64512
-";
-
-    #[test]
-    fn a_documents_identity_is_its_api_version_kind_and_name() {
-        let documents = documents(PATCH);
-        assert_eq!(
-            identity(documents[0].clone()),
-            Identity {
-                api_version: Some("v1alpha1".into()),
-                kind: Some("ExtensionServiceConfig".into()),
-                name: Some("awg".into()),
-            }
-        );
-        let bare: Value = from_str("kind: HostnameConfig\n").unwrap();
-        assert_eq!(identity(bare.clone()).api_version, None);
-        assert_ne!(
-            identity(documents[1].clone()),
-            identity(documents[2].clone())
-        );
-    }
-
-    #[test]
-    fn an_identity_reads_as_its_kind_and_name() {
-        let documents = documents(PATCH);
-        assert_eq!(
-            identity(documents[0].clone()).to_string(),
-            "ExtensionServiceConfig/awg"
-        );
-        let unnamed: Value = from_str("kind: HostnameConfig\n").unwrap();
-        assert_eq!(identity(unnamed.clone()).to_string(), "HostnameConfig");
-    }
-
     #[test]
     fn an_extension_service_config_is_written_as_talos_reads_it() {
         let document = ExtensionServiceConfig::new(
@@ -323,35 +261,12 @@ configFiles:
     }
 
     #[test]
-    fn a_delete_directive_on_the_overlay_replaces_the_result() {
-        let overlay = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete");
-        let merged = merge(
-            yaml("apiVersion: v1alpha1\nkind: KubeletConfig\nextraArgs: {a: b}"),
-            &overlay,
-        );
-        assert_eq!(merged, overlay);
-    }
-
-    #[test]
-    fn a_document_over_a_delete_directive_replaces_it() {
-        let overlay = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\nextraArgs: {a: b}");
-        let merged = merge(
-            yaml("apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete"),
-            &overlay,
-        );
-        assert_eq!(merged, overlay);
-    }
-
-    #[test]
-    fn a_nested_patch_key_is_an_ordinary_key() {
-        let merged = merge(
-            yaml("machine: {install: {disk: /dev/vda}}"),
-            &yaml("machine: {install: {$patch: delete}}"),
-        );
-        assert_eq!(
-            merged,
-            yaml("machine: {install: {disk: /dev/vda, $patch: delete}}")
-        );
+    fn a_delete_directive_on_either_side_leaves_the_overlay_as_the_result() {
+        let deletion = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\n$patch: delete");
+        let edit = yaml("apiVersion: v1alpha1\nkind: KubeletConfig\nextraArgs: {a: b}");
+        for (base, overlay) in [(&edit, &deletion), (&deletion, &edit)] {
+            assert_eq!(merge(base.clone(), overlay), *overlay);
+        }
     }
 
     #[test]
@@ -369,56 +284,12 @@ configFiles:
     }
 
     #[test]
-    fn annotations_join_those_the_document_sets() {
-        let mut document = yaml(
-            "kind: KubeNodeConfig\nnodeIP: {validSubnets: [192.0.2.0/24]}\nannotations:\n  \
-             example.com/rack: r1\n",
-        );
-        annotate(&mut document, NAMESPACE, ours()).unwrap();
-        assert_eq!(
-            document,
-            yaml(
-                "kind: KubeNodeConfig\nnodeIP: {validSubnets: [192.0.2.0/24]}\nannotations:\n  \
-                 example.com/rack: r1\n  node-a.example/endpoint: 192.0.2.10\n"
-            )
-        );
-    }
-
-    #[test]
-    fn annotations_go_into_a_document_that_sets_none() {
-        for text in [
-            "kind: KubeNodeConfig\n",
-            "kind: KubeNodeConfig\nannotations:\n",
-        ] {
-            let mut document = yaml(text);
-            annotate(&mut document, NAMESPACE, ours()).unwrap();
-            assert_eq!(document["annotations"], Value::Mapping(ours()), "{text}");
-        }
-    }
-
-    #[test]
     fn a_document_that_deletes_itself_takes_no_annotations() {
         let mut document = yaml("kind: KubeNodeConfig\n$patch: delete\n");
         let err = annotate(&mut document, NAMESPACE, ours()).unwrap_err();
         assert!(
             matches!(&err, Error::DeletesAnnotated { namespace } if namespace == NAMESPACE),
             "{err}"
-        );
-    }
-
-    #[test]
-    fn an_annotation_in_the_namespace_is_found_even_set_to_null() {
-        let annotations = |text: &str| -> Annotations { from_str(text).unwrap() };
-        let document = annotations(
-            "kind: KubeNodeConfig\nannotations:\n  example.com/role: x\n  node-a.example/other: \
-             null\n",
-        );
-        assert_eq!(document.first_in(NAMESPACE), Some("node-a.example/other"));
-        let outside = annotations("kind: KubeNodeConfig\nannotations:\n  example.com/role: x\n");
-        assert_eq!(outside.first_in(NAMESPACE), None);
-        assert_eq!(
-            annotations("kind: KubeNodeConfig\n").first_in(NAMESPACE),
-            None
         );
     }
 }

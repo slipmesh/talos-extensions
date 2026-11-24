@@ -169,20 +169,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn final_line_has_a_code_and_a_space() {
-        assert!(is_final_line("0001 BIRD 2.19.2 ready.\n"));
-        assert!(is_final_line("8002 syntax error\n"));
-        assert!(is_final_line("0000 \n"));
-    }
-
-    #[test]
-    fn dash_separated_line_is_a_continuation() {
-        assert!(!is_final_line("0013-mesh       OSPF       master4    up\n"));
-    }
-
-    #[test]
-    fn bare_leading_space_line_is_a_continuation() {
-        assert!(!is_final_line("     Second line continues\n"));
+    fn a_final_line_has_a_code_and_a_space_and_a_continuation_does_not() {
+        for (line, last) in [
+            ("0001 BIRD 2.19.2 ready.\n", true),
+            ("8002 syntax error\n", true),
+            ("0000 \n", true),
+            ("0013-mesh       OSPF       master4    up\n", false),
+            ("     Second line continues\n", false),
+        ] {
+            assert_eq!(is_final_line(line), last, "{line:?}");
+        }
     }
 
     #[test]
@@ -192,33 +188,15 @@ mod tests {
     }
 
     #[test]
-    fn bare_leading_space_line_has_no_code() {
-        assert_eq!(line_code("     kernel1 ...\n"), None);
-    }
-
-    #[test]
-    fn strips_dash_prefix() {
-        assert_eq!(strip_code_prefix("0013-mesh OSPF up\n"), "mesh OSPF up\n");
-    }
-
-    #[test]
-    fn strips_final_line_prefix() {
-        assert_eq!(strip_code_prefix("0001 ready.\n"), "ready.\n");
-    }
-
-    #[test]
-    fn strips_bare_space_continuation_prefix() {
-        assert_eq!(strip_code_prefix(" continued text\n"), "continued text\n");
-    }
-
-    #[test]
-    fn leaves_a_line_with_no_prefix_at_all_untouched() {
-        assert_eq!(strip_code_prefix("no prefix here\n"), "no prefix here\n");
-    }
-
-    #[test]
-    fn leaves_a_line_with_digits_but_no_real_separator_untouched() {
-        assert_eq!(strip_code_prefix("0001\n"), "0001\n");
+    fn a_code_prefix_is_stripped_and_a_line_without_a_separator_left() {
+        for (line, text) in [
+            ("0013-mesh OSPF up\n", "mesh OSPF up\n"),
+            ("0001 ready.\n", "ready.\n"),
+            (" continued text\n", "continued text\n"),
+            ("0001\n", "0001\n"),
+        ] {
+            assert_eq!(strip_code_prefix(line), text, "{line:?}");
+        }
     }
 
     #[test]

@@ -337,7 +337,7 @@ bgp_peers:
   - {name: node-b, address: "3fff::2"}
 bfd: {min_rx_ms: 300, min_tx_ms: 300, multiplier: 5}
 ospf_interfaces: [mesh-*]
-direct_interfaces: [lan0]
+direct_interfaces: [lan0, mesh-*, eth0.100]
 announce:
   - {net: 203.0.113.192/26}
 learn: [203.0.113.128/26]
@@ -358,7 +358,15 @@ learn: [203.0.113.128/26]
         assert!(out.contains("route 192.0.2.0/24 blackhole; # example"));
         assert!(out.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
         assert!(out.contains("min rx interval 300 ms;"));
-        assert!(out.contains("protocol direct direct_lan0 {"));
+        assert!(out.contains("timeformat protocol iso long;"));
+        assert!(out.contains(
+            "protocol direct direct1 {\n    interface \"router-lo\";\n    ipv4 { import all; };\n}"
+        ));
+        assert!(out.contains(
+            "protocol direct direct_lan0 {\n    interface \"lan0\";\n    ipv4 { import all; };\n}"
+        ));
+        assert!(out.contains("protocol direct direct_mesh__ {"));
+        assert!(out.contains("protocol direct direct_eth0_100 {"));
     }
 
     /// `VARIABLES` is what a template is checked against, the context is what it gets - a field
@@ -518,50 +526,6 @@ learn: [203.0.113.128/26]
     }
 
     #[test]
-    fn render_includes_ospf_interfaces_as_quoted_names_and_globs() {
-        let ifaces = patterns(&["mesh-*", "lan0"]);
-        let out = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
-        assert!(out.contains("interface \"mesh-*\" { type ptp;"));
-        assert!(out.contains("interface \"lan0\" { type ptp;"));
-        assert!(out.contains("interface \"router-lo\" { stub yes; };"));
-    }
-
-    #[test]
-    fn render_direct_interfaces_is_empty_by_default() {
-        let out = render(identity(), 64512, &inputs(&[], &[], &[], &[], &[])).unwrap();
-        assert!(out.contains("protocol direct direct1 {"));
-        assert!(!out.contains("protocol direct direct_"));
-    }
-
-    /// bird_exporter reads a protocol's "Since" field to compute uptime, and only understands
-    /// this format - without it, every protocol reports zero uptime.
-    #[test]
-    fn render_sets_the_timeformat_bird_exporter_needs_for_uptime() {
-        let out = render(identity(), 64512, &inputs(&[], &[], &[], &[], &[])).unwrap();
-        assert!(out.contains("timeformat protocol iso long;"));
-    }
-
-    #[test]
-    fn render_includes_a_protocol_direct_block_per_direct_interface() {
-        let direct_interfaces = patterns(&["cni0"]);
-        let out = render(
-            identity(),
-            64512,
-            &inputs_with_direct(&[], &[], &[], &[], &[], &direct_interfaces),
-        )
-        .unwrap();
-        let block = out
-            .split("protocol direct direct_cni0 {")
-            .nth(1)
-            .expect("a protocol direct block named after the interface must be present")
-            .split("\n}\n")
-            .next()
-            .unwrap();
-        assert!(block.contains("interface \"cni0\";"));
-        assert!(block.contains("ipv4 { import all; };"));
-    }
-
-    #[test]
     fn render_direct_interfaces_get_distinct_sanitized_protocol_ids() {
         let direct_interfaces = patterns(&["cni0", "my-bridge"]);
         let out = render(
@@ -573,56 +537,6 @@ learn: [203.0.113.128/26]
         assert!(out.contains("protocol direct direct_cni0 {"));
         assert!(out.contains("protocol direct direct_my_bridge {"));
         assert!(out.contains("interface \"my-bridge\";"));
-    }
-
-    #[test]
-    fn render_includes_bgp_peer_with_sanitized_protocol_id() {
-        let peers = vec![BgpPeerEntry {
-            name: "east-1".to_string(),
-            address: "3fff::2".parse().unwrap(),
-        }];
-        let out = render(identity(), 64512, &inputs(&[], &peers, &[], &[], &[])).unwrap();
-        assert!(out.contains("protocol bgp ibgp6_east_1 {"));
-        assert!(out.contains("neighbor 3fff::2 as 64512;"));
-        assert!(out.contains("local 3fff::1 as 64512;"));
-    }
-
-    #[test]
-    fn bypass_and_announce_diverge_on_route_kind() {
-        let bypass = vec![BypassRoute {
-            net: "192.0.2.0/24".to_string(),
-            label: "some vendor".to_string(),
-        }];
-        let announce = vec![AnnounceRoute {
-            net: "203.0.113.192/26".to_string(),
-            label: "k8s-services".to_string(),
-        }];
-        let out = render(
-            identity(),
-            64512,
-            &inputs(&[], &[], &bypass, &announce, &[]),
-        )
-        .unwrap();
-
-        let bypass_block = out
-            .split("protocol static BYPASS {")
-            .nth(1)
-            .unwrap()
-            .split("\n}\n")
-            .next()
-            .unwrap();
-        assert!(bypass_block.contains("blackhole;"));
-        assert!(!bypass_block.contains("via \"router-lo\""));
-
-        let announce_block = out
-            .split("protocol static ANNOUNCE {")
-            .nth(1)
-            .unwrap()
-            .split("\n}\n")
-            .next()
-            .unwrap();
-        assert!(announce_block.contains("via \"router-lo\";"));
-        assert!(!announce_block.contains("blackhole"));
     }
 
     #[test]
@@ -668,12 +582,6 @@ learn: [203.0.113.128/26]
             "legit label protocol static evil { route 0.0.0.0/0 blackhole; }"
         );
         assert_eq!(sanitize_comment("plain label"), "plain label");
-    }
-
-    #[test]
-    fn sanitize_protocol_id_replaces_invalid_characters() {
-        assert_eq!(sanitize_protocol_id("east-1"), "east_1");
-        assert_eq!(sanitize_protocol_id("east.example"), "east_example");
     }
 
     #[test]

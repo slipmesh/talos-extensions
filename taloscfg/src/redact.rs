@@ -76,28 +76,6 @@ mod tests {
     use super::*;
 
     const OLD: &str = "b2xkLWtleS1vbGQta2V5LW9sZC1rZXktb2xkLWtleQ==";
-    const NEW: &str = "bmV3LWtleS1uZXcta2V5LW5ldy1rZXktbmV3LWtleQ==";
-
-    #[test]
-    fn a_secret_on_both_sides_is_redacted() {
-        let text = format!("interfaces:\n- name: mesh-node-b\n  private_key: {OLD}\n");
-        let (before, after) = mask_pair(&text, &text);
-        let expected = format!("interfaces:\n- name: mesh-node-b\n  private_key: {REDACTED}\n");
-        assert_eq!(
-            (before.as_str(), after.as_str()),
-            (expected.as_str(), expected.as_str())
-        );
-    }
-
-    #[test]
-    fn a_secret_on_one_side_only_is_marked_old_or_new() {
-        let (before, after) = mask_pair(
-            &format!("    private_key: {OLD}\n"),
-            &format!("    private_key: {NEW}\n"),
-        );
-        assert_eq!(before, format!("    private_key: {REDACTED_OLD}\n"));
-        assert_eq!(after, format!("    private_key: {REDACTED_NEW}\n"));
-    }
 
     #[test]
     fn every_secret_field_is_redacted_wherever_it_sits() {

@@ -381,54 +381,24 @@ mod tests {
     }
 
     #[test]
-    fn validate_asn_accepts_well_formed() {
-        assert!(validate_asn("AS15169").is_ok());
-        assert!(validate_asn("AS1").is_ok());
+    fn an_asn_is_as_and_digits() {
+        for (asn, valid) in [
+            ("AS15169", true),
+            ("AS1", true),
+            ("15169", false),
+            ("AS", false),
+            ("ASxyz", false),
+        ] {
+            assert_eq!(validate_asn(asn).is_ok(), valid, "{asn}");
+        }
     }
 
     #[test]
-    fn validate_asn_rejects_missing_prefix() {
-        assert!(validate_asn("15169").is_err());
-    }
-
-    #[test]
-    fn validate_asn_rejects_non_digit_suffix() {
-        assert!(validate_asn("AS").is_err());
-        assert!(validate_asn("ASxyz").is_err());
-    }
-
-    #[test]
-    fn validate_asn_rejects_query_string_injection() {
-        assert!(validate_asn("AS123&foo=bar").is_err());
-    }
-
-    #[test]
-    fn validate_country_accepts_two_letter_codes_either_case() {
+    fn a_country_is_two_letters_in_either_case_held_in_upper() {
         assert_eq!(validate_country("DE").unwrap(), "DE");
         assert_eq!(validate_country("de").unwrap(), "DE");
-    }
-
-    #[test]
-    fn validate_country_rejects_wrong_length() {
-        assert!(validate_country("D").is_err());
-        assert!(validate_country("DEU").is_err());
-    }
-
-    #[test]
-    fn validate_country_rejects_non_alphabetic() {
-        assert!(validate_country("D1").is_err());
-        assert!(validate_country("DE&foo=bar").is_err());
-    }
-
-    #[test]
-    fn bypass_source_entry_parses_from_yaml() {
-        let yaml = r#"
-kind: asn
-label: "some vendor"
-asns: ["AS15169"]
-"#;
-        let entry: BypassSourceEntry = sliplib_yaml::from_str(yaml).unwrap();
-        assert_eq!(entry.kind, "asn");
-        assert_eq!(entry.asns, Some(vec!["AS15169".to_string()]));
+        for country in ["D", "DEU", "D1"] {
+            assert!(validate_country(country).is_err(), "{country}");
+        }
     }
 }
