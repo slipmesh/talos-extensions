@@ -254,34 +254,40 @@ mod tests {
     }
 
     #[test]
-    fn reads_handshake_and_byte_counters_for_one_peer() {
-        let attrs = vec![AmneziaWireguardAttribute::Peers(vec![
-            AmneziaWireguardPeer(vec![
-                AmneziaWireguardPeerAttribute::PublicKey(KEY),
-                handshake_at(1_700_000_000),
-                AmneziaWireguardPeerAttribute::RxBytes(4096),
-                AmneziaWireguardPeerAttribute::TxBytes(2048),
-            ]),
-        ])];
-        assert_eq!(
-            merge_peer_attrs(&attrs).get(&key_b64()),
-            Some(&PeerStats {
-                last_handshake: 1_700_000_000,
-                rx_bytes: 4096,
-                tx_bytes: 2048,
-            })
-        );
-    }
-
-    #[test]
-    fn a_negative_handshake_timestamp_reads_as_never() {
-        let attrs = vec![AmneziaWireguardAttribute::Peers(vec![
-            AmneziaWireguardPeer(vec![
-                AmneziaWireguardPeerAttribute::PublicKey(KEY),
-                handshake_at(-1),
-            ]),
-        ])];
-        assert_eq!(merge_peer_attrs(&attrs)[&key_b64()].last_handshake, 0);
+    fn a_peer_reads_its_handshake_and_counters_a_negative_time_as_never_and_none_without_a_key() {
+        let peers = |attrs| {
+            vec![AmneziaWireguardAttribute::Peers(vec![
+                AmneziaWireguardPeer(attrs),
+            ])]
+        };
+        let stats = |last_handshake, rx_bytes, tx_bytes| PeerStats {
+            last_handshake,
+            rx_bytes,
+            tx_bytes,
+        };
+        for (attrs, read) in [
+            (
+                vec![
+                    AmneziaWireguardPeerAttribute::PublicKey(KEY),
+                    handshake_at(1_700_000_000),
+                    AmneziaWireguardPeerAttribute::RxBytes(4096),
+                    AmneziaWireguardPeerAttribute::TxBytes(2048),
+                ],
+                Some(stats(1_700_000_000, 4096, 2048)),
+            ),
+            (
+                vec![
+                    AmneziaWireguardPeerAttribute::PublicKey(KEY),
+                    handshake_at(-1),
+                ],
+                Some(stats(0, 0, 0)),
+            ),
+            (vec![AmneziaWireguardPeerAttribute::RxBytes(1)], None),
+        ] {
+            let merged = merge_peer_attrs(&peers(attrs));
+            assert_eq!(merged.get(&key_b64()), read.as_ref());
+            assert_eq!(merged.len(), usize::from(read.is_some()));
+        }
     }
 
     fn tracked(index: u32, peers: &[(&str, &[&str])]) -> TrackedInterface {
@@ -305,57 +311,30 @@ mod tests {
     }
 
     #[test]
-    fn a_peer_with_every_route_installed_is_connected() {
-        let snap = snapshot_from(
-            &[tracked(
-                4,
-                &[("peer-a", &["203.0.113.1/32", "203.0.113.2/32"])],
-            )],
-            &installed(4, &["203.0.113.1/32", "203.0.113.2/32"]),
-            1_700_000_000,
-        );
-        assert_eq!(snap.taken_unix, 1_700_000_000);
-        assert!(
-            snap.connected
-                .contains(&("iface4".to_string(), "peer-a".to_string()))
-        );
-    }
-
-    #[test]
-    fn a_peer_missing_one_of_its_routes_is_not_connected() {
-        // What a failed `route_add` looks like: the pass logged it and carried on, so the verdict
-        // must not claim a route that isn't in the kernel.
-        let snap = snapshot_from(
-            &[tracked(
-                4,
-                &[("peer-a", &["203.0.113.1/32", "203.0.113.2/32"])],
-            )],
-            &installed(4, &["203.0.113.1/32"]),
-            1_700_000_000,
-        );
-        assert!(snap.connected.is_empty());
-    }
-
-    #[test]
-    fn an_interface_with_no_installed_routes_at_all_yields_nothing() {
-        let snap = snapshot_from(
-            &[tracked(4, &[("peer-a", &["203.0.113.1/32"])])],
-            &HashMap::new(),
-            1_700_000_000,
-        );
-        assert!(snap.connected.is_empty());
-    }
-
-    #[test]
-    fn a_peer_with_an_empty_allowed_ips_list_is_never_connected() {
-        // `all()` over an empty list is vacuously true - a peer with nothing to install must not
-        // read as connected on the strength of that.
-        let snap = snapshot_from(
-            &[tracked(4, &[("peer-a", &[])])],
-            &installed(4, &["203.0.113.1/32"]),
-            1_700_000_000,
-        );
-        assert!(snap.connected.is_empty());
+    fn a_peer_is_connected_only_with_every_one_of_its_routes_installed() {
+        let both: &[&str] = &["203.0.113.1/32", "203.0.113.2/32"];
+        for (allowed, installed, connected) in [
+            (both, installed(4, both), true),
+            // What a failed `route_add` looks like: the pass logged it and carried on.
+            (both, installed(4, &["203.0.113.1/32"]), false),
+            (&["203.0.113.1/32"][..], HashMap::new(), false),
+            // `all()` over nothing is true: a peer with nothing to install is not connected.
+            (&[][..], installed(4, &["203.0.113.1/32"]), false),
+        ] {
+            let snap = snapshot_from(
+                &[tracked(4, &[("peer-a", allowed)])],
+                &installed,
+                1_700_000_000,
+            );
+            assert_eq!(snap.taken_unix, 1_700_000_000);
+            assert_eq!(
+                snap.connected
+                    .contains(&("iface4".to_string(), "peer-a".to_string())),
+                connected,
+                "{allowed:?}"
+            );
+            assert!(connected || snap.connected.is_empty(), "{allowed:?}");
+        }
     }
 
     fn handshake_secs_ago(now: u64, ago: u64) -> PeerStats {
@@ -405,13 +384,5 @@ mod tests {
                 remove: set(&["198.51.100.1/32", "203.0.113.3/32", "203.0.113.4/32"]),
             }
         );
-    }
-
-    #[test]
-    fn a_peer_frame_without_a_public_key_is_skipped() {
-        let attrs = vec![AmneziaWireguardAttribute::Peers(vec![
-            AmneziaWireguardPeer(vec![AmneziaWireguardPeerAttribute::RxBytes(1)]),
-        ])];
-        assert!(merge_peer_attrs(&attrs).is_empty());
     }
 }
