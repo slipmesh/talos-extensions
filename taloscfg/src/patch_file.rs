@@ -521,10 +521,11 @@ content: "table inet x {{}}"
 
     #[test]
     fn files_added_to_nftables_need_a_firewall_template_that_reaches_the_node() {
+        let narrower =
+            adding_to("nftables").replace("platform: talos}", "platform: talos, include: [b]}");
         let raw = format!(
-            "{}{}{}",
+            "{}{narrower}{}",
             with_router_files(&[("", TEMPLATE)]),
-            adding_to("nftables"),
             adding_to("nftables")
         );
         let a = render_raw(&raw, "a").unwrap();
@@ -534,10 +535,16 @@ content: "table inet x {{}}"
             "/etc/talos-extensions/extra"
         );
         let err = format!("{:#}", render_raw(&raw, "b").unwrap_err());
+        let line = |at: usize| raw[..at].lines().count() + 1;
+        let narrower_at = raw.find(&narrower).unwrap() + "---\n".len();
+        let broader_at = raw.rfind(&adding_to("nftables")).unwrap() + "---\n".len();
+        let by_rank = format!(
+            "the `kind: patch` document at line {} and the `kind: patch` document at line {}",
+            line(broader_at),
+            line(narrower_at)
+        );
         assert!(
-            err.contains("nftables")
-                && err.contains("\"b\"")
-                && err.contains(" and the `kind: patch` document at line"),
+            err.contains("nftables") && err.contains("\"b\"") && err.contains(&by_rank),
             "{err}"
         );
     }
