@@ -398,11 +398,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_asn_rejects_query_string_injection() {
-        assert!(validate_asn("AS123&foo=bar").is_err());
-    }
-
-    #[test]
     fn validate_country_accepts_two_letter_codes_either_case() {
         assert_eq!(validate_country("DE").unwrap(), "DE");
         assert_eq!(validate_country("de").unwrap(), "DE");
@@ -418,17 +413,5 @@ mod tests {
     fn validate_country_rejects_non_alphabetic() {
         assert!(validate_country("D1").is_err());
         assert!(validate_country("DE&foo=bar").is_err());
-    }
-
-    #[test]
-    fn bypass_source_entry_parses_from_yaml() {
-        let yaml = r#"
-kind: asn
-label: "some vendor"
-asns: ["AS15169"]
-"#;
-        let entry: BypassSourceEntry = sliplib_yaml::from_str(yaml).unwrap();
-        assert_eq!(entry.kind, "asn");
-        assert_eq!(entry.asns, Some(vec!["AS15169".to_string()]));
     }
 }

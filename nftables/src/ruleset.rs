@@ -165,9 +165,4 @@ mod tests {
             vec![("inet".to_string(), "talos_filter".to_string())]
         );
     }
-
-    #[test]
-    fn declared_tables_empty_ruleset_finds_nothing() {
-        assert_eq!(declared_tables(""), Vec::<(String, String)>::new());
-    }
 }

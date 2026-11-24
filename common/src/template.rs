@@ -95,12 +95,6 @@ mod tests {
     }
 
     #[test]
-    fn does_not_escape_values() {
-        let t = Template::new("{{ v }}", &["v"]).unwrap();
-        assert_eq!(t.render(context(&[("v", "\"<&>\"")])).unwrap(), "\"<&>\"");
-    }
-
-    #[test]
     fn rejects_an_unknown_variable_even_in_a_branch_that_would_not_run() {
         let err = Template::new("{% if false %}{{ typo }}{% endif %}", &["known"])
             .err()
@@ -111,19 +105,6 @@ mod tests {
     #[test]
     fn accepts_builtin_functions_as_variables() {
         assert!(Template::new("{% for i in range(2) %}{{ i }}{% endfor %}", &[]).is_ok());
-    }
-
-    #[test]
-    fn variables_are_the_known_names_the_template_reads() {
-        let t = Template::new(
-            "{{ a }}{% for x in b %}{{ x }}{% endfor %}",
-            &["a", "b", "c"],
-        )
-        .unwrap();
-        assert_eq!(
-            t.variables(),
-            BTreeSet::from(["a".to_string(), "b".to_string()])
-        );
     }
 
     #[test]

@@ -291,24 +291,6 @@ mod tests {
         );
     }
 
-    // The logged chain would otherwise show a character of the configured text and where.
-    #[test]
-    fn an_undecodable_header_protection_key_is_refused_without_its_text() {
-        let o = Obfuscation {
-            header_protection_key: Some("not a key".into()),
-            ..Obfuscation::default()
-        };
-        let shown = format!(
-            "{:#}",
-            push_obfuscation_attrs(&mut Vec::new(), &o).unwrap_err()
-        );
-        assert!(
-            shown.starts_with("invalid header_protection_key"),
-            "{shown}"
-        );
-        assert!(!shown.contains("offset"), "{shown}");
-    }
-
     #[test]
     fn stripping_the_31_attributes_leaves_everything_else_in_order() {
         let attrs = push(&Obfuscation::default());

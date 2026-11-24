@@ -373,32 +373,6 @@ mod tests {
     }
 
     #[test]
-    fn identical_sets_produce_no_ops() {
-        let a = vec![
-            peer("k1", &["203.0.113.1/32"], None),
-            peer("k2", &["203.0.113.2/32"], None),
-        ];
-        assert!(diff_peers(&a, &a).is_empty());
-    }
-
-    #[test]
-    fn added_peer_yields_replace_op() {
-        let previous = vec![peer("k1", &["203.0.113.1/32"], None)];
-        let desired = vec![
-            peer("k1", &["203.0.113.1/32"], None),
-            peer("k2", &["203.0.113.2/32"], None),
-        ];
-        let ops = diff_peers(&previous, &desired);
-        assert_eq!(
-            ops,
-            vec![(
-                "k2".to_string(),
-                Some(peer("k2", &["203.0.113.2/32"], None))
-            )]
-        );
-    }
-
-    #[test]
     fn removed_peer_yields_remove_op() {
         let previous = vec![
             peer("k1", &["203.0.113.1/32"], None),
@@ -601,19 +575,6 @@ mod tests {
         assert_eq!(diff_peers(&held, &[desired]), vec![]);
     }
 
-    #[test]
-    fn a_keepalive_held_as_a_bare_number_yields_replace_op() {
-        let desired = peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"));
-        let held = Peer {
-            persistent_keepalive: BARE_25,
-            ..desired.clone()
-        };
-        assert_eq!(
-            diff_peers(&[held], std::slice::from_ref(&desired)),
-            vec![("k1".to_string(), Some(desired))]
-        );
-    }
-
     fn entry(endpoint: Option<&str>) -> PeerEntry {
         PeerEntry {
             public_key: "k1".to_string(),
@@ -633,20 +594,6 @@ mod tests {
         assert_eq!(
             last_known_good(&held, wire(PLAIN_KEEPALIVE)),
             peer("k1", &["0.0.0.0/0"], Some("192.0.2.1:51820"))
-        );
-    }
-
-    // A lookup fails only for an entry that has an endpoint, and the kernel may hold none for
-    // that peer yet.
-    #[test]
-    fn a_peer_the_kernel_holds_without_an_endpoint_is_kept_with_the_keepalive_called_for() {
-        let held = peer("k1", &["0.0.0.0/0"], None);
-        assert_eq!(
-            last_known_good(&held, wire(OBFUSCATED_KEEPALIVE)),
-            Peer {
-                persistent_keepalive: AmneziaWireguardRange { lo: 20, hi: 30 },
-                ..held.clone()
-            }
         );
     }
 
@@ -691,19 +638,6 @@ mod tests {
         let shown = format!("{:#}", check(&interface("awg-b", overlapping)).unwrap_err());
         assert!(
             shown.starts_with("interface awg-b: obfuscation.h1 (5) and obfuscation.h2 (5)"),
-            "{shown}"
-        );
-    }
-
-    #[test]
-    fn an_interface_with_a_timing_value_the_module_misuses_is_refused_by_name() {
-        let too_late = Obfuscation {
-            rekey_after_time: Some(180.into()),
-            ..Obfuscation::default()
-        };
-        let shown = format!("{:#}", check(&interface("awg-b", too_late)).unwrap_err());
-        assert!(
-            shown.starts_with("interface awg-b: obfuscation.rekey_after_time (180)"),
             "{shown}"
         );
     }

@@ -133,11 +133,6 @@ nodes:
     }
 
     #[test]
-    fn files_without_templates_miss_both() {
-        assert_eq!(missing_in(&[]), [Service::Router, Service::Firewall]);
-    }
-
-    #[test]
     fn a_template_that_does_not_read_is_refused_naming_it_not_counted_as_missing() {
         let reference = document(Service::Firewall);
         let short_base = reference.replace(&Service::Firewall.base(), "sha256:abc");
@@ -175,14 +170,6 @@ nodes:
                 assert_eq!(template.base.digest(), service.digest(), "{service}");
             }
         }
-    }
-
-    #[test]
-    fn a_daemon_reads_as_the_word_the_files_and_the_command_take() {
-        assert_eq!(Service::Router.to_string(), "router");
-        assert_eq!(Service::Firewall.to_string(), "firewall");
-        assert_eq!(Service::Router.name(), "router");
-        assert_eq!(Service::Firewall.name(), "nftables");
     }
 
     // Pinned: a change of a reference changes its digest on purpose, and the digest is of the

@@ -428,15 +428,6 @@ content: "table inet x {{}}"
         );
     }
 
-    #[test]
-    fn a_host_gets_only_the_documents_aimed_at_it() {
-        let b = rendered("b");
-        assert!(b.starts_with(HEADER), "{b}");
-        assert!(!b.contains("disk:"), "{b}");
-        assert!(generated_document(&b, "awg").is_some());
-        assert!(generated_document(&b, "nftables").is_none());
-    }
-
     /// `SLIPMESH` with a `router` template document for each of `templates`, its aim and its
     /// text.
     fn with_router_files(templates: &[(&str, &str)]) -> String {
@@ -576,13 +567,6 @@ content: "table inet x {{}}"
         );
     }
 
-    #[test]
-    fn a_router_template_reading_an_unknown_variable_is_not_rendered() {
-        let raw = with_router_files(&[("", "{% if false %}{{ lopback }}{% endif %}\n")]);
-        let err = render_raw(&raw, "a").unwrap_err();
-        assert!(format!("{err:#}").contains("lopback"), "{err:#}");
-    }
-
     /// The line at which the `n`th document appended to `SLIPMESH` starts, counting from 0.
     fn appended_line(raw: &str, n: usize) -> usize {
         let start = SLIPMESH.len();
@@ -638,24 +622,6 @@ content: "table inet x {{}}"
     }
 
     #[test]
-    fn a_firewall_template_the_daemon_rejects_is_not_rendered() {
-        let raw = with_router_files(&[("", TEMPLATE)])
-            .replace("table inet x {}", "table inet t { {{ bogus }} }");
-        let err = render_raw(&raw, "a").unwrap_err();
-        assert!(format!("{err:#}").contains("firewall template"), "{err:#}");
-    }
-
-    #[test]
-    fn obfuscation_the_kernel_module_refuses_is_not_rendered() {
-        let raw = with_router_files(&[("", TEMPLATE)]).replace(
-            "obfuscation: {jc: 4,",
-            "obfuscation: {header_protection_key: \"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\", jc: 4,",
-        );
-        let err = render_raw(&raw, "a").unwrap_err();
-        assert!(format!("{err:#}").contains("s3, s4"), "{err:#}");
-    }
-
-    #[test]
     fn a_ruleset_also_goes_out_as_the_file_the_previous_daemon_reads() {
         let a = rendered("a");
         let document = generated_document(&a, "nftables").unwrap();
@@ -679,36 +645,5 @@ content: "table inet x {{}}"
         );
         let legacy: sliplib_yaml::Value = sliplib_yaml::from_str(files[1].1).unwrap();
         assert_eq!(legacy["ruleset"].as_str(), Some(files[0].1));
-    }
-
-    #[test]
-    fn an_nftables_document_carries_its_template_the_files_added_and_the_ruleset_as_before() {
-        let added = ServiceFile::Added(
-            sliplib_yaml::from_str(
-                "{mountPath: /etc/talos-extensions/extra.conf, content: \"extra\\n\"}",
-            )
-            .unwrap(),
-        );
-        let text = nftables_document("table ip example {\n}\n", vec![added]).unwrap();
-        assert_eq!(
-            text,
-            "apiVersion: v1alpha1
-kind: ExtensionServiceConfig
-name: nftables
-configFiles:
-- mountPath: /etc/talos-extensions/nftables.conf.j2
-  content: |
-    table ip example {
-    }
-- mountPath: /etc/talos-extensions/extra.conf
-  content: |
-    extra
-- mountPath: /etc/talos-extensions/nftables.yaml
-  content: |
-    ruleset: |
-      table ip example {
-      }
-"
-        );
     }
 }

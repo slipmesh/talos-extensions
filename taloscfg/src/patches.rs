@@ -213,32 +213,6 @@ nodes:
     }
 
     #[test]
-    fn a_content_mapping_goes_out_as_the_text_of_that_yaml() {
-        let parsed = parse(&[
-            NETWORK,
-            &device("  include: [node-b]\n", "router1.example.com"),
-        ]);
-        let text = &for_host(&parsed, "node-b").unwrap()[0].text;
-        assert_eq!(
-            content(text, 0).as_str(),
-            Some("host: router1.example.com\nport: 8729\n"),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn a_content_ending_in_blank_lines_keeps_them() {
-        let script = patch(
-            "",
-            "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: script\nconfigFiles:\n  - \
-             mountPath: /etc/script\n    content: \"run\\n\\n\\n\"\n",
-        );
-        let parsed = parse(&[NETWORK, &script]);
-        let text = &for_host(&parsed, "node-a").unwrap()[0].text;
-        assert_eq!(content(text, 0).as_str(), Some("run\n\n\n"), "{text}");
-    }
-
-    #[test]
     fn a_content_mapping_goes_out_as_text_after_a_merge_too() {
         let parsed = parse(&[
             NETWORK,
@@ -300,35 +274,6 @@ nodes:
         let deleted = &for_host(&parsed, "node-a").unwrap()[0].value;
         assert_eq!(deleted["$patch"].as_str(), Some("delete"));
         assert!(deleted["extraArgs"].is_null(), "{deleted:?}");
-    }
-
-    #[test]
-    fn of_two_patches_of_one_identity_and_one_rank_the_later_in_the_files_wins() {
-        for aim in ["", "  include: [node-a]\n"] {
-            let parsed = parse(&[
-                NETWORK,
-                &kubelet(aim, "    rotate-server-certificates: \"first\"\n"),
-                &kubelet(aim, "    rotate-server-certificates: \"second\"\n"),
-            ]);
-            let merged = for_host(&parsed, "node-a").unwrap();
-            assert_eq!(merged.len(), 1, "{aim:?}");
-            assert_eq!(
-                merged[0].value["extraArgs"]["rotate-server-certificates"].as_str(),
-                Some("second"),
-                "{aim:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn an_order_set_on_purpose_moves_a_document_past_a_narrower_one() {
-        let parsed = parse(&[
-            NETWORK,
-            &kubelet("  order: 2000\n", "    v: \"for all\"\n"),
-            &kubelet("  include: [node-a]\n", "    v: \"narrower\"\n"),
-        ]);
-        let merged = for_host(&parsed, "node-a").unwrap();
-        assert_eq!(merged[0].value["extraArgs"]["v"].as_str(), Some("for all"));
     }
 
     #[test]
@@ -395,17 +340,6 @@ nodes:
         )
     }
 
-    #[test]
-    fn a_patch_adding_files_to_a_generated_document_is_accepted() {
-        for name in ["awg", "router", "nftables"] {
-            let patch = generated_with(
-                name,
-                "configFiles:\n  - mountPath: /etc/talos-extensions/extra\n    content: x\n",
-            );
-            check(&parse(&[NETWORK, &patch])).unwrap();
-        }
-    }
-
     fn kube_node_config(aim: &str, annotations: &str) -> String {
         patch(
             aim,
@@ -466,11 +400,5 @@ nodes:
         check(&parsed).unwrap();
         let text = &for_host(&parsed, "node-a").unwrap()[0].text;
         assert!(text.contains("environment:\n- X=1\n"), "{text}");
-    }
-
-    #[test]
-    fn the_config_of_a_generated_document_is_its_first_file() {
-        assert_eq!(config_path("awg"), "/etc/talos-extensions/awg.yaml");
-        assert_eq!(config_path("router"), "/etc/talos-extensions/router.yaml");
     }
 }

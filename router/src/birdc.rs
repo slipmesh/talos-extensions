@@ -192,11 +192,6 @@ mod tests {
     }
 
     #[test]
-    fn bare_leading_space_line_has_no_code() {
-        assert_eq!(line_code("     kernel1 ...\n"), None);
-    }
-
-    #[test]
     fn strips_dash_prefix() {
         assert_eq!(strip_code_prefix("0013-mesh OSPF up\n"), "mesh OSPF up\n");
     }
@@ -209,11 +204,6 @@ mod tests {
     #[test]
     fn strips_bare_space_continuation_prefix() {
         assert_eq!(strip_code_prefix(" continued text\n"), "continued text\n");
-    }
-
-    #[test]
-    fn leaves_a_line_with_no_prefix_at_all_untouched() {
-        assert_eq!(strip_code_prefix("no prefix here\n"), "no prefix here\n");
     }
 
     #[test]

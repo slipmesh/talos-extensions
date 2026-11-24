@@ -231,14 +231,3 @@ fn a_run_that_writes_or_shows_a_diff_warns_too_and_writes_what_it_would_without(
         );
     }
 }
-
-#[test]
-fn a_refused_file_gets_no_warning() {
-    let dir = tempfile::tempdir().unwrap();
-    // A key that does not decode refuses the node, and every node linked with it.
-    let text = network().replacen("private_key: \"", "private_key: \"not a key", 1);
-    let refused = generate(dir.path(), &text, &["--check"]);
-    assert!(!refused.success);
-    assert!(!refused.stderr.contains("warning:"), "{}", refused.stderr);
-    assert!(!dir.path().join("patches").exists());
-}

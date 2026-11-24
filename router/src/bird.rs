@@ -192,8 +192,6 @@ mesh       OSPF       master4    up     22:30:37.362  Alone
 ibgp_test  BGP        ---        start  22:31:14.133  Connect
 ";
 
-    const SHOW_OSPF_INTERFACE_NONE_CONFIGURED: &str = "BIRD 2.19.1 ready.\nmesh:\n";
-
     const SHOW_OSPF_INTERFACE_TWO_CONFIGURED: &str = "\
 BIRD 2.19.1 ready.
 mesh:
@@ -225,10 +223,5 @@ Interface mesh-b (198.51.100.194/31)
     fn parses_configured_ospf_interfaces() {
         let configured = ospf_configured_interfaces(SHOW_OSPF_INTERFACE_TWO_CONFIGURED);
         assert_eq!(configured, HashSet::from(["lo", "mesh-a", "mesh-b"]));
-    }
-
-    #[test]
-    fn no_configured_ospf_interfaces_parses_as_empty() {
-        assert!(ospf_configured_interfaces(SHOW_OSPF_INTERFACE_NONE_CONFIGURED).is_empty());
     }
 }

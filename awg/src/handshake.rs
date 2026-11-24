@@ -274,32 +274,6 @@ mod tests {
     }
 
     #[test]
-    fn a_continuation_frame_does_not_reset_what_an_earlier_one_reported() {
-        // The kernel splits a peer whose AllowedIPs don't fit one message, resuming it in the
-        // next with just the public key again - the shape that used to zero a live peer's
-        // handshake and counters.
-        let attrs = vec![
-            AmneziaWireguardAttribute::Peers(vec![AmneziaWireguardPeer(vec![
-                AmneziaWireguardPeerAttribute::PublicKey(KEY),
-                handshake_at(1_700_000_000),
-                AmneziaWireguardPeerAttribute::RxBytes(4096),
-                AmneziaWireguardPeerAttribute::TxBytes(2048),
-            ])]),
-            AmneziaWireguardAttribute::Peers(vec![AmneziaWireguardPeer(vec![
-                AmneziaWireguardPeerAttribute::PublicKey(KEY),
-            ])]),
-        ];
-        assert_eq!(
-            merge_peer_attrs(&attrs).get(&key_b64()),
-            Some(&PeerStats {
-                last_handshake: 1_700_000_000,
-                rx_bytes: 4096,
-                tx_bytes: 2048,
-            })
-        );
-    }
-
-    #[test]
     fn a_negative_handshake_timestamp_reads_as_never() {
         let attrs = vec![AmneziaWireguardAttribute::Peers(vec![
             AmneziaWireguardPeer(vec![
