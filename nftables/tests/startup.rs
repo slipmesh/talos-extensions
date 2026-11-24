@@ -1,16 +1,15 @@
 //! The binary as Talos runs it, with no environment and without root: only the start that fails
 //! before it touches the node.
 
+use nftables::template::TEMPLATE_PATH;
 use std::path::Path;
 use std::process::Command;
-
-const TEMPLATE: &str = "/etc/talos-extensions/nftables.conf.j2";
 
 #[test]
 fn a_start_without_rust_log_logs_the_version_then_fails_on_a_missing_template() {
     assert!(
-        !Path::new(TEMPLATE).exists(),
-        "{TEMPLATE} exists on this host"
+        !Path::new(TEMPLATE_PATH).exists(),
+        "{TEMPLATE_PATH} exists on this host"
     );
     let output = Command::new(env!("CARGO_BIN_EXE_nftables"))
         .env_remove("RUST_LOG")
@@ -23,7 +22,7 @@ fn a_start_without_rust_log_logs_the_version_then_fails_on_a_missing_template() 
     assert!(log.contains(version_line), "{log}");
     assert!(
         log.contains(&format!(
-            "failed to read template {TEMPLATE}: No such file or directory"
+            "failed to read template {TEMPLATE_PATH}: No such file or directory"
         )),
         "{log}"
     );

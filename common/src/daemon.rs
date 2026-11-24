@@ -7,6 +7,12 @@ use sliplib_config::router::RouterConfig;
 use std::net::SocketAddr;
 use std::path::Path;
 
+/// Where Talos mounts the config `taloscfg` writes for `awg`, and the only place `awg` reads one.
+pub const AWG_CONFIG_PATH: &str = "/etc/talos-extensions/awg.yaml";
+/// Where Talos mounts the config `taloscfg` writes for `router`, and the only place `router` reads
+/// one.
+pub const ROUTER_CONFIG_PATH: &str = "/etc/talos-extensions/router.yaml";
+
 /// Where a daemon serves its Prometheus endpoint.
 #[derive(Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub struct MetricsConfig {

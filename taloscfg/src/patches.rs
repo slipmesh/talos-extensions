@@ -4,6 +4,7 @@
 use crate::defaults::Service;
 use crate::talos::{self, AddedToGenerated, Annotations, Identity};
 use anyhow::{Context, Result, bail};
+use common::daemon::{AWG_CONFIG_PATH, ROUTER_CONFIG_PATH};
 use sliplib_config::v2::{AimedDocument, File};
 use sliplib_yaml::Value;
 
@@ -15,28 +16,16 @@ pub(crate) const LEGACY_NFTABLES_PATH: &str = "/etc/talos-extensions/nftables.ya
 /// of one of these names is that same document: it may add files to it, and nothing else - not a
 /// file the generator writes.
 const GENERATED: [(&str, &[&str]); 3] = [
-    ("awg", &["/etc/talos-extensions/awg.yaml"]),
+    ("awg", &[AWG_CONFIG_PATH]),
     (
         Service::Router.name(),
-        &[
-            "/etc/talos-extensions/router.yaml",
-            Service::Router.mount_path(),
-        ],
+        &[ROUTER_CONFIG_PATH, Service::Router.mount_path()],
     ),
     (
         Service::Firewall.name(),
         &[Service::Firewall.mount_path(), LEGACY_NFTABLES_PATH],
     ),
 ];
-
-/// The config file the generator writes into its document `name`, `awg` or `router`.
-pub(crate) fn config_path(name: &str) -> &'static str {
-    let (_, files) = GENERATED
-        .iter()
-        .find(|(generated, _)| *generated == name)
-        .expect("only generated documents are asked for");
-    files[0]
-}
 
 /// One Talos document as it goes into one host's patch file, serialized - its comments stay in
 /// `slipmesh.yaml`.
@@ -301,11 +290,11 @@ nodes:
             ));
         }
         for (name, path) in [
-            ("awg", "/etc/talos-extensions/awg.yaml"),
-            ("router", "/etc/talos-extensions/router.yaml"),
-            ("router", "/etc/talos-extensions/router.conf.j2"),
-            ("nftables", "/etc/talos-extensions/nftables.conf.j2"),
-            ("nftables", "/etc/talos-extensions/nftables.yaml"),
+            ("awg", AWG_CONFIG_PATH),
+            ("router", ROUTER_CONFIG_PATH),
+            ("router", router::bird_conf::TEMPLATE_PATH),
+            ("nftables", nftables::template::TEMPLATE_PATH),
+            ("nftables", LEGACY_NFTABLES_PATH),
         ] {
             cases.push((
                 generated_with(

@@ -9,7 +9,9 @@ use crate::documents::{Listener, TalosSettings, Template};
 use crate::patches::{self, HostDocument, LEGACY_NFTABLES_PATH};
 use crate::talos::{self, ConfigFile, ExtensionServiceConfig, ServiceFile};
 use anyhow::{Context, Result, bail};
-use common::daemon::{AwgDaemonConfig, MetricsConfig, RouterDaemonConfig};
+use common::daemon::{
+    AWG_CONFIG_PATH, AwgDaemonConfig, MetricsConfig, ROUTER_CONFIG_PATH, RouterDaemonConfig,
+};
 use sliplib_config::router::RouterConfig;
 use sliplib_config::v2::{AimedDocument, File};
 use sliplib_mesh::Mesh;
@@ -25,14 +27,6 @@ pub const HEADER: &str =
 fn render_extension_service_document(name: &str, files: Vec<ServiceFile>) -> Result<String> {
     sliplib_yaml::to_string(&ExtensionServiceConfig::new(name, files))
         .context("serializing an ExtensionServiceConfig document")
-}
-
-/// The config of the daemon `name`, already serialized, as the file the generator writes for it.
-fn config_file(name: &str, inner_yaml: String) -> ConfigFile {
-    ConfigFile {
-        mount_path: patches::config_path(name).to_owned(),
-        content: inner_yaml,
-    }
 }
 
 /// The `patch` documents in `patches` that add to the generated document `name`, merged - taken
@@ -215,17 +209,17 @@ fn render_node(
     };
 
     let mut patches = patches::for_host(files, host)?;
-    let awg = std::iter::once(ServiceFile::Generated(config_file(
-        "awg",
-        sliplib_yaml::to_string(&awg_cfg)?,
-    )))
+    let awg = std::iter::once(ServiceFile::Generated(ConfigFile {
+        mount_path: AWG_CONFIG_PATH.to_owned(),
+        content: sliplib_yaml::to_string(&awg_cfg)?,
+    }))
     .chain(added_files(take_added(&mut patches, "awg").as_ref()))
     .collect();
     let router = [
-        config_file(
-            Service::Router.name(),
-            sliplib_yaml::to_string(&router_cfg)?,
-        ),
+        ConfigFile {
+            mount_path: ROUTER_CONFIG_PATH.to_owned(),
+            content: sliplib_yaml::to_string(&router_cfg)?,
+        },
         ConfigFile {
             mount_path: Service::Router.mount_path().to_owned(),
             content: router_template,
@@ -506,7 +500,7 @@ content: "table inet x {{}}"
         assert_eq!(
             paths,
             [
-                "/etc/talos-extensions/router.yaml",
+                ROUTER_CONFIG_PATH,
                 router::bird_conf::TEMPLATE_PATH,
                 "/etc/talos-extensions/extra",
             ]
@@ -655,10 +649,7 @@ content: "table inet x {{}}"
             .collect();
         assert_eq!(
             files.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
-            [
-                "/etc/talos-extensions/nftables.conf.j2",
-                "/etc/talos-extensions/nftables.yaml"
-            ]
+            [nftables::template::TEMPLATE_PATH, LEGACY_NFTABLES_PATH]
         );
         let legacy: sliplib_yaml::Value = sliplib_yaml::from_str(files[1].1).unwrap();
         assert_eq!(legacy["ruleset"].as_str(), Some(files[0].1));

@@ -1,7 +1,7 @@
 use router::{bird, bird_conf, bird_process, exporter, resolver};
 
 use anyhow::{Context, Result};
-use common::daemon::{MetricsConfig, RouterDaemonConfig};
+use common::daemon::{MetricsConfig, ROUTER_CONFIG_PATH, RouterDaemonConfig};
 use common::netlink::rt::RtClient;
 use sliplib_config::router as config;
 use sliplib_runtime::Shutdown;
@@ -10,10 +10,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::Mutex;
-
-/// Fixed path, matching `extension-services/router.yaml`'s `configFiles[].mountPath` - never an
-/// env var or CLI flag (same invariant `awg`'s `CONFIG_PATH` documents).
-const CONFIG_PATH: &str = "/etc/talos-extensions/router.yaml";
 
 /// Relative to this service's own entrypoint directory: the extension stages `bird` in
 /// `/usr/local/lib/containers/router/` beside this binary, the same convention
@@ -112,7 +108,7 @@ async fn run(shutdown: Shutdown) -> Result<()> {
 
 /// Everything before `bird` is spawned: config, template, `router-lo`, and a `bird.conf` on disk.
 async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
-    let daemon = RouterDaemonConfig::read(Path::new(CONFIG_PATH))
+    let daemon = RouterDaemonConfig::read(Path::new(ROUTER_CONFIG_PATH))
         .context("failed to read the config file")?;
     daemon.validate().context("config validation failed")?;
     let RouterDaemonConfig { mesh: cfg, metrics } = daemon;

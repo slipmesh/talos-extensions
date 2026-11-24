@@ -1,6 +1,6 @@
 use awg::handshake::ReconcileSnapshot;
 use awg::{gc, handshake, interface, metrics};
-use common::daemon::{AwgDaemonConfig, MetricsConfig};
+use common::daemon::{AWG_CONFIG_PATH, AwgDaemonConfig, MetricsConfig};
 use sliplib_config::awg as config;
 
 use anyhow::{Context, Result};
@@ -11,10 +11,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
-
-/// Fixed path, matching `extension-services/awg.yaml`'s `configFiles[].mountPath` - never an env
-/// var or CLI flag: everything comes from the `ExtensionServiceConfig`, nothing else.
-const CONFIG_PATH: &str = "/etc/talos-extensions/awg.yaml";
 
 /// Inside the 10 s Talos waits after SIGTERM before it sends SIGKILL.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -38,8 +34,8 @@ async fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    let daemon =
-        AwgDaemonConfig::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
+    let daemon = AwgDaemonConfig::read(Path::new(AWG_CONFIG_PATH))
+        .context("failed to read the config file")?;
     daemon.validate().context("config validation failed")?;
     let cfg = Arc::new(daemon.mesh);
 
