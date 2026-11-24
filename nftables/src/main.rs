@@ -67,6 +67,7 @@ where
     Fut: Future<Output = Result<Option<String>>>,
 {
     common::retry::retry(
+        &format!("the {family} default route lookup"),
         DEFAULT_ROUTE_TRIES,
         DEFAULT_ROUTE_RETRY_INTERVAL,
         || async {

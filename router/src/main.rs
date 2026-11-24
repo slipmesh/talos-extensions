@@ -198,7 +198,13 @@ async fn current_bypass_routes(ctx: &RouterState) -> Vec<bird_conf::BypassRoute>
     let resolved = match cached {
         Some(_) => resolve().await,
         None => {
-            common::retry::retry(BYPASS_STARTUP_TRIES, BYPASS_STARTUP_RETRY_INTERVAL, resolve).await
+            common::retry::retry(
+                "bypass resolution",
+                BYPASS_STARTUP_TRIES,
+                BYPASS_STARTUP_RETRY_INTERVAL,
+                resolve,
+            )
+            .await
         }
     };
     match (resolved, cached) {
@@ -211,11 +217,18 @@ async fn current_bypass_routes(ctx: &RouterState) -> Vec<bird_conf::BypassRoute>
             routes
         }
         (Err(e), Some(routes)) => {
-            tracing::warn!(error = %e, "bypass resolution failed, keeping last-known-good routes");
+            tracing::warn!(
+                error = %format_args!("{e:#}"),
+                "bypass resolution failed, keeping last-known-good routes"
+            );
             routes
         }
         (Err(e), None) => {
-            tracing::warn!(error = %e, "bypass resolution failed with nothing cached yet - serving no bypass routes this pass");
+            tracing::warn!(
+                error = %format_args!("{e:#}"),
+                "bypass resolution failed with nothing cached yet - serving no bypass routes this \
+                 pass"
+            );
             Vec::new()
         }
     }

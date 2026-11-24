@@ -295,13 +295,17 @@ pub async fn ensure_interface(
             Err(e) => match previous.iter().find(|p| p.public_key == peer.public_key) {
                 Some(existing) => {
                     tracing::warn!(
-                        interface = %iface.name, peer = %peer.public_key, error = %e,
+                        interface = %iface.name,
+                        peer = %peer.public_key,
+                        error = %format_args!("{e:#}"),
                         "failed to resolve peer, keeping its last-known-good state this pass"
                     );
                     desired.push(last_known_good(existing, keepalive));
                 }
                 None => tracing::warn!(
-                    interface = %iface.name, peer = %peer.public_key, error = %e,
+                    interface = %iface.name,
+                    peer = %peer.public_key,
+                    error = %format_args!("{e:#}"),
                     "failed to resolve new peer with no previous state, skipping it this pass"
                 ),
             },
