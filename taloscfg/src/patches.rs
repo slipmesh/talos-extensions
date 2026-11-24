@@ -88,7 +88,8 @@ fn check_one(patch: &AimedDocument) -> Result<()> {
         if let Some(over) = added
             .config_files
             .iter()
-            .map(|file| file.mount_path.as_str())
+            .flatten()
+            .filter_map(|file| file.mount_path.as_deref())
             .find(|path| generated.contains(path))
         {
             bail!(
@@ -409,22 +410,19 @@ nodes:
     }
 
     #[test]
-    fn a_typo_in_the_second_of_two_patches_names_that_patch_its_entry_and_line() {
+    fn a_key_set_in_the_second_of_two_patches_names_that_patch_and_its_line() {
         let first = generated_with(
             "awg",
             "configFiles:\n  - mountPath: /etc/talos-extensions/extra\n    content: x\n",
         );
-        let second = generated_with(
-            "awg",
-            "configFiles:\n  - mountpath: /etc/talos-extensions/other\n    content: y\n",
-        );
+        let second = generated_with("awg", "environment: [X=1]\n");
         let documents = [NETWORK, &first, &second];
         let err = error(&documents);
         let start = line_of(&documents, 2);
         assert!(
             err.contains(&format!("the `kind: patch` document at line {start}"))
-                && err.contains("configFiles[0]: unknown field `mountpath`")
-                && err.contains(&format!("at line {}", start + 7)),
+                && err.contains("unknown field `environment`")
+                && err.contains(&format!("at line {}", start + 6)),
             "{err}"
         );
     }

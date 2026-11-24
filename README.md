@@ -440,14 +440,15 @@ configFiles:
 ```
 
 The generator reads of a `patch` document only what it uses: its `apiVersion`, `kind` and `name`,
-each a string, a `KubeNodeConfig`'s `annotations`, a mapping, and what is set on a generated
+each a string, a `KubeNodeConfig`'s `annotations`, a mapping, and the keys set on a generated
 document. A value of the wrong type there is refused at its key and line; every other key goes to
 Talos as written.
 
 A `patch` document may also name a generated `ExtensionServiceConfig`, `awg`, `router` or
 `nftables`, to add files to it: the files follow the generated ones in that same document, since
-Talos takes one document per name. It may set `configFiles` and nothing else, each entry a
-`mountPath` and a `content`, and none of them at a path the generator writes. A `patch` that adds
+Talos takes one document per name. It may set `configFiles` and nothing else. Of an entry the
+generator reads only `mountPath`, a string, and refuses one at a path the generator writes; the
+entry goes to Talos as written. A `patch` that adds
 files to `nftables` on a node no `firewall` template reaches is refused, since that node gets no
 `nftables` document.
 
@@ -565,6 +566,12 @@ more: delete the one version 1 wrote for it.
 
 After v1.15.0-beta.0+sm.5, `awg` reads no `handshake_stale_secs`: a config that has it is read and
 the key ignored, and a tracked peer's routes go 180 seconds after its last handshake.
+
+After v1.15.0-beta.0+sm.5, an entry of `ospf_interfaces` or `direct_interfaces`, in `slipmesh.yaml`
+or a daemon's config, is refused when it is a CIDR, empty, or holds `?`, a `*` before the end or
+another character outside an interface name. `slipmesh-taloscfg` refuses at the check a `patch`
+whose `apiVersion`, `kind`, `name` or the `mountPath` of a file it adds to a generated document is
+not a string, or whose `KubeNodeConfig` `annotations` are not a mapping.
 
 Since v1.15.0-beta.0+sm.4, a peer's `advanced_security` is gone from the config: a file that still
 has it is read and the key ignored. The module reads no per-peer switch; header protection is the

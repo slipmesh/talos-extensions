@@ -78,11 +78,19 @@ pub struct ExtensionServiceConfig {
     pub api_version: String,
     pub kind: String,
     pub name: String,
-    pub config_files: Vec<ConfigFile>,
+    pub config_files: Vec<ServiceFile>,
+}
+
+/// A file of an `ExtensionServiceConfig`: one the generator writes, or one a patch adds, as written.
+#[derive(Serialize, Debug)]
+#[serde(untagged)]
+pub enum ServiceFile {
+    Generated(ConfigFile),
+    Added(Value),
 }
 
 impl ExtensionServiceConfig {
-    pub fn new(name: &str, config_files: Vec<ConfigFile>) -> Self {
+    pub fn new(name: &str, config_files: Vec<ServiceFile>) -> Self {
         Self {
             api_version: API_VERSION.into(),
             kind: EXTENSION_SERVICE_CONFIG.into(),
@@ -92,7 +100,7 @@ impl ExtensionServiceConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigFile {
     pub mount_path: String,
@@ -111,16 +119,14 @@ pub struct AddedToGenerated {
     #[serde(rename = "name")]
     _name: IgnoredAny,
     #[serde(rename = "configFiles", default)]
-    pub config_files: Vec<AddedFile>,
+    pub config_files: Option<Vec<AddedFile>>,
 }
 
-/// A mapping or a list as `content` becomes its text later.
+/// Of a file a patch adds, where it goes: every other key goes to Talos as written.
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AddedFile {
-    pub mount_path: String,
-    #[serde(rename = "content")]
-    _content: Value,
+    #[serde(rename = "mountPath", default, deserialize_with = "string")]
+    pub mount_path: Option<String>,
 }
 
 /// A `KubeNodeConfig`'s annotations, values unread: `null` is one too.
@@ -285,10 +291,10 @@ configFiles:
     fn an_extension_service_config_is_written_as_talos_reads_it() {
         let document = ExtensionServiceConfig::new(
             "awg",
-            vec![ConfigFile {
+            vec![ServiceFile::Generated(ConfigFile {
                 mount_path: "/etc/node-a/awg.yaml".into(),
                 content: "interfaces: []\n".into(),
-            }],
+            })],
         );
         let expected: Value = from_str(
             "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: awg\nconfigFiles:\n  - \
