@@ -16,4 +16,8 @@ exclude_re = [
     "replace ensure_loopback ",
     # Wording of a refusal: what a visitor expects.
     "Visitor<.*>::expecting",
+    # Only the fixed `/run/bird.ctl`.
+    "replace force_reconfigure ",
+    # Only the fixed `/run/bird/bird.conf` and socket; `bird::reconcile` is tested with its own.
+    "router/src/main.rs:.*replace reconcile ",
 ]
