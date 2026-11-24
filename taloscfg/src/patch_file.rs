@@ -103,7 +103,6 @@ fn publish_annotations(patches: Vec<HostDocument>, annotations: Mapping) -> Vec<
 }
 
 /// The templates a node gets: of those that reach it, the last by rank for each daemon.
-#[derive(Default)]
 struct Templates {
     router: Option<String>,
     firewall: Option<String>,

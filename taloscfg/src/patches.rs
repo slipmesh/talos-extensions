@@ -87,6 +87,14 @@ fn check_one(patch: &AimedDocument) -> Result<()> {
     Ok(())
 }
 
+/// An identity's documents merged, by rank.
+struct Merged<'a> {
+    first_seen: usize,
+    identity: &'a Identity,
+    places: Vec<String>,
+    value: Value,
+}
+
 /// The Talos documents that go into `host`'s patch file, in the order their identities first
 /// appear in the files.
 ///
@@ -111,31 +119,36 @@ pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
         .collect();
     by_rank.sort_by_key(|(_, _, patch)| patch.aim().rank());
 
-    // Each identity with where it first appears, its documents' places and their merge.
-    let mut merged: Vec<(usize, &Identity, Vec<String>, Value)> = Vec::new();
+    let mut merged: Vec<Merged> = Vec::new();
     for (at, identity, patch) in by_rank {
         let place = patch.aim().to_string();
-        match merged.iter_mut().find(|(_, of, ..)| *of == identity) {
-            Some((first_seen, _, places, value)) => {
-                *first_seen = (*first_seen).min(at);
-                places.push(place);
+        match merged.iter_mut().find(|merged| merged.identity == identity) {
+            Some(merged) => {
+                merged.first_seen = merged.first_seen.min(at);
+                merged.places.push(place);
                 // Sequences replace rather than append: Talos appends by a key only its types know.
-                *value = sliplib_yaml::merge(std::mem::take(value), patch.value());
+                merged.value =
+                    sliplib_yaml::merge(std::mem::take(&mut merged.value), patch.value());
             }
-            None => merged.push((at, identity, vec![place], patch.value().clone())),
+            None => merged.push(Merged {
+                first_seen: at,
+                identity,
+                places: vec![place],
+                value: patch.value().clone(),
+            }),
         }
     }
-    merged.sort_by_key(|(first_seen, ..)| *first_seen);
+    merged.sort_by_key(|merged| merged.first_seen);
 
     merged
         .into_iter()
-        .map(|(_, identity, places, mut document)| {
-            let origin = places.join(" and ");
-            talos::contents_as_text(&mut document).with_context(|| origin.clone())?;
+        .map(|mut merged| {
+            let origin = merged.places.join(" and ");
+            talos::contents_as_text(&mut merged.value).with_context(|| origin.clone())?;
             Ok(HostDocument {
-                identity: identity.to_string(),
+                identity: merged.identity.to_string(),
                 origin,
-                value: document,
+                value: merged.value,
             })
         })
         .collect()

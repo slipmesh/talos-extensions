@@ -54,10 +54,9 @@ One interface can freely mix both kinds of peer.
 
 ### Config
 
-Read from a fixed path (`/etc/talos-extensions/awg.yaml` inside the container, matching
-`extension-services/awg.yaml`'s `mountPath`) - never an environment variable or CLI flag. The whole
-file is rendered into the node's machine config as an `ExtensionServiceConfig` document's
-`configFiles[].content`. See talos-installer's
+Read from a fixed path (`/etc/talos-extensions/awg.yaml` inside the container) - never an
+environment variable or CLI flag. The whole file is rendered into the node's machine config as an
+`ExtensionServiceConfig` document's `configFiles[].content`. See talos-installer's
 [docs/awg.md](https://github.com/slipmesh/talos-installer/blob/main/docs/awg.md) for a full
 machine config example.
 
