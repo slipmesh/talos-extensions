@@ -411,7 +411,9 @@ content: "table inet x {{}}"
         let raw = format!(
             "{}---\nslipmesh:\n  kind: patch\n  platform: talos\napiVersion: v1alpha1\nkind: \
              KubeNodeConfig\nnodeIP:\n  \
-             validSubnets: [192.0.2.0/24]\nannotations:\n  example.com/rack: r1\n",
+             validSubnets: [192.0.2.0/24]\nannotations:\n  example.com/rack: r1\n---\nslipmesh:\n  \
+             kind: patch\n  platform: talos\napiVersion: v1alpha1\nkind: HostnameConfig\nhostname: \
+             node-a\n",
             with_router_files(&[("", TEMPLATE)])
         );
         let configs = kube_node_configs(&render_raw(&raw, "a").unwrap());
