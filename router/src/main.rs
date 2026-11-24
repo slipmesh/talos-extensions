@@ -85,8 +85,9 @@ async fn run(shutdown: Shutdown) -> Result<()> {
         () = shutdown.requested() => return bird_process::shut_down(bird_child).await,
     }
 
-    if ctx.mesh.bypass.is_some() {
-        tokio::spawn(bypass_refresh_loop(ctx.clone()));
+    if let Some(bypass) = &ctx.mesh.bypass {
+        let refresh_interval = Duration::from_secs(bypass.refresh_interval_secs);
+        tokio::spawn(bypass_refresh_loop(ctx.clone(), refresh_interval));
     }
     tokio::spawn(bird_health_watchdog(ctx.clone()));
 
@@ -221,17 +222,9 @@ async fn current_bypass_routes(ctx: &RouterState) -> Vec<bird_conf::BypassRoute>
     }
 }
 
-/// Runs forever as its own background task - only spawned when `ctx.mesh.bypass` is `Some` (see
-/// `run()`). The periodic re-resolve must happen even without any external trigger, since there's
-/// no watch mechanism at all in this daemon.
-async fn bypass_refresh_loop(ctx: Arc<RouterState>) -> ! {
-    let refresh_interval = Duration::from_secs(
-        ctx.mesh
-            .bypass
-            .as_ref()
-            .expect("only spawned when bypass is Some")
-            .refresh_interval_secs,
-    );
+/// Runs forever as its own background task, re-resolving every `refresh_interval`: nothing else
+/// triggers a re-resolve, since this daemon watches nothing.
+async fn bypass_refresh_loop(ctx: Arc<RouterState>, refresh_interval: Duration) -> ! {
     let mut tick = tokio::time::interval(refresh_interval);
     tick.tick().await; // first tick fires immediately; the real work already happened at startup
     loop {

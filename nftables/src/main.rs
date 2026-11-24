@@ -108,10 +108,7 @@ async fn watchdog(rendered: String) -> Result<()> {
                 continue;
             }
         };
-        let stdout = monitor
-            .stdout
-            .take()
-            .expect("just configured with Stdio::piped()");
+        let stdout = monitor.stdout.take().context("nft monitor has no stdout")?;
         let mut lines = BufReader::new(stdout).lines();
 
         loop {

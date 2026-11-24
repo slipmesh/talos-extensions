@@ -64,7 +64,7 @@ async fn ripestat_get(url: &str) -> Result<serde_json::Value> {
     let _permit = RIPESTAT_CONCURRENCY
         .acquire()
         .await
-        .expect("RIPESTAT_CONCURRENCY semaphore is never closed");
+        .context("the RIPEstat request limit is closed")?;
     client
         .get(format!("{url}&sourceapp={RIPESTAT_SOURCEAPP}"))
         .send()

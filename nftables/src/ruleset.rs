@@ -81,7 +81,7 @@ pub async fn apply(ruleset: &str) -> Result<()> {
     child
         .stdin
         .take()
-        .expect("just configured with Stdio::piped()")
+        .context("nft has no stdin")?
         .write_all(ruleset.as_bytes())
         .await
         .context("failed to write ruleset to nft stdin")?;
