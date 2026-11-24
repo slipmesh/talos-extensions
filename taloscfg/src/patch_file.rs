@@ -9,12 +9,14 @@ use crate::documents::{Listener, TalosSettings, Template};
 use crate::patches::{self, HostDocument, LEGACY_NFTABLES_PATH};
 use crate::talos::{self, ConfigFile, ExtensionServiceConfig, ServiceFile};
 use anyhow::{Context, Result, bail};
-use common::daemon::{AwgDaemonConfig, MetricsConfig, RouterDaemonConfig};
+use common::daemon::{
+    AWG_CONFIG_PATH, AwgDaemonConfig, MetricsConfig, ROUTER_CONFIG_PATH, RouterDaemonConfig,
+};
 use sliplib_config::router::RouterConfig;
-use sliplib_config::v2::File;
+use sliplib_config::v2::{AimedDocument, File};
 use sliplib_mesh::Mesh;
 use sliplib_mesh::render::{NodeConfigs, node_configs};
-use sliplib_yaml::Mapping;
+use sliplib_yaml::{Mapping, Value};
 use std::net::Ipv4Addr;
 
 /// What opens every patch file this tool writes.
@@ -25,14 +27,6 @@ pub const HEADER: &str =
 fn render_extension_service_document(name: &str, files: Vec<ServiceFile>) -> Result<String> {
     sliplib_yaml::to_string(&ExtensionServiceConfig::new(name, files))
         .context("serializing an ExtensionServiceConfig document")
-}
-
-/// The config of the daemon `name`, already serialized, as the file the generator writes for it.
-fn config_file(name: &str, inner_yaml: String) -> ConfigFile {
-    ConfigFile {
-        mount_path: patches::config_path(name).to_owned(),
-        content: inner_yaml,
-    }
 }
 
 /// The `patch` documents in `patches` that add to the generated document `name`, merged - taken
@@ -70,24 +64,19 @@ fn legacy_nftables_file(ruleset: String) -> Result<ConfigFile> {
     })
 }
 
-/// The `nftables` document of a node whose ruleset template is `template`: the template, the files
-/// `added` beside it, and the ruleset as [`legacy_nftables_file`] gives it.
-pub(crate) fn nftables_document(template: &str, added: Vec<ServiceFile>) -> Result<String> {
+/// The files of the `nftables` document of a node whose ruleset template is `template`: the
+/// template, the files `added` beside it, and the ruleset as [`legacy_nftables_file`] gives it.
+fn nftables_config_files(template: &str, added: Vec<ServiceFile>) -> Result<Vec<ServiceFile>> {
     let template_file = ConfigFile {
         mount_path: Service::Firewall.mount_path().to_owned(),
         content: template.to_owned(),
     };
-    let files = std::iter::once(ServiceFile::Generated(template_file))
+    Ok(std::iter::once(ServiceFile::Generated(template_file))
         .chain(added)
         .chain([ServiceFile::Generated(legacy_nftables_file(
             template.to_owned(),
         )?)])
-        .collect();
-    sliplib_yaml::to_string(&ExtensionServiceConfig::new(
-        Service::Firewall.name(),
-        files,
-    ))
-    .context("serializing the nftables document")
+        .collect())
 }
 
 /// Refuses a router template the node would fail on: one that does not compile, reads a variable
@@ -98,62 +87,64 @@ fn validate_router_template(template: &str, cfg: &RouterConfig) -> Result<()> {
     Ok(())
 }
 
-/// Puts `annotations` into the `KubeNodeConfig` among `patches`, or into a new one when they have
-/// none: Talos takes one.
-fn publish_annotations(patches: &mut Vec<HostDocument>, annotations: Mapping) -> Result<()> {
-    let index = match patches
+/// The documents of `patches`, `annotations` put into their `KubeNodeConfig`, or into a new one
+/// when they have none: Talos takes one.
+fn publish_annotations(patches: Vec<HostDocument>, annotations: Mapping) -> Vec<Value> {
+    let given = patches
         .iter()
-        .position(|p| p.identity == talos::KUBE_NODE_CONFIG)
-    {
-        Some(index) => index,
-        None => {
-            let value = talos::kube_node_config();
-            patches.push(HostDocument {
-                identity: talos::KUBE_NODE_CONFIG.to_owned(),
-                origin: "the KubeNodeConfig the generator adds".to_owned(),
-                text: String::new(),
-                value,
-            });
-            patches.len() - 1
-        }
-    };
-    let document = &mut patches[index];
-    document.value = talos::annotate(std::mem::take(&mut document.value), annotations);
-    document.text =
-        sliplib_yaml::to_string(&document.value).context("serializing the KubeNodeConfig")?;
-    Ok(())
+        .position(|p| p.identity == talos::KUBE_NODE_CONFIG);
+    let mut documents: Vec<Value> = patches.into_iter().map(|patch| patch.value).collect();
+    let index = given.unwrap_or_else(|| {
+        documents.push(talos::kube_node_config());
+        documents.len() - 1
+    });
+    documents[index] = talos::annotate(std::mem::take(&mut documents[index]), annotations);
+    documents
 }
 
 /// The templates a node gets: of those that reach it, the last by rank for each daemon.
-#[derive(Default)]
 struct Templates {
     router: Option<String>,
     firewall: Option<String>,
 }
 
 impl Templates {
-    /// Refuses any template reaching `host` that its daemon would fail on, the ones another
-    /// overrides there included: narrowing that other one hands the node this text. A router
-    /// template is rendered with `router`, the node's config.
+    /// Refuses a template the node gets that its daemon would fail on. A router template is
+    /// rendered with `router`, the node's config.
     fn of(files: &File, host: &str, router: &RouterConfig) -> Result<Self> {
-        let mut templates = Self::default();
+        let mut router_template = None;
+        let mut firewall_template = None;
         for document in files.templates_for(host) {
             let template: Template = document.read()?;
-            let service = template.daemon;
-            let invalid = || format!("{}: the {service} template is invalid", document.aim());
-            match service {
-                Service::Router => {
-                    validate_router_template(&template.content, router).with_context(invalid)?;
-                    templates.router = Some(template.content);
-                }
-                Service::Firewall => {
-                    nftables::template::compile(template.content.clone()).with_context(invalid)?;
-                    templates.firewall = Some(template.content);
-                }
-            }
+            let last = match template.daemon {
+                Service::Router => &mut router_template,
+                Service::Firewall => &mut firewall_template,
+            };
+            *last = Some((document, template.content));
         }
-        Ok(templates)
+        Ok(Self {
+            router: checked(router_template, Service::Router, |content| {
+                validate_router_template(content, router)
+            })?,
+            firewall: checked(firewall_template, Service::Firewall, |content| {
+                nftables::template::compile(content).map(drop)
+            })?,
+        })
     }
+}
+
+/// The content of `last`, the `service` template a node gets, once `check` accepts it.
+fn checked(
+    last: Option<(&AimedDocument, String)>,
+    service: Service,
+    check: impl FnOnce(&str) -> Result<()>,
+) -> Result<Option<String>> {
+    last.map(|(document, content)| {
+        check(&content)
+            .with_context(|| format!("{}: the {service} template is invalid", document.aim()))?;
+        Ok(content)
+    })
+    .transpose()
 }
 
 /// The patch file of `host`, a node of `talos`, as the text written to disk. A refusal names the
@@ -201,17 +192,17 @@ fn render_node(
     };
 
     let mut patches = patches::for_host(files, host)?;
-    let awg = std::iter::once(ServiceFile::Generated(config_file(
-        "awg",
-        sliplib_yaml::to_string(&awg_cfg)?,
-    )))
+    let awg = std::iter::once(ServiceFile::Generated(ConfigFile {
+        mount_path: AWG_CONFIG_PATH.to_owned(),
+        content: sliplib_yaml::to_string(&awg_cfg)?,
+    }))
     .chain(added_files(take_added(&mut patches, "awg").as_ref()))
     .collect();
     let router = [
-        config_file(
-            Service::Router.name(),
-            sliplib_yaml::to_string(&router_cfg)?,
-        ),
+        ConfigFile {
+            mount_path: ROUTER_CONFIG_PATH.to_owned(),
+            content: sliplib_yaml::to_string(&router_cfg)?,
+        },
         ConfigFile {
             mount_path: Service::Router.mount_path().to_owned(),
             content: router_template,
@@ -230,7 +221,10 @@ fn render_node(
     let nftables_added = take_added(&mut patches, Service::Firewall.name());
     let nftables_files = added_files(nftables_added.as_ref());
     match (templates.firewall, nftables_added) {
-        (Some(ruleset), _) => generated.push(nftables_document(&ruleset, nftables_files)?),
+        (Some(ruleset), _) => generated.push(render_extension_service_document(
+            Service::Firewall.name(),
+            nftables_config_files(&ruleset, nftables_files)?,
+        )?),
         (None, Some(added)) if !nftables_files.is_empty() => bail!(
             "{}: adds files to `nftables`, which no `template` document for the firewall reaches \
              on this node, so it gets no `nftables` document - aim the `patch` or a template so \
@@ -241,8 +235,8 @@ fn render_node(
     }
 
     let node = network.node(host)?;
-    publish_annotations(
-        &mut patches,
+    let patches = publish_annotations(
+        patches,
         crate::annotations::for_node(&crate::annotations::Values {
             interface_prefix: network.interface_prefix(),
             classes: &network.network().routing.classes,
@@ -252,8 +246,11 @@ fn render_node(
                 .map(|endpoint| endpoint.host()),
             mesh_mtu: sliplib_mesh::mtu::mesh_mtu(network)?,
         }),
-    )?;
-    let patches: Vec<String> = patches.into_iter().map(|patch| patch.text).collect();
+    );
+    let patches = patches
+        .iter()
+        .map(|patch| sliplib_yaml::to_string(patch).context("serializing a patch document"))
+        .collect::<Result<Vec<String>>>()?;
 
     Ok(format!(
         "{HEADER}{}",
@@ -413,7 +410,9 @@ content: "table inet x {{}}"
         let raw = format!(
             "{}---\nslipmesh:\n  kind: patch\n  platform: talos\napiVersion: v1alpha1\nkind: \
              KubeNodeConfig\nnodeIP:\n  \
-             validSubnets: [192.0.2.0/24]\nannotations:\n  example.com/rack: r1\n",
+             validSubnets: [192.0.2.0/24]\nannotations:\n  example.com/rack: r1\n---\nslipmesh:\n  \
+             kind: patch\n  platform: talos\napiVersion: v1alpha1\nkind: HostnameConfig\nhostname: \
+             node-a\n",
             with_router_files(&[("", TEMPLATE)])
         );
         let configs = kube_node_configs(&render_raw(&raw, "a").unwrap());
@@ -492,7 +491,7 @@ content: "table inet x {{}}"
         assert_eq!(
             paths,
             [
-                "/etc/talos-extensions/router.yaml",
+                ROUTER_CONFIG_PATH,
                 router::bird_conf::TEMPLATE_PATH,
                 "/etc/talos-extensions/extra",
             ]
@@ -513,6 +512,7 @@ content: "table inet x {{}}"
             .filter(|document| document["name"] == "awg")
             .collect();
         assert_eq!(awg.len(), 1, "{a}");
+        assert_eq!(awg[0]["configFiles"][0]["mountPath"], AWG_CONFIG_PATH);
         assert_eq!(
             awg[0]["configFiles"][1]["mountPath"],
             "/etc/talos-extensions/extra"
@@ -521,8 +521,10 @@ content: "table inet x {{}}"
 
     #[test]
     fn files_added_to_nftables_need_a_firewall_template_that_reaches_the_node() {
+        let narrower =
+            adding_to("nftables").replace("platform: talos}", "platform: talos, include: [b]}");
         let raw = format!(
-            "{}{}",
+            "{}{narrower}{}",
             with_router_files(&[("", TEMPLATE)]),
             adding_to("nftables")
         );
@@ -533,10 +535,16 @@ content: "table inet x {{}}"
             "/etc/talos-extensions/extra"
         );
         let err = format!("{:#}", render_raw(&raw, "b").unwrap_err());
+        let line = |at: usize| raw[..at].lines().count() + 1;
+        let narrower_at = raw.find(&narrower).unwrap() + "---\n".len();
+        let broader_at = raw.rfind(&adding_to("nftables")).unwrap() + "---\n".len();
+        let by_rank = format!(
+            "the `kind: patch` document at line {} and the `kind: patch` document at line {}",
+            line(broader_at),
+            line(narrower_at)
+        );
         assert!(
-            err.contains("nftables")
-                && err.contains("\"b\"")
-                && err.contains("the `kind: patch` document at line"),
+            err.contains("nftables") && err.contains("\"b\"") && err.contains(&by_rank),
             "{err}"
         );
     }
@@ -588,15 +596,15 @@ content: "table inet x {{}}"
     }
 
     #[test]
-    fn a_template_another_overrides_everywhere_is_still_checked() {
+    fn only_the_template_a_node_gets_is_checked_on_it() {
         let router = with_router_files(&[
             ("", "{% if false %}{{ lopback }}{% endif %}\n"),
-            ("  include: [a, b]\n", TEMPLATE),
+            ("  include: [a]\n", TEMPLATE),
         ]);
         let firewall = format!(
             "{}---\nslipmesh: {{kind: template, platform: talos}}\ndaemon: firewall\nbase: \
              {BASE}\ncontent: \"table inet t {{ {{{{ bogus }}}} }}\"\n---\nslipmesh: {{kind: \
-             template, platform: talos, include: [a, b]}}\ndaemon: firewall\nbase: {BASE}\n\
+             template, platform: talos, include: [a]}}\ndaemon: firewall\nbase: {BASE}\n\
              content: \"table inet y {{}}\"\n",
             with_router_files(&[("", TEMPLATE)])
         );
@@ -604,7 +612,8 @@ content: "table inet x {{}}"
             (&router, 0, &["router template", "lopback"][..]),
             (&firewall, 1, &["firewall template"][..]),
         ] {
-            let err = format!("{:#}", render_raw(raw, "a").unwrap_err());
+            render_raw(raw, "a").unwrap();
+            let err = format!("{:#}", render_raw(raw, "b").unwrap_err());
             let place = format!(
                 "`kind: template` document at line {}",
                 appended_line(raw, index)
@@ -640,10 +649,7 @@ content: "table inet x {{}}"
             .collect();
         assert_eq!(
             files.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
-            [
-                "/etc/talos-extensions/nftables.conf.j2",
-                "/etc/talos-extensions/nftables.yaml"
-            ]
+            [nftables::template::TEMPLATE_PATH, LEGACY_NFTABLES_PATH]
         );
         let legacy: sliplib_yaml::Value = sliplib_yaml::from_str(files[1].1).unwrap();
         assert_eq!(legacy["ruleset"].as_str(), Some(files[0].1));

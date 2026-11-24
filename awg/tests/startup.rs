@@ -1,16 +1,15 @@
 //! The binary as Talos runs it, with no environment and without root: only the start that fails
 //! before it touches the node.
 
+use common::daemon::AWG_CONFIG_PATH;
 use std::path::Path;
 use std::process::Command;
-
-const CONFIG_FILE: &str = "/etc/talos-extensions/awg.yaml";
 
 #[test]
 fn a_start_without_rust_log_logs_the_version_then_fails_on_a_missing_config_file() {
     assert!(
-        !Path::new(CONFIG_FILE).exists(),
-        "{CONFIG_FILE} exists on this host"
+        !Path::new(AWG_CONFIG_PATH).exists(),
+        "{AWG_CONFIG_PATH} exists on this host"
     );
     let output = Command::new(env!("CARGO_BIN_EXE_awg"))
         .env_remove("RUST_LOG")
@@ -23,7 +22,7 @@ fn a_start_without_rust_log_logs_the_version_then_fails_on_a_missing_config_file
     assert!(log.contains(version_line), "{log}");
     assert!(
         log.contains(&format!(
-            "failed to read the config file: reading {CONFIG_FILE}: No such file or directory"
+            "failed to read the config file: reading {AWG_CONFIG_PATH}: No such file or directory"
         )),
         "{log}"
     );

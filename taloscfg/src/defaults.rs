@@ -75,22 +75,17 @@ impl std::fmt::Display for Service {
     }
 }
 
-/// The daemons for which no `template` document stands in `files` at all. A `template` document
-/// whose keys do not read is refused here, naming it, rather than counted as no template.
+/// Whether a `firewall` `template` document stands in `files` at all. A `template` document whose
+/// keys do not read is refused here, naming it, rather than counted as none.
 ///
-/// A template for some nodes only is not missing: who goes without it was decided by whoever
-/// aimed that document. A node no router template reaches is refused when its patch file is
-/// rendered, since `router` cannot run.
-pub fn missing(files: &File) -> Result<Vec<Service>, Error> {
-    let written = files
+/// One for some nodes only counts: who goes without it was decided by whoever aimed it.
+pub fn has_firewall_template(files: &File) -> Result<bool, Error> {
+    let daemons = files
         .templates()
         .iter()
         .map(|template| Ok(template.read::<Template>()?.daemon))
         .collect::<Result<Vec<Service>, Error>>()?;
-    Ok([Service::Router, Service::Firewall]
-        .into_iter()
-        .filter(|service| !written.contains(service))
-        .collect())
+    Ok(daemons.contains(&Service::Firewall))
 }
 
 /// The `template` document that gives every node of `talos` the reference template of
@@ -124,22 +119,22 @@ nodes:
   node-b: {platform: talos, node_id: 0.0.0.2, underlay: {wan: {}}}
 "#;
 
-    fn missing_in(documents: &[&str]) -> Vec<Service> {
+    fn has_firewall_template_in(documents: &[&str]) -> bool {
         let text = std::iter::once(NETWORK)
             .chain(documents.iter().copied())
             .collect::<Vec<_>>()
             .join("---\n");
-        missing(&File::parse(&text).unwrap()).unwrap()
+        has_firewall_template(&File::parse(&text).unwrap()).unwrap()
     }
 
     #[test]
-    fn a_template_that_does_not_read_is_refused_naming_it_not_counted_as_missing() {
+    fn a_template_that_does_not_read_is_refused_naming_it_not_counted_as_none() {
         let reference = document(Service::Firewall);
         let short_base = reference.replace(&Service::Firewall.base(), "sha256:abc");
         let unknown_key = reference.replace("content: |", "contnet: |");
         for broken in [short_base, unknown_key] {
             let text = format!("{NETWORK}---\n{broken}");
-            let err = missing(&File::parse(&text).unwrap()).unwrap_err();
+            let err = has_firewall_template(&File::parse(&text).unwrap()).unwrap_err();
             assert!(
                 err.to_string()
                     .contains("`kind: template` document at line 9"),
@@ -149,12 +144,12 @@ nodes:
     }
 
     #[test]
-    fn a_template_for_some_nodes_only_is_not_missing() {
+    fn a_firewall_template_for_some_nodes_only_counts() {
         let firewall = document(Service::Firewall).replace(
             "  platform: talos\n",
             "  platform: talos\n  exclude: [node-b]\n",
         );
-        assert_eq!(missing_in(&[&firewall]), [Service::Router]);
+        assert!(has_firewall_template_in(&[&firewall]));
     }
 
     #[test]

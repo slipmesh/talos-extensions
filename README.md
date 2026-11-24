@@ -54,10 +54,9 @@ One interface can freely mix both kinds of peer.
 
 ### Config
 
-Read from a fixed path (`/etc/talos-extensions/awg.yaml` inside the container, matching
-`extension-services/awg.yaml`'s `mountPath`) - never an environment variable or CLI flag. The whole
-file is rendered into the node's machine config as an `ExtensionServiceConfig` document's
-`configFiles[].content`. See talos-installer's
+Read from a fixed path (`/etc/talos-extensions/awg.yaml` inside the container) - never an
+environment variable or CLI flag. The whole file is rendered into the node's machine config as an
+`ExtensionServiceConfig` document's `configFiles[].content`. See talos-installer's
 [docs/awg.md](https://github.com/slipmesh/talos-installer/blob/main/docs/awg.md) for a full
 machine config example.
 
@@ -455,9 +454,10 @@ files to `nftables` on a node no `firewall` template reaches is refused, since t
 
 The `router` document carries the node's router template as `/etc/talos-extensions/router.conf.j2`,
 and the `nftables` document, written after it, the `firewall` template as
-`/etc/talos-extensions/nftables.conf.j2`. Both are checked as their daemon will check them, and the
-`router` template is rendered with each node's config, so one that would fail on a node fails
-`generate` instead. The `nftables` document also gets the ruleset as
+`/etc/talos-extensions/nftables.conf.j2`. The template a node gets, the last by rank of its daemon's,
+is checked as that daemon will check it, and a `router` one is rendered with the node's config, so
+one that would fail on a node fails `generate` instead. A template overridden on every node it
+reaches is not checked. The `nftables` document also gets the ruleset as
 `/etc/talos-extensions/nftables.yaml`, the file the daemon read before it took a template: a node
 that falls back to its previous boot slot runs that daemon against this config, and would
 otherwise apply no ruleset at all. That copy goes once no node can fall back that far.
@@ -477,11 +477,10 @@ It prints the document alone, without a leading `---`:
 ```
 
 A template whose `base` is not the hash of its daemon's current reference is warned about, with
-the diff from its text to that reference; the warning stops nothing. Files with no template for a
-daemon at all are refused by `generate` in every mode, naming the command above. A template aimed
-at some nodes only counts: the nodes it leaves out go without - a node no `firewall` template
-reaches gets no ruleset, and one no `router` template reaches is refused, since `router` does not
-run without one.
+the diff from its text to that reference; the warning stops nothing. Files with no `firewall`
+template at all are refused by `generate` in every mode, naming the command above; one aimed at some
+nodes only counts, and a node it leaves out gets no ruleset. A node no `router` template reaches is
+refused, naming the command too, since `router` does not run without one.
 
 ### Mesh MTU
 

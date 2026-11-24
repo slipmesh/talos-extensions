@@ -131,18 +131,13 @@ fn generate(
     if let Some(n) = node {
         network.node_on(n, Platform::Talos)?;
     }
-    // A node a template does not reach was aimed past; a daemon no document gives a template at
-    // all was left out, and would start on every node without one.
-    let untemplated: Vec<String> = defaults::missing(&files)
-        .with_context(reading)?
-        .iter()
-        .map(|service| format!("`slipmesh-taloscfg template {service}`"))
-        .collect();
+    // A node no firewall template reaches gets no ruleset; one no router template reaches is
+    // refused on its own.
     anyhow::ensure!(
-        untemplated.is_empty(),
-        "{} gives no node a template for a daemon that takes one - {} prints the document to add",
-        config_path.display(),
-        untemplated.join(" and ")
+        defaults::has_firewall_template(&files).with_context(reading)?,
+        "{} gives no node a firewall template - `slipmesh-taloscfg template firewall` prints the \
+         document to add",
+        config_path.display()
     );
     let targets: Vec<&str> = match node {
         Some(n) => vec![n],
@@ -264,7 +259,6 @@ mod tests {
     use super::*;
     use sliplib_secrets::wireguard::PrivateKey;
     use std::sync::LazyLock;
-    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[test]
     fn a_diff_line_is_coloured_by_its_first_character() {
@@ -294,18 +288,6 @@ mod tests {
         assert!(text.contains("-  private_key: <redacted, old>"), "{text}");
         assert!(text.contains("+  private_key: <redacted, new>"), "{text}");
         assert!(text.contains("   private_key: <redacted>"), "{text}");
-    }
-
-    fn temp_dir() -> PathBuf {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir =
-            std::env::temp_dir().join(format!("patches-main-test-{}-{id}", std::process::id()));
-        // Start from an empty directory: the name is only unique per process id, which the OS
-        // hands out again, and a leftover file from an earlier run would be read as this run's.
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     /// The obfuscation of `a-b`, every field `slipmesh mint` writes.
@@ -373,6 +355,7 @@ installer:
     struct Paths {
         config: PathBuf,
         patches: PathBuf,
+        _dir: tempfile::TempDir,
     }
 
     impl Paths {
@@ -402,12 +385,13 @@ installer:
 
     /// A file holding `content`, with where its patch files go.
     fn holding(content: &str) -> Paths {
-        let dir = temp_dir();
-        let config = dir.join("slipmesh.yaml");
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("slipmesh.yaml");
         std::fs::write(&config, content).unwrap();
         Paths {
             config,
-            patches: dir.join("patches"),
+            patches: dir.path().join("patches"),
+            _dir: dir,
         }
     }
 

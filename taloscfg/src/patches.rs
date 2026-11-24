@@ -4,6 +4,7 @@
 use crate::defaults::Service;
 use crate::talos::{self, AddedToGenerated, Annotations, Identity};
 use anyhow::{Context, Result, bail};
+use common::daemon::{AWG_CONFIG_PATH, ROUTER_CONFIG_PATH};
 use sliplib_config::v2::{AimedDocument, File};
 use sliplib_yaml::Value;
 
@@ -15,13 +16,10 @@ pub(crate) const LEGACY_NFTABLES_PATH: &str = "/etc/talos-extensions/nftables.ya
 /// of one of these names is that same document: it may add files to it, and nothing else - not a
 /// file the generator writes.
 const GENERATED: [(&str, &[&str]); 3] = [
-    ("awg", &["/etc/talos-extensions/awg.yaml"]),
+    ("awg", &[AWG_CONFIG_PATH]),
     (
         Service::Router.name(),
-        &[
-            "/etc/talos-extensions/router.yaml",
-            Service::Router.mount_path(),
-        ],
+        &[ROUTER_CONFIG_PATH, Service::Router.mount_path()],
     ),
     (
         Service::Firewall.name(),
@@ -29,25 +27,13 @@ const GENERATED: [(&str, &[&str]); 3] = [
     ),
 ];
 
-/// The config file the generator writes into its document `name`, `awg` or `router`.
-pub(crate) fn config_path(name: &str) -> &'static str {
-    let (_, files) = GENERATED
-        .iter()
-        .find(|(generated, _)| *generated == name)
-        .expect("only generated documents are asked for");
-    files[0]
-}
-
-/// One Talos document as it goes into one host's patch file, serialized - its comments stay in
-/// `slipmesh.yaml`.
+/// One Talos document as it goes into one host's patch file; its comments stay in `slipmesh.yaml`.
 #[derive(Debug, PartialEq)]
 pub(crate) struct HostDocument {
     /// `kind`, plus `/name` when the document has one.
     pub identity: String,
     /// Where the documents merged into it stand in the files, for a refusal to name.
     pub origin: String,
-    pub text: String,
-    /// What `text` serializes - for a caller that reads its fields.
     pub value: Value,
 }
 
@@ -101,6 +87,14 @@ fn check_one(patch: &AimedDocument) -> Result<()> {
     Ok(())
 }
 
+/// An identity's documents merged, by rank.
+struct Merged<'a> {
+    first_seen: usize,
+    identity: &'a Identity,
+    places: Vec<String>,
+    value: Value,
+}
+
 /// The Talos documents that go into `host`'s patch file, in the order their identities first
 /// appear in the files.
 ///
@@ -117,43 +111,44 @@ pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
         .into_iter()
         .map(|patch| Ok((patch.read::<Identity>()?, patch)))
         .collect::<Result<_>>()?;
-    let mut identities: Vec<&Identity> = Vec::new();
-    for (identity, _) in &read {
-        if !identities.contains(&identity) {
-            identities.push(identity);
+    // Stable: of two of one rank, the later read stays the later.
+    let mut by_rank: Vec<(usize, &Identity, &AimedDocument)> = read
+        .iter()
+        .enumerate()
+        .map(|(at, (identity, patch))| (at, identity, *patch))
+        .collect();
+    by_rank.sort_by_key(|(_, _, patch)| patch.aim().rank());
+
+    let mut merged: Vec<Merged> = Vec::new();
+    for (at, identity, patch) in by_rank {
+        let place = patch.aim().to_string();
+        match merged.iter_mut().find(|merged| merged.identity == identity) {
+            Some(merged) => {
+                merged.first_seen = merged.first_seen.min(at);
+                merged.places.push(place);
+                // Sequences replace rather than append: Talos appends by a key only its types know.
+                merged.value =
+                    sliplib_yaml::merge(std::mem::take(&mut merged.value), patch.value());
+            }
+            None => merged.push(Merged {
+                first_seen: at,
+                identity,
+                places: vec![place],
+                value: patch.value().clone(),
+            }),
         }
     }
+    merged.sort_by_key(|merged| merged.first_seen);
 
-    identities
+    merged
         .into_iter()
-        .map(|identity| {
-            let mut sources: Vec<&AimedDocument> = read
-                .iter()
-                .filter(|(of, _)| of == identity)
-                .map(|(_, patch)| *patch)
-                .collect();
-            // Stable: of two of one rank, the later read stays the later.
-            sources.sort_by_key(|patch| patch.aim().rank());
-            let [first, rest @ ..] = sources.as_slice() else {
-                unreachable!("every identity comes from at least one document")
-            };
-            let origin = sources
-                .iter()
-                .map(|patch| patch.aim().to_string())
-                .collect::<Vec<_>>()
-                .join(" and ");
-            // Sequences replace rather than append: Talos appends by a key only its types know.
-            let mut document = rest.iter().fold(first.value().clone(), |base, patch| {
-                sliplib_yaml::merge(base, patch.value())
-            });
-            talos::contents_as_text(&mut document).with_context(|| origin.clone())?;
-            let text =
-                sliplib_yaml::to_string(&document).context("serializing a patch document")?;
+        .map(|mut merged| {
+            let origin = merged.places.join(" and ");
+            talos::contents_as_text(&mut merged.value).with_context(|| origin.clone())?;
             Ok(HostDocument {
-                identity: identity.to_string(),
+                identity: merged.identity.to_string(),
                 origin,
-                text,
-                value: document,
+                value: merged.value,
             })
         })
         .collect()
@@ -207,10 +202,9 @@ nodes:
         )
     }
 
-    /// A `configFiles[].content` in `text`.
-    fn content(text: &str, index: usize) -> Value {
-        let value: Value = sliplib_yaml::from_str(text).unwrap();
-        value["configFiles"][index]["content"].clone()
+    /// A `configFiles[].content` of `document`.
+    fn content(document: &Value, index: usize) -> &Value {
+        &document["configFiles"][index]["content"]
     }
 
     #[test]
@@ -222,11 +216,11 @@ nodes:
         ]);
         let documents = for_host(&parsed, "node-b").unwrap();
         assert_eq!(
-            content(&documents[0].text, 0).as_str(),
+            content(&documents[0].value, 0).as_str(),
             Some("host: router1.example.com\nport: 8729\n")
         );
         assert_eq!(
-            content(&for_host(&parsed, "node-a").unwrap()[0].text, 0).as_str(),
+            content(&for_host(&parsed, "node-a").unwrap()[0].value, 0).as_str(),
             Some("host: router0.example.com\nport: 8729\n")
         );
     }
@@ -241,7 +235,7 @@ nodes:
         ]);
         let merged = for_host(&parsed, "node-a").unwrap();
         assert_eq!(merged.len(), 1);
-        let value: Value = sliplib_yaml::from_str(&merged[0].text).unwrap();
+        let value = &merged[0].value;
         assert_eq!(value["extraArgs"]["v"].as_str(), Some("4"));
         assert_eq!(
             value["extraArgs"]["rotate-server-certificates"].as_str(),
@@ -270,7 +264,13 @@ nodes:
         );
         // Of another `apiVersion`, a document of one kind and name is another document.
         let later = patch("", "apiVersion: v1alpha2\nkind: KubeletConfig\n");
-        let parsed = parse(&[NETWORK, &install, &kubelet("", "    v: \"4\"\n"), &later]);
+        let parsed = parse(&[
+            NETWORK,
+            &kubelet("  include: [node-a]\n", "    v: \"5\"\n"),
+            &install,
+            &kubelet("", "    v: \"4\"\n"),
+            &later,
+        ]);
         let identities: Vec<_> = for_host(&parsed, "node-a")
             .unwrap()
             .into_iter()
@@ -278,7 +278,7 @@ nodes:
             .collect();
         assert_eq!(
             identities,
-            ["UnattendedInstallConfig", "KubeletConfig", "KubeletConfig"]
+            ["KubeletConfig", "UnattendedInstallConfig", "KubeletConfig"]
         );
     }
 
@@ -301,11 +301,11 @@ nodes:
             ));
         }
         for (name, path) in [
-            ("awg", "/etc/talos-extensions/awg.yaml"),
-            ("router", "/etc/talos-extensions/router.yaml"),
-            ("router", "/etc/talos-extensions/router.conf.j2"),
-            ("nftables", "/etc/talos-extensions/nftables.conf.j2"),
-            ("nftables", "/etc/talos-extensions/nftables.yaml"),
+            ("awg", AWG_CONFIG_PATH),
+            ("router", ROUTER_CONFIG_PATH),
+            ("router", router::bird_conf::TEMPLATE_PATH),
+            ("nftables", nftables::template::TEMPLATE_PATH),
+            ("nftables", LEGACY_NFTABLES_PATH),
         ] {
             cases.push((
                 generated_with(
@@ -389,7 +389,7 @@ nodes:
         );
         let parsed = parse(&[NETWORK, &device]);
         check(&parsed).unwrap();
-        let text = &for_host(&parsed, "node-a").unwrap()[0].text;
-        assert!(text.contains("environment:\n- X=1\n"), "{text}");
+        let value = &for_host(&parsed, "node-a").unwrap()[0].value;
+        assert_eq!(value["environment"][0].as_str(), Some("X=1"), "{value:?}");
     }
 }
