@@ -20,6 +20,7 @@ use netlink_packet_amneziawg::{
     AmneziaWireguardPeerFlags,
 };
 use sliplib_config::awg::{InterfaceEntry, PeerEntry};
+use sliplib_net::IpNet;
 use sliplib_secrets::wireguard::decode_key;
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
@@ -32,10 +33,6 @@ use std::time::Duration;
 /// the process never exits for `restart: always` to get a chance to retry it.
 const ENDPOINT_RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
 
-fn full_tunnel_allowed_ips() -> Vec<String> {
-    vec!["0.0.0.0/0".to_string(), "::/0".to_string()]
-}
-
 /// One peer, resolved to exactly what the kernel needs - `allowed_ips` is always concrete (the
 /// full-tunnel default if the config entry left it unset) and `endpoint` is already DNS-resolved.
 /// Whether this peer is handshake-tracked (see `handshake.rs`) is a separate question, answered by
@@ -43,7 +40,7 @@ fn full_tunnel_allowed_ips() -> Vec<String> {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Peer {
     pub public_key: String,
-    pub allowed_ips: Vec<String>,
+    pub allowed_ips: Vec<IpNet>,
     pub endpoint: Option<String>,
     /// As the module holds it: it draws the interval out of the range at every re-arm. The zero
     /// range is no keepalive.
@@ -69,9 +66,10 @@ fn last_known_good(existing: &Peer, keepalive: AmneziaWireguardRange<u16>) -> Pe
 
 async fn resolve_peer(entry: &PeerEntry, keepalive: AmneziaWireguardRange<u16>) -> Result<Peer> {
     let allowed_ips = entry
-        .allowed_ips
-        .clone()
-        .unwrap_or_else(full_tunnel_allowed_ips);
+        .allowed_ips_or_all()
+        .into_iter()
+        .map(|prefix| prefix.0)
+        .collect();
     let endpoint = match &entry.endpoint {
         Some(host_port) => Some(resolve_endpoint(host_port).await?),
         None => None,
@@ -100,18 +98,17 @@ async fn resolve_endpoint(host_port: &str) -> Result<String> {
     Ok(addr.to_string())
 }
 
-fn cidr_to_allowed_ip(cidr: &str) -> Result<AmneziaWireguardAllowedIp> {
-    let net = sliplib_net::parse(cidr)?;
+fn allowed_ip(net: IpNet) -> AmneziaWireguardAllowedIp {
     let (addr, prefix) = (net.addr(), net.prefix_len());
     let family = match addr {
         IpAddr::V4(_) => AmneziaWireguardAddressFamily::Ipv4,
         IpAddr::V6(_) => AmneziaWireguardAddressFamily::Ipv6,
     };
-    Ok(AmneziaWireguardAllowedIp(vec![
+    AmneziaWireguardAllowedIp(vec![
         AmneziaWireguardAllowedIpAttr::Family(family),
         AmneziaWireguardAllowedIpAttr::IpAddr(addr),
         AmneziaWireguardAllowedIpAttr::Cidr(prefix),
-    ]))
+    ])
 }
 
 /// Reads back the peer set actually configured on the kernel interface. Always called, never
@@ -136,8 +133,8 @@ fn dumped_peers(attrs: &[AmneziaWireguardAttribute]) -> Vec<Peer> {
 fn diff_peers(previous: &[Peer], desired: &[Peer]) -> Vec<(String, Option<Peer>)> {
     use std::collections::{BTreeMap, BTreeSet};
 
-    fn as_set(ips: &[String]) -> BTreeSet<&str> {
-        ips.iter().map(String::as_str).collect()
+    fn as_set(ips: &[IpNet]) -> BTreeSet<&IpNet> {
+        ips.iter().collect()
     }
 
     let prev_map: BTreeMap<&str, &Peer> = previous
@@ -171,14 +168,7 @@ fn replace_peer_attrs(
     public_key: [u8; 32],
     peer: &Peer,
 ) -> Result<Vec<AmneziaWireguardPeerAttribute>> {
-    let allowed_ips = peer
-        .allowed_ips
-        .iter()
-        .map(|cidr| {
-            cidr_to_allowed_ip(cidr)
-                .with_context(|| format!("malformed allowed_ips entry {cidr:?}"))
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let allowed_ips = peer.allowed_ips.iter().copied().map(allowed_ip).collect();
     let mut attrs = vec![
         AmneziaWireguardPeerAttribute::PublicKey(public_key),
         AmneziaWireguardPeerAttribute::Flags(AmneziaWireguardPeerFlags::ReplaceAllowedIps),
@@ -293,7 +283,8 @@ pub async fn ensure_interface(
 ) -> Result<()> {
     let identity = check(iface)?;
     let (index, _created) = rt.ensure_link(&iface.name, "amneziawg").await?;
-    rt.ensure_addresses(index, &iface.addresses).await?;
+    let addresses: Vec<IpNet> = iface.addresses.iter().map(|prefix| prefix.0).collect();
+    rt.ensure_addresses(index, &addresses).await?;
     if let Some(mtu) = iface.mtu {
         rt.set_mtu(index, mtu).await?;
     }
@@ -356,7 +347,7 @@ mod tests {
     fn peer(public_key: &str, allowed_ips: &[&str], endpoint: Option<&str>) -> Peer {
         Peer {
             public_key: public_key.to_string(),
-            allowed_ips: allowed_ips.iter().map(|s| s.to_string()).collect(),
+            allowed_ips: allowed_ips.iter().map(|s| s.parse().unwrap()).collect(),
             endpoint: endpoint.map(str::to_string),
             persistent_keepalive: wire(match endpoint {
                 Some(_) => PLAIN_KEEPALIVE,
@@ -563,20 +554,12 @@ mod tests {
         )));
         assert!(
             attrs.contains(&AmneziaWireguardPeerAttribute::AllowedIps(vec![
-                cidr_to_allowed_ip("203.0.113.1/32").unwrap()
+                allowed_ip("203.0.113.1/32".parse().unwrap())
             ]))
         );
         assert!(attrs.contains(&AmneziaWireguardPeerAttribute::Endpoint(
             "192.0.2.1:51820".parse().unwrap()
         )));
-    }
-
-    #[test]
-    fn a_malformed_allowed_ip_refuses_the_peer_and_names_the_entry() {
-        let err = replace_peer_attrs(KEY, &peer("k1", &["203.0.113.1/32", "not-a-cidr"], None))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("not-a-cidr"), "{err}");
     }
 
     #[test]
@@ -602,15 +585,15 @@ mod tests {
                 AmneziaWireguardPeerAttribute::PublicKey(KEY),
                 AmneziaWireguardPeerAttribute::Endpoint("192.0.2.1:51820".parse().unwrap()),
                 AmneziaWireguardPeerAttribute::PersistentKeepalive(BARE_25),
-                AmneziaWireguardPeerAttribute::AllowedIps(vec![
-                    cidr_to_allowed_ip("203.0.113.1/32").unwrap(),
-                ]),
+                AmneziaWireguardPeerAttribute::AllowedIps(vec![allowed_ip(
+                    "203.0.113.1/32".parse().unwrap(),
+                )]),
             ])]),
             AmneziaWireguardAttribute::Peers(vec![AmneziaWireguardPeer(vec![
                 AmneziaWireguardPeerAttribute::PublicKey(KEY),
-                AmneziaWireguardPeerAttribute::AllowedIps(vec![
-                    cidr_to_allowed_ip("203.0.113.2/32").unwrap(),
-                ]),
+                AmneziaWireguardPeerAttribute::AllowedIps(vec![allowed_ip(
+                    "203.0.113.2/32".parse().unwrap(),
+                )]),
             ])]),
         ];
         let held = dumped_peers(&dump);
@@ -674,7 +657,6 @@ mod tests {
             addresses: vec![],
             private_key: encode_key(&KEY).as_str().into(),
             obfuscation,
-            handshake_stale_secs: None,
             mtu: None,
             peers: vec![],
         }
@@ -753,10 +735,5 @@ mod tests {
         push_obfuscation_attrs(&mut expected, &obfuscation).unwrap();
         assert!(expected.contains(&AmneziaWireguardAttribute::Jc(4)));
         assert_eq!(check(&interface("awg-a", obfuscation)).unwrap(), expected);
-    }
-
-    #[test]
-    fn full_tunnel_default_is_the_expected_pair() {
-        assert_eq!(full_tunnel_allowed_ips(), vec!["0.0.0.0/0", "::/0"]);
     }
 }

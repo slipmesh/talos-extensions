@@ -1,12 +1,12 @@
 use awg::handshake::ReconcileSnapshot;
 use awg::{gc, handshake, interface, metrics};
+use common::daemon::{AwgDaemonConfig, MetricsConfig};
 use sliplib_config::awg as config;
 
 use anyhow::{Context, Result};
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
-use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +15,7 @@ use tokio::sync::watch;
 /// Fixed path, matching `extension-services/awg.yaml`'s `configFiles[].mountPath` - never an env
 /// var or CLI flag: everything comes from the `ExtensionServiceConfig`, nothing else.
 const CONFIG_PATH: &str = "/etc/talos-extensions/awg.yaml";
+
 /// Inside the 10 s Talos waits after SIGTERM before it sends SIGKILL.
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -37,10 +38,10 @@ async fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    let cfg: config::AwgConfig =
-        sliplib_yaml::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
-    config::validate(&cfg).context("config validation failed")?;
-    let cfg = Arc::new(cfg);
+    let daemon =
+        AwgDaemonConfig::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
+    daemon.validate().context("config validation failed")?;
+    let cfg = Arc::new(daemon.mesh);
 
     tracing::info!(interfaces = cfg.interfaces.len(), "starting awg");
 
@@ -81,7 +82,7 @@ async fn run() -> Result<()> {
 
     let tracked = build_tracked_interfaces(&rt, &cfg).await?;
     let (verdict_tx, verdict_rx) = tokio::sync::watch::channel(ReconcileSnapshot::default());
-    spawn_metrics(&cfg, verdict_rx);
+    spawn_metrics(daemon.metrics.as_ref(), &cfg, verdict_rx);
 
     tracing::info!(
         tracked_interfaces = tracked.len(),
@@ -97,19 +98,16 @@ async fn run() -> Result<()> {
 /// A failure here is logged and dropped rather than returned. Reconciliation is the daemon's job
 /// and must survive a listener that could not bind; the scrape failing is itself the signal, which
 /// is the whole reason this serves rather than writing a file.
-fn spawn_metrics(cfg: &Arc<config::AwgConfig>, verdict: watch::Receiver<ReconcileSnapshot>) {
-    let Some(metrics) = &cfg.metrics else {
+fn spawn_metrics(
+    metrics: Option<&MetricsConfig>,
+    cfg: &Arc<config::AwgConfig>,
+    verdict: watch::Receiver<ReconcileSnapshot>,
+) {
+    let Some(metrics) = metrics else {
         tracing::info!("no metrics section in the config - not listening");
         return;
     };
-    let listen: SocketAddr = match metrics.listen.parse() {
-        Ok(listen) => listen,
-        Err(e) => {
-            // `config::validate` already parsed this, so reaching here means the two disagree.
-            tracing::error!(listen = metrics.listen, error = %e, "metrics: unusable listen address");
-            return;
-        }
-    };
+    let listen = metrics.listen;
     let cfg = Arc::clone(cfg);
     tokio::spawn(async move {
         if let Err(e) = metrics::run(listen, cfg, verdict).await {
@@ -163,24 +161,93 @@ async fn build_tracked_interfaces(
 ) -> Result<Vec<handshake::TrackedInterface>> {
     let mut out = Vec::new();
     for iface in &cfg.interfaces {
-        let mut peers = HashMap::new();
-        for peer in &iface.peers {
-            if let Some(allowed_ips) = &peer.allowed_ips {
-                peers.insert(peer.public_key.clone(), allowed_ips.clone());
-            }
-        }
         let index = rt
             .link_index(&iface.name)
             .await?
             .with_context(|| format!("interface {:?} missing after converging", iface.name))?;
-        out.push(handshake::TrackedInterface {
-            name: iface.name.clone(),
-            index,
-            stale_secs: iface
-                .handshake_stale_secs
-                .unwrap_or(config::DEFAULT_HANDSHAKE_STALE_SECS),
-            peers,
-        });
+        out.push(tracked(iface, index));
     }
     Ok(out)
+}
+
+fn tracked(iface: &config::InterfaceEntry, index: u32) -> handshake::TrackedInterface {
+    let peers = iface
+        .peers
+        .iter()
+        .filter_map(|peer| {
+            let allowed_ips = peer.allowed_ips.as_ref()?;
+            Some((
+                peer.public_key.clone(),
+                allowed_ips.iter().map(|prefix| prefix.0).collect(),
+            ))
+        })
+        .collect();
+    handshake::TrackedInterface {
+        name: iface.name.clone(),
+        index,
+        peers,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sliplib_config::Obfuscation;
+    use sliplib_config::awg::{InterfaceEntry, PeerEntry};
+    use std::collections::HashMap;
+
+    fn peer(public_key: &str, allowed_ips: Option<&[&str]>) -> PeerEntry {
+        PeerEntry {
+            public_key: public_key.to_owned(),
+            name: None,
+            endpoint: None,
+            allowed_ips: allowed_ips.map(|cidrs| {
+                cidrs
+                    .iter()
+                    .map(|c| sliplib_config::Prefix::try_from((*c).to_owned()).unwrap())
+                    .collect()
+            }),
+            persistent_keepalive: None,
+        }
+    }
+
+    #[test]
+    fn an_interface_tracks_the_peers_with_allowed_ips() {
+        let iface = InterfaceEntry {
+            name: "rw-north".to_owned(),
+            listen_port: 51820,
+            addresses: vec![],
+            private_key: "private".into(),
+            obfuscation: Obfuscation::default(),
+            mtu: None,
+            peers: vec![
+                peer("tracked", Some(&["203.0.113.2/32"])),
+                peer("mesh", None),
+            ],
+        };
+        assert_eq!(
+            tracked(&iface, 7).peers,
+            HashMap::from([(
+                "tracked".to_owned(),
+                vec!["203.0.113.2/32".parse().unwrap()]
+            )])
+        );
+    }
+
+    #[tokio::test]
+    async fn the_metrics_endpoint_is_served_at_its_listen_address() {
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let listen = free.local_addr().unwrap();
+        drop(free);
+        let (_tx, rx) = watch::channel(ReconcileSnapshot::default());
+        let cfg = Arc::new(config::AwgConfig { interfaces: vec![] });
+        spawn_metrics(Some(&MetricsConfig { listen }), &cfg, rx);
+        for _ in 0..200 {
+            if tokio::net::TcpStream::connect(listen).await.is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("nothing listens at {listen}");
+    }
 }

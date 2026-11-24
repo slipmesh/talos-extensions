@@ -1,8 +1,9 @@
 use router::{bird, bird_conf, bird_process, exporter, resolver};
 
 use anyhow::{Context, Result};
+use common::daemon::{MetricsConfig, RouterDaemonConfig};
 use common::netlink::rt::RtClient;
-use sliplib_config::router::{self as config, RouterConfig};
+use sliplib_config::router as config;
 use sliplib_runtime::Shutdown;
 use std::path::Path;
 use std::sync::Arc;
@@ -47,9 +48,8 @@ async fn main() -> Result<()> {
 /// lock. No `Store`/reflector/CRD-cache of any kind - unlike the k8s original's `reconcile::Context`,
 /// there's nothing here that's watched, only what `router.yaml` declared once at startup.
 struct RouterState {
-    inputs: bird_conf::StaticInputs,
-    metrics: Option<sliplib_config::MetricsConfig>,
-    bypass_cfg: Option<config::BypassConfig>,
+    mesh: config::RouterConfig,
+    metrics: Option<MetricsConfig>,
     /// Last-successful bypass resolution - re-resolving (RIPEstat/DNS) only happens on the
     /// startup/refresh-interval schedule (`bypass_refresh_loop`); a resolve failure serves this
     /// instead of blanking the bypass out over a transient upstream outage.
@@ -89,7 +89,7 @@ async fn run(shutdown: Shutdown) -> Result<()> {
         () = shutdown.requested() => return bird_process::shut_down(bird_child).await,
     }
 
-    if ctx.bypass_cfg.is_some() {
+    if ctx.mesh.bypass.is_some() {
         tokio::spawn(bypass_refresh_loop(ctx.clone()));
     }
     tokio::spawn(bird_health_watchdog(ctx.clone()));
@@ -99,7 +99,7 @@ async fn run(shutdown: Shutdown) -> Result<()> {
     if let Some(cfg) = &ctx.metrics {
         tokio::spawn(exporter::supervise(
             bird::BIRD_CONTROL_SOCKET.to_string(),
-            cfg.listen.clone(),
+            cfg.listen.to_string(),
         ));
     }
 
@@ -112,9 +112,10 @@ async fn run(shutdown: Shutdown) -> Result<()> {
 
 /// Everything before `bird` is spawned: config, template, `router-lo`, and a `bird.conf` on disk.
 async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
-    let cfg: RouterConfig =
-        sliplib_yaml::read(Path::new(CONFIG_PATH)).context("failed to read the config file")?;
-    config::validate(&cfg).context("config validation failed")?;
+    let daemon = RouterDaemonConfig::read(Path::new(CONFIG_PATH))
+        .context("failed to read the config file")?;
+    daemon.validate().context("config validation failed")?;
+    let RouterDaemonConfig { mesh: cfg, metrics } = daemon;
     // Read before anything on the node is touched: without a template there is no bird.conf to
     // write, and nothing to fall back on - the template is the node's config, not this binary's.
     let template_source = tokio::fs::read_to_string(bird_conf::TEMPLATE_PATH)
@@ -130,17 +131,15 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
         "starting router"
     );
 
-    let inputs = bird_conf::StaticInputs::from_config(&cfg)?;
-
     let rt = RtClient::connect().context("failed to open rtnetlink socket")?;
-    bird::ensure_loopback(&rt, inputs.identity.loopback, inputs.identity.ipv6_loopback)
+    let loopbacks = cfg.node.loopback_addresses;
+    bird::ensure_loopback(&rt, loopbacks.ipv4.0.addr(), loopbacks.ipv6.0.addr())
         .await
-        .context("failed to converge router-lo")?;
+        .with_context(|| format!("failed to converge {}", config::ROUTER_LOOPBACK))?;
 
     let ctx = Arc::new(RouterState {
-        inputs,
-        bypass_cfg: cfg.bypass,
-        metrics: cfg.metrics,
+        mesh: cfg,
+        metrics,
         bypass_cache: Mutex::new(None),
         render_lock: Mutex::new(()),
         template,
@@ -149,16 +148,15 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
     // Render and write bird.conf *before* spawning bird, which refuses to start without it.
     // `bird::reconcile` can't be used here - its diff-then-`birdc configure` path assumes bird is
     // already running and listening, which it isn't yet.
-    if let Some(parent) = Path::new(BIRD_CONF_PATH).parent() {
+    let conf = Path::new(BIRD_CONF_PATH);
+    if let Some(parent) = conf.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let bypass_routes = current_bypass_routes(&ctx).await;
-    let initial_conf = ctx.inputs.render(&ctx.template, &bypass_routes)?;
-    tokio::fs::write(BIRD_CONF_PATH, &initial_conf)
-        .await
-        .with_context(|| format!("failed to write {BIRD_CONF_PATH}"))?;
+    let initial_conf = bird_conf::render_config(&ctx.template, &ctx.mesh, &bypass_routes)?;
+    sliplib_fs::write_if_changed(conf, &initial_conf)?;
     Ok((ctx, bypass_routes))
 }
 
@@ -182,8 +180,13 @@ async fn wait_for_control_socket() -> Result<()> {
 
 async fn reconcile(ctx: &RouterState, bypass_routes: &[bird_conf::BypassRoute]) -> Result<()> {
     let _guard = ctx.render_lock.lock().await;
-    let desired = ctx.inputs.render(&ctx.template, bypass_routes)?;
-    bird::reconcile(Path::new(BIRD_CONF_PATH), &desired).await
+    let desired = bird_conf::render_config(&ctx.template, &ctx.mesh, bypass_routes)?;
+    bird::reconcile(
+        Path::new(BIRD_CONF_PATH),
+        Path::new(bird::BIRD_CONTROL_SOCKET),
+        &desired,
+    )
+    .await
 }
 
 /// Bounded retry budget for a resolve failure with *nothing cached yet* - only relevant the very
@@ -197,13 +200,13 @@ async fn reconcile(ctx: &RouterState, bypass_routes: &[bird_conf::BypassRoute]) 
 const BYPASS_STARTUP_RETRIES: u32 = 5;
 const BYPASS_STARTUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
-/// Resolves `ctx.bypass_cfg` (if any) into concrete blackhole routes. A resolve failure keeps
+/// Resolves `ctx.mesh.bypass` (if any) into concrete blackhole routes. A resolve failure keeps
 /// serving the last-known-good cached result rather than blanking the bypass out over a
 /// transient RIPEstat/DNS outage - same reasoning as the k8s original's `current_bypass_routes`,
 /// minus the per-node CRD status patching and multi-`BypassSource`-per-node conflict handling
 /// neither of which apply to a single static config block.
 async fn current_bypass_routes(ctx: &RouterState) -> Vec<bird_conf::BypassRoute> {
-    let Some(bypass_cfg) = &ctx.bypass_cfg else {
+    let Some(bypass_cfg) = &ctx.mesh.bypass else {
         return Vec::new();
     };
     for attempt in 1..=BYPASS_STARTUP_RETRIES {
@@ -238,14 +241,15 @@ async fn current_bypass_routes(ctx: &RouterState) -> Vec<bird_conf::BypassRoute>
     unreachable!("loop above always returns on its final iteration")
 }
 
-/// Runs forever as its own background task - only spawned when `ctx.bypass_cfg` is `Some` (see
+/// Runs forever as its own background task - only spawned when `ctx.mesh.bypass` is `Some` (see
 /// `run()`). The periodic re-resolve must happen even without any external trigger, since there's
 /// no watch mechanism at all in this daemon.
 async fn bypass_refresh_loop(ctx: Arc<RouterState>) -> ! {
     let refresh_interval = Duration::from_secs(
-        ctx.bypass_cfg
+        ctx.mesh
+            .bypass
             .as_ref()
-            .expect("only spawned when bypass_cfg is Some")
+            .expect("only spawned when bypass is Some")
             .refresh_interval_secs,
     );
     let mut tick = tokio::time::interval(refresh_interval);
@@ -275,7 +279,13 @@ const BIRD_HEALTH_ESCALATE_AFTER: u32 = 8;
 /// `bird::protocols_healthy`'s and `bird::force_reconfigure`'s doc comments for what this
 /// recovers from and why a config-diff-gated reconcile alone can never catch it.
 async fn bird_health_watchdog(ctx: Arc<RouterState>) -> ! {
-    let exact_ifaces = bird::exact_iface_names(&ctx.inputs.ospf_interfaces);
+    let exact_ifaces: Vec<String> = ctx
+        .mesh
+        .ospf_interfaces
+        .iter()
+        .filter_map(config::InterfacePattern::name)
+        .map(str::to_owned)
+        .collect();
     let mut tick = tokio::time::interval(BIRD_HEALTH_CHECK_INTERVAL);
     let mut consecutive_unhealthy: u32 = 0;
     loop {
@@ -289,7 +299,7 @@ async fn bird_health_watchdog(ctx: Arc<RouterState>) -> ! {
                 consecutive_unhealthy += 1;
                 if consecutive_unhealthy >= BIRD_HEALTH_ESCALATE_AFTER {
                     tracing::error!(
-                        ospf_interfaces = ?ctx.inputs.ospf_interfaces,
+                        ospf_interfaces = ?ctx.mesh.ospf_interfaces,
                         consecutive_unhealthy,
                         "BIRD still hasn't converged to the last-rendered OSPF interfaces/BGP \
                          peers after repeated re-nudges - likely a permanent misconfiguration \
@@ -298,7 +308,7 @@ async fn bird_health_watchdog(ctx: Arc<RouterState>) -> ! {
                     );
                 } else {
                     tracing::warn!(
-                        ospf_interfaces = ?ctx.inputs.ospf_interfaces,
+                        ospf_interfaces = ?ctx.mesh.ospf_interfaces,
                         "BIRD hasn't converged to the last-rendered OSPF interfaces/BGP peers, re-nudging"
                     );
                 }

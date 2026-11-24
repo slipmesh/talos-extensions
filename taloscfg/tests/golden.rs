@@ -5,11 +5,9 @@
 //! the files here: no pool interface, no bypass list, no label on what is announced, the link's
 //! port where a node's endpoint held another, the endpoint annotation without that port, and the
 //! `nftables` document, which the generator makes from a `template` now, after `router` and not
-//! among the `patch` documents. A change of what a node gets fails here, and changes what the
-//! nodes of a working network are configured with.
+//! among the `patch` documents; and the addresses of a `node_id` the conversion replaced. A change
+//! of what a node gets fails here, and changes what the nodes of a working network are configured with.
 
-use sliplib_config::awg::AwgConfig;
-use sliplib_config::router::RouterConfig;
 use sliplib_yaml::{MultiDoc, Value};
 use std::path::Path;
 use std::process::Command;
@@ -28,6 +26,8 @@ struct Twin {
     redialed: &'static [(&'static str, &'static str)],
     /// The same endpoint in the node's annotation, and the address it carries now.
     annotated: &'static [(&'static str, &'static str)],
+    /// An address of a `node_id` too wide for its network, and the one of its replacement.
+    renumbered: &'static [(&'static str, &'static str)],
 }
 
 const FULL: Twin = Twin {
@@ -36,6 +36,7 @@ const FULL: Twin = Twin {
     nodes: &["node-a", "node-b", "node-c", "node-d", "node-e", "node-f"],
     redialed: &[("192.0.2.4:51999", "192.0.2.4:51832")],
     annotated: &[("192.0.2.4:51999", "192.0.2.4")],
+    renumbered: &[],
 };
 
 const ALTERNATE: Twin = Twin {
@@ -44,6 +45,14 @@ const ALTERNATE: Twin = Twin {
     nodes: &["east", "west", "south"],
     redialed: &[],
     annotated: &[],
+    // east was 198.51.100.133 and west 0.0.1.2, cut by version 1 to 0.0.0.5 and 0.0.0.2 in the
+    // IPv4 loopback's /25 and not in the IPv6 one's /64.
+    renumbered: &[
+        ("3fff::1:0:0:c633:6485", "3fff:0:0:1::5"),
+        ("fe80::c633:6485", "fe80::5"),
+        ("3fff:0:0:1::102", "3fff:0:0:1::2"),
+        ("fe80::102", "fe80::2"),
+    ],
 };
 
 fn generate(config: &Path, patches: &Path) {
@@ -63,12 +72,7 @@ fn generate(config: &Path, patches: &Path) {
 }
 
 fn documents(text: &str) -> Vec<Value> {
-    MultiDoc::parse(text)
-        .unwrap()
-        .documents()
-        .iter()
-        .map(|document| document.value.clone())
-        .collect()
+    MultiDoc::parse(text).unwrap().values()
 }
 
 /// `documents` as the text of a patch file.
@@ -87,44 +91,50 @@ fn position(documents: &[Value], name: &str) -> Option<usize> {
     })
 }
 
-/// The text of the first file of the `ExtensionServiceConfig` named `name`, the daemon's config,
-/// read as `T`, edited by `edit` and written back.
-fn edit_config<T>(documents: &mut [Value], name: &str, edit: impl FnOnce(&mut T))
-where
-    T: serde::de::DeserializeOwned + serde::Serialize,
-{
+/// The first file of the `ExtensionServiceConfig` named `name`, the daemon's config, edited by
+/// `edit` with its keys in the order written.
+fn edit_config(documents: &mut [Value], name: &str, edit: impl FnOnce(&mut Value)) {
     let index = position(documents, name).unwrap();
     let content = &mut documents[index]["configFiles"][0]["content"];
-    let text = content.as_str().unwrap();
-    let mut config: T = sliplib_yaml::from_str(text).unwrap();
-    // Read and written back, the config is the text it holds: a key `T` does not know would
-    // otherwise vanish from the expected side unseen.
-    assert_eq!(sliplib_yaml::to_string(&config).unwrap(), text, "{name}");
+    let mut config: Value = sliplib_yaml::from_str(content.as_str().unwrap()).unwrap();
     edit(&mut config);
     *content = sliplib_yaml::to_string(&config).unwrap().into();
 }
 
+fn sequence<'a>(value: &'a mut Value, key: &str) -> &'a mut Vec<Value> {
+    value.get_mut(key).and_then(Value::as_sequence_mut).unwrap()
+}
+
 /// The patch file version 1 gave a node, `file`, as `twin` gives it after a conversion.
 fn converted(twin: &Twin, file: &str) -> String {
-    let mut documents = documents(file);
-    edit_config(&mut documents, "awg", |awg: &mut AwgConfig| {
-        awg.interfaces
-            .retain(|interface| !interface.name.starts_with("rw-"));
-        let endpoints = awg
-            .interfaces
+    let file = twin
+        .renumbered
+        .iter()
+        .fold(file.to_owned(), |text, (was, now)| text.replace(was, now));
+    let mut documents = documents(&file);
+    edit_config(&mut documents, "awg", |awg| {
+        let interfaces = sequence(awg, "interfaces");
+        interfaces.retain(|interface| !interface["name"].as_str().unwrap().starts_with("rw-"));
+        let endpoints = interfaces
             .iter_mut()
-            .flat_map(|interface| &mut interface.peers)
-            .filter_map(|peer| peer.endpoint.as_mut());
+            .flat_map(|interface| sequence(interface, "peers"))
+            .filter_map(|peer| peer.get_mut("endpoint"));
         for endpoint in endpoints {
-            if let Some((_, now)) = twin.redialed.iter().find(|(was, _)| endpoint == was) {
-                *endpoint = (*now).to_owned();
+            if let Some((_, now)) = twin
+                .redialed
+                .iter()
+                .find(|(was, _)| endpoint.as_str() == Some(was))
+            {
+                *endpoint = (*now).into();
             }
         }
     });
-    edit_config(&mut documents, "router", |router: &mut RouterConfig| {
-        router.bypass = None;
-        for announced in &mut router.announce {
-            announced.label = None;
+    edit_config(&mut documents, "router", |router| {
+        router.as_mapping_mut().unwrap().shift_remove("bypass");
+        if let Some(announced) = router.get_mut("announce") {
+            for announced in announced.as_sequence_mut().unwrap() {
+                announced.as_mapping_mut().unwrap().shift_remove("label");
+            }
         }
     });
     if let Some(nftables) = position(&documents, "nftables") {

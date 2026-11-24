@@ -12,4 +12,12 @@ exclude_re = [
     "metrics.rs:.*replace collect -> Dumps with Default::default\\(\\)",
     # Its only effect is one log line at start.
     "replace log_handshake_summary with \\(\\)",
+    # Netlink only, as `ensure_interface`.
+    "replace ensure_loopback ",
+    # Wording of a refusal: what a visitor expects.
+    "Visitor<.*>::expecting",
+    # Only the fixed `/run/bird.ctl`.
+    "replace force_reconfigure ",
+    # Only the fixed `/run/bird/bird.conf` and socket; `bird::reconcile` is tested with its own.
+    "router/src/main.rs:.*replace reconcile ",
 ]

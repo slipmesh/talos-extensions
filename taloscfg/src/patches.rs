@@ -2,9 +2,9 @@
 //! knows them, and merged into what one host gets.
 
 use crate::defaults::Service;
-use crate::talos::{self, Identity};
-use anyhow::{Context, Result, bail, ensure};
-use sliplib_config::v2::{File, PatchDocument};
+use crate::talos::{self, AddedToGenerated, Annotations, Identity};
+use anyhow::{Context, Result, bail};
+use sliplib_config::v2::{AimedDocument, File};
 use sliplib_yaml::Value;
 
 /// Where the `nftables` daemon read its ruleset before it took a template.
@@ -58,13 +58,17 @@ pub fn check(files: &File) -> Result<()> {
     files.patches().iter().try_for_each(check_one)
 }
 
-fn check_one(patch: &PatchDocument) -> Result<()> {
+fn check_one(patch: &AimedDocument) -> Result<()> {
     let place = patch.aim();
-    let identity = Identity::of(patch.value());
+    let identity: Identity = patch.read()?;
     let Some(kind) = &identity.kind else {
         bail!("{place}: has no Talos `kind`, so it has no identity to merge by");
     };
-    if let Some(set) = talos::annotation_in(patch.value(), crate::annotations::NAMESPACE) {
+    if kind == talos::KUBE_NODE_CONFIG
+        && let Some(set) = patch
+            .read::<Annotations>()?
+            .first_in(crate::annotations::NAMESPACE)
+    {
         bail!(
             "{place}: sets the annotation {set}, and those under {} are generated - take it out \
              of the document",
@@ -72,25 +76,21 @@ fn check_one(patch: &PatchDocument) -> Result<()> {
         );
     }
     if let Some(name) = &identity.name
-        && kind == "ExtensionServiceConfig"
+        && kind == talos::EXTENSION_SERVICE_CONFIG
         && let Some((_, generated)) = GENERATED.iter().find(|(n, _)| n == name)
     {
-        let others: Vec<&str> = patch
-            .value()
-            .as_mapping()
-            .into_iter()
-            .flatten()
-            .filter_map(|(key, _)| key.as_str())
-            .filter(|key| !["apiVersion", "kind", "name", "configFiles"].contains(key))
-            .collect();
-        ensure!(
-            others.is_empty(),
-            "{place}: `ExtensionServiceConfig` {name:?} is generated - a patch may add \
-             `configFiles` to it and nothing else, not {others:?}"
-        );
-        if let Some(over) = generated
+        let added: AddedToGenerated = patch.read().with_context(|| {
+            format!(
+                "`ExtensionServiceConfig` {name:?} is generated - a patch may add `configFiles` \
+                 to it and nothing else"
+            )
+        })?;
+        if let Some(over) = added
+            .config_files
             .iter()
-            .find(|path| talos::sets_file(patch.value(), name, path))
+            .flatten()
+            .filter_map(|file| file.mount_path.as_deref())
+            .find(|path| generated.contains(path))
         {
             bail!(
                 "{place}: {over} is a file the generator writes for {name:?} - add files next to \
@@ -107,15 +107,18 @@ fn check_one(patch: &PatchDocument) -> Result<()> {
 /// Documents of one identity are merged in the order of their rank, so the more specific document
 /// wins wherever it sits in the file.
 pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
-    let reaching: Vec<&PatchDocument> = files
+    let reaching: Vec<&AimedDocument> = files
         .patches()
         .iter()
         .filter(|patch| patch.aim().reaches(host))
         .collect();
 
-    let mut identities: Vec<Identity> = Vec::new();
-    for patch in &reaching {
-        let identity = Identity::of(patch.value());
+    let read: Vec<(Identity, &AimedDocument)> = reaching
+        .into_iter()
+        .map(|patch| Ok((patch.read::<Identity>()?, patch)))
+        .collect::<Result<_>>()?;
+    let mut identities: Vec<&Identity> = Vec::new();
+    for (identity, _) in &read {
         if !identities.contains(&identity) {
             identities.push(identity);
         }
@@ -124,10 +127,10 @@ pub(crate) fn for_host(files: &File, host: &str) -> Result<Vec<HostDocument>> {
     identities
         .into_iter()
         .map(|identity| {
-            let mut sources: Vec<&PatchDocument> = reaching
+            let mut sources: Vec<&AimedDocument> = read
                 .iter()
-                .filter(|patch| Identity::of(patch.value()) == identity)
-                .copied()
+                .filter(|(of, _)| of == identity)
+                .map(|(_, patch)| *patch)
                 .collect();
             // Stable: of two of one rank, the later read stays the later.
             sources.sort_by_key(|patch| patch.aim().rank());
@@ -318,15 +321,45 @@ nodes:
     }
 
     #[test]
-    fn a_patch_without_kind_is_refused_naming_where_it_stands() {
-        let err = error(&[
-            NETWORK,
-            &patch("", "machine:\n  install: {disk: /dev/vda}\n"),
-        ]);
-        assert!(
-            err.contains("the `kind: patch` document at line 10: has no Talos `kind`"),
-            "{err}"
-        );
+    fn a_patch_the_check_refuses_is_named_with_what_it_breaks() {
+        let mut cases = vec![(
+            patch("", "machine:\n  install: {disk: /dev/vda}\n"),
+            vec!["the `kind: patch` document at line 10: has no Talos `kind`".to_owned()],
+        )];
+        let kind = patch("", "apiVersion: v1alpha1\nkind: 5\n");
+        let line = line_of(&[NETWORK, &kind], 1) + 4;
+        cases.push((
+            kind,
+            vec!["kind: invalid type".to_owned(), format!("at line {line}")],
+        ));
+        for name in ["awg", "router", "nftables"] {
+            cases.push((
+                generated_with(name, "environment:\n  - RUST_LOG=debug\n"),
+                vec!["configFiles".to_owned(), name.to_owned()],
+            ));
+        }
+        for (name, path) in [
+            ("awg", "/etc/talos-extensions/awg.yaml"),
+            ("router", "/etc/talos-extensions/router.yaml"),
+            ("router", "/etc/talos-extensions/router.conf.j2"),
+            ("nftables", "/etc/talos-extensions/nftables.conf.j2"),
+            ("nftables", "/etc/talos-extensions/nftables.yaml"),
+        ] {
+            cases.push((
+                generated_with(
+                    name,
+                    &format!("configFiles:\n  - mountPath: {path}\n    content: x\n"),
+                ),
+                vec![path.to_owned()],
+            ));
+        }
+        for (patch, named) in cases {
+            let err = error(&[NETWORK, &patch]);
+            assert!(
+                named.iter().all(|part| err.contains(part.as_str())),
+                "{patch}: {err}"
+            );
+        }
     }
 
     fn generated_with(name: &str, body: &str) -> String {
@@ -344,34 +377,6 @@ nodes:
                 "configFiles:\n  - mountPath: /etc/talos-extensions/extra\n    content: x\n",
             );
             check(&parse(&[NETWORK, &patch])).unwrap();
-        }
-    }
-
-    #[test]
-    fn a_patch_setting_more_than_files_on_a_generated_document_is_refused() {
-        for name in ["awg", "router", "nftables"] {
-            let patch = generated_with(name, "environment:\n  - RUST_LOG=debug\n");
-            let err = error(&[NETWORK, &patch]);
-            assert!(err.contains("configFiles") && err.contains(name), "{err}");
-        }
-    }
-
-    #[test]
-    fn a_patch_setting_a_file_the_generator_writes_is_refused_naming_it() {
-        let written = [
-            ("awg", "/etc/talos-extensions/awg.yaml"),
-            ("router", "/etc/talos-extensions/router.yaml"),
-            ("router", "/etc/talos-extensions/router.conf.j2"),
-            ("nftables", "/etc/talos-extensions/nftables.conf.j2"),
-            ("nftables", "/etc/talos-extensions/nftables.yaml"),
-        ];
-        for (name, path) in written {
-            let patch = generated_with(
-                name,
-                &format!("configFiles:\n  - mountPath: {path}\n    content: x\n"),
-            );
-            let err = error(&[NETWORK, &patch]);
-            assert!(err.contains(path), "{err}");
         }
     }
 
@@ -395,6 +400,46 @@ nodes:
                 "{err}"
             );
         }
+    }
+
+    /// The line `documents[index]` starts at once they are joined as `parse` joins them.
+    fn line_of(documents: &[&str], index: usize) -> usize {
+        documents[..index]
+            .iter()
+            .map(|document| document.lines().count() + 1)
+            .sum::<usize>()
+            + 1
+    }
+
+    #[test]
+    fn a_key_set_in_the_second_of_two_patches_names_that_patch_and_its_line() {
+        let first = generated_with(
+            "awg",
+            "configFiles:\n  - mountPath: /etc/talos-extensions/extra\n    content: x\n",
+        );
+        let second = generated_with("awg", "environment: [X=1]\n");
+        let documents = [NETWORK, &first, &second];
+        let err = error(&documents);
+        let start = line_of(&documents, 2);
+        assert!(
+            err.contains(&format!("the `kind: patch` document at line {start}"))
+                && err.contains("unknown field `environment`")
+                && err.contains(&format!("at line {}", start + 6)),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_key_the_generator_does_not_read_passes_as_written() {
+        let device = patch(
+            "",
+            "apiVersion: v1alpha1\nkind: ExtensionServiceConfig\nname: device\nenvironment: \
+             [X=1]\n",
+        );
+        let parsed = parse(&[NETWORK, &device]);
+        check(&parsed).unwrap();
+        let text = &for_host(&parsed, "node-a").unwrap()[0].text;
+        assert!(text.contains("environment:\n- X=1\n"), "{text}");
     }
 
     #[test]

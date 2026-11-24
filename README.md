@@ -44,8 +44,8 @@ peer:
   connectivity comes from whatever routing protocol runs over the tunnel once it's up (e.g. OSPFv3
   over a link-local address), not from a per-peer route. This is a mesh link between two nodes.
 - A peer with an **explicit `allowed_ips`** gets exactly those CIDRs as AllowedIPs, and is
-  handshake-tracked at 1Hz: while its handshake stays fresher than `handshake_stale_secs` (default
-  180), a kernel route is installed for each CIDR; once it goes stale, the route is removed. This
+  handshake-tracked at 1Hz: while its last handshake is less than 180 seconds old, a kernel route is
+  installed for each CIDR; once it goes stale, the route is removed. This
   is a roaming client - the route's mere presence in the kernel *is* the "this client is currently
   connected" signal, with no status field anywhere. `slipmesh_awg_peer_connected` (below) reports
   that same verdict without reading the FIB by hand.
@@ -268,9 +268,9 @@ declares it all:
 
 - `node.loopback_addresses` - this node's own IPv4+IPv6 loopback identity;
 - `bgp_peers` - every other mesh node's name + IPv6 loopback (static by necessity);
-- `ospf_interfaces` - exact interface names, shell-glob patterns like `"mesh-*"`, or CIDRs
-  matching an interface's address - fed straight into BIRD's own `interface` clause, so nothing
-  here needs to know what `awg` actually named its interfaces;
+- `ospf_interfaces` - interface names, or a prefix and `*` like `"mesh-*"` - fed straight into
+  BIRD's own `interface` clause, so nothing here needs to know what `awg` actually named its
+  interfaces;
 - `direct_interfaces` - interfaces whose own addresses should be announced (`protocol direct`);
 - `learn` - IPv4 CIDRs: any kernel route equal to or inside one is picked up and re-announced over
   iBGP, whoever installed it. This is how a node's pod subnet gets announced without naming the
@@ -280,8 +280,9 @@ declares it all:
   part stays "live", unlike everything else in this workspace, since resolving ASN/geoip/DNS
   sources is the whole point of the feature.
 
-See `router/src/config.rs`'s doc comments for the full schema, and the template below for how
-each field becomes BIRD config.
+See the doc comments of `sliplib_config::router::RouterConfig` for the full schema, with
+`metrics` from `common/src/daemon.rs`, and the template below for how each field becomes BIRD
+config.
 
 Whoever authors `router.yaml` is responsible for `bypass.exclude` covering this node's own (and
 every peer's) public endpoint - a blackholed endpoint takes the mesh link down with it. There is no
@@ -399,13 +400,18 @@ A file of format version 1 is refused, naming the document that converts it.
 
 The format is the specification's. Of it, the generator serves the nodes of `talos`, and on them:
 
-- the network, as every tool reads it, and the metrics ports of the `talos` `platform` document;
+- the network, as every tool reads it;
 - the `template` documents: of those that reach a node, the last by rank for each daemon,
   `router` and `firewall`;
 - the `patch` documents of `talos`, merged for each node.
 
 A node of another platform gets no patch file; `generate --node` with one is refused, naming its
 platform.
+
+The bodies of the `talos` `platform` document and of each `template` are the generator's to read,
+and it refuses, naming the document and the line: a key the specification's table does not have, or
+a missing one; a listener without `port`, a `port` of 0, and one port for both; a `daemon` other
+than `router` or `firewall`; and a `base` that is not `sha256:` and 64 hexadecimal digits.
 
 `patch` documents of one Talos identity - `apiVersion`, `kind`, `name` - are merged for each node in
 the order of their rank, so the narrower one wins wherever it sits. Mappings merge key by key, an
@@ -432,11 +438,18 @@ configFiles:
       listen: 198.51.100.2
 ```
 
+The generator reads of a `patch` document only what it uses: its `apiVersion`, `kind` and `name`,
+each a string, a `KubeNodeConfig`'s `annotations`, a mapping, and the keys set on a generated
+document. A value of the wrong type there is refused at its key and line; every other key goes to
+Talos as written.
+
 A `patch` document may also name a generated `ExtensionServiceConfig`, `awg`, `router` or
 `nftables`, to add files to it: the files follow the generated ones in that same document, since
-Talos takes one document per name. It may set `configFiles` and nothing else, and none of them at a
-path the generator writes. A `patch` that adds files to `nftables` on a node no `firewall` template
-reaches is refused, since that node gets no `nftables` document.
+Talos takes one document per name. It may set `configFiles` and nothing else. Of an entry the
+generator reads only `mountPath`, a string, and refuses one at a path the generator writes; the
+entry goes to Talos as written. A `patch` that adds
+files to `nftables` on a node no `firewall` template reaches is refused, since that node gets no
+`nftables` document.
 
 ### Templates
 
@@ -548,6 +561,15 @@ a file of version 1 is converted as sliplib's `docs/slipmesh-yaml-v1-to-v2.md` s
 release that reads it before and this one after. `template` prints a `template` document, and
 `template nftables` is `template firewall`. A node of another platform gets no patch file any
 more: delete the one version 1 wrote for it.
+
+After v1.15.0-beta.0+sm.5, `awg` reads no `handshake_stale_secs`: a config that has it is read and
+the key ignored, and a tracked peer's routes go 180 seconds after its last handshake.
+
+After v1.15.0-beta.0+sm.5, an entry of `ospf_interfaces` or `direct_interfaces`, in `slipmesh.yaml`
+or a daemon's config, is refused when it is a CIDR, empty, or holds `?`, a `*` before the end or
+another character outside an interface name. `slipmesh-taloscfg` refuses at the check a `patch`
+whose `apiVersion`, `kind`, `name` or the `mountPath` of a file it adds to a generated document is
+not a string, or whose `KubeNodeConfig` `annotations` are not a mapping.
 
 Since v1.15.0-beta.0+sm.4, a peer's `advanced_security` is gone from the config: a file that still
 has it is read and the key ignored. The module reads no per-peer switch; header protection is the

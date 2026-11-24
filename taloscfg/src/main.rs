@@ -11,10 +11,9 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use sliplib_config::v2::{File, Platform};
-use sliplib_mesh::model::{MetricsPorts, Network};
-use sliplib_mesh::secrets::ResolvedSecrets;
-use sliplib_yaml::MultiDoc;
+use sliplib_mesh::Mesh;
 use std::path::{Path, PathBuf};
+use taloscfg::documents::{TalosSettings, Template};
 use taloscfg::{defaults, patch_file, patches};
 
 #[derive(Parser)]
@@ -70,15 +69,11 @@ fn main() -> Result<()> {
     }
 }
 
-/// The files at `config_path`, read and checked as far as this generator reads them, and the
-/// network they give, with the metrics ports of `talos`.
-fn read_slipmesh(config_path: &Path) -> Result<(File, Network)> {
-    let reading = || format!("reading {}", config_path.display());
-    let files = File::read(&MultiDoc::read(config_path)?).with_context(reading)?;
-    patches::check(&files).with_context(reading)?;
-    let mut network = sliplib_mesh::v2::lower(&files).with_context(reading)?;
-    network.metrics = MetricsPorts::from(&files.talos_settings().with_context(reading)?);
-    Ok((files, network))
+/// Checked as far as this generator reads them.
+fn read_slipmesh(config_path: &Path) -> Result<File> {
+    let files = File::open(config_path)?;
+    patches::check(&files).with_context(|| format!("reading {}", config_path.display()))?;
+    Ok(files)
 }
 
 /// A warning for every `template` document reaching one of `targets` whose `base` is not the hash
@@ -89,8 +84,8 @@ fn base_warnings(files: &File, targets: &[&str]) -> Result<Vec<String>> {
         if !targets.iter().any(|target| document.aim().reaches(target)) {
             continue;
         }
-        let template = document.read()?;
-        let service = defaults::Service::of(template.daemon);
+        let template: Template = document.read()?;
+        let service = template.daemon;
         if template.base.digest() == service.digest() {
             continue;
         }
@@ -129,18 +124,17 @@ fn generate(
     config_path: &Path,
     patches_dir: &Path,
 ) -> Result<()> {
-    let (files, network) = read_slipmesh(config_path)?;
+    let files = read_slipmesh(config_path)?;
+    let reading = || format!("reading {}", config_path.display());
+    let network = Mesh::of(&files).with_context(reading)?;
+    let settings = TalosSettings::of(&files).with_context(reading)?;
     if let Some(n) = node {
-        let platform = network.node(n)?.platform;
-        anyhow::ensure!(
-            platform == Platform::Talos,
-            "node {n:?} is a `{platform}` node, which this generator does not configure"
-        );
+        network.node_on(n, Platform::Talos)?;
     }
     // A node a template does not reach was aimed past; a daemon no document gives a template at
     // all was left out, and would start on every node without one.
     let untemplated: Vec<String> = defaults::missing(&files)
-        .with_context(|| format!("reading {}", config_path.display()))?
+        .with_context(reading)?
         .iter()
         .map(|service| format!("`slipmesh-taloscfg template {service}`"))
         .collect();
@@ -150,24 +144,24 @@ fn generate(
         config_path.display(),
         untemplated.join(" and ")
     );
-    let resolved = sliplib_mesh::secrets::read(&network);
     let targets: Vec<&str> = match node {
         Some(n) => vec![n],
         None => network
+            .network()
             .nodes
             .iter()
-            .filter(|node| node.platform == Platform::Talos)
-            .map(|node| node.name.as_str())
+            .filter(|(_, node)| node.platform == Platform::Talos)
+            .map(|(name, _)| name.as_str())
             .collect(),
     };
 
     // Every host is rendered and validated before anything is written, so a host that fails
     // leaves the patch files as they were rather than half of them new.
-    let hosts = render_hosts(&files, &network, &resolved, &targets, patches_dir)?;
+    let hosts = render_hosts(&files, &network, &settings, &targets, patches_dir)?;
 
     // Told in every mode, and failing none: the files are valid, and their writer should still
     // know.
-    for warning in sliplib_mesh::warnings::warnings(&network, &resolved)
+    for warning in sliplib_mesh::warnings::warnings(&network)
         .iter()
         .filter(|warning| targets.iter().any(|target| warning.concerns(target)))
     {
@@ -188,8 +182,10 @@ fn generate(
         return Ok(());
     }
 
+    std::fs::create_dir_all(patches_dir)
+        .with_context(|| format!("creating {}", patches_dir.display()))?;
     for host in &hosts {
-        if sliplib_yaml::write_if_changed(&host.path, &host.after)? {
+        if sliplib_fs::write_if_changed(&host.path, &host.after)? {
             println!("wrote {}", host.path.display());
         } else {
             println!("{}: no changes", host.host);
@@ -201,20 +197,21 @@ fn generate(
 /// Every target host's patch file, rendered and validated in memory.
 fn render_hosts(
     files: &File,
-    network: &Network,
-    resolved: &ResolvedSecrets,
+    network: &Mesh<'_>,
+    settings: &TalosSettings,
     targets: &[&str],
     patches_dir: &Path,
 ) -> Result<Vec<HostFile>> {
     targets
         .iter()
         .map(|&host| {
-            let after =
-                patch_file::render(files, network, resolved, host).map_err(with_its_cure)?;
+            // One line: `main`'s `{:?}` would print the chain over several.
+            let after = patch_file::render(files, network, settings, host)
+                .map_err(|refusal| anyhow::anyhow!("{refusal:#}"))?;
             let path = patches_dir.join(format!("{host}.yaml"));
             // A missing file is the from-scratch case; anything else must not read as "there was
             // nothing here", or the diff would show a whole file where one line changed.
-            let before = sliplib_yaml::read_or_empty(&path)?;
+            let before = sliplib_fs::read_or_empty(&path)?;
             Ok(HostFile {
                 host: host.to_owned(),
                 path,
@@ -223,18 +220,6 @@ fn render_hosts(
             })
         })
         .collect()
-}
-
-/// `refusal`, with the command that creates the secret when a missing one is what it is about.
-fn with_its_cure(refusal: anyhow::Error) -> anyhow::Error {
-    let lacks_a_secret = refusal
-        .downcast_ref::<sliplib_mesh::render::Error>()
-        .is_some_and(|refusal| refusal.missing_secret().is_some());
-    if lacks_a_secret {
-        anyhow::anyhow!("{refusal:#} - `slipmesh mint` creates it")
-    } else {
-        refusal
-    }
 }
 
 /// A unified diff of one host's patch file with its secrets masked, `None` when nothing would
@@ -499,9 +484,14 @@ installer:
                 let paths = setup_from(&network, "");
                 let before = paths.snapshot();
                 let err = paths.generate(Some(node), check, diff).unwrap_err();
-                let err = format!("{err:#}");
+                // `main` prints it with `{:?}`, on one line only without causes.
+                assert_eq!(err.chain().count(), 1, "{missing}: {err:?}");
+                let err = err.to_string();
                 assert!(err.contains(missing), "{missing}: {err}");
-                assert!(err.contains("`slipmesh mint`"), "{missing}: {err}");
+                assert!(
+                    err.ends_with(" - `slipmesh mint` creates it"),
+                    "{missing}: {err}"
+                );
                 assert_eq!(paths.snapshot(), before, "{missing}");
             }
         }
@@ -659,22 +649,6 @@ installer:
     }
 
     #[test]
-    fn the_metrics_ports_of_talos_reach_its_nodes() {
-        let metrics =
-            "---\nslipmesh: {kind: platform, platform: talos}\nmetrics: {router: {port: 9324}}\n";
-        let paths = setup(metrics);
-        paths.generate(Some("a"), false, false).unwrap();
-        assert!(
-            paths
-                .patch("a")
-                .unwrap()
-                .contains("listen: 198.51.100.1:9324"),
-            "{}",
-            paths.patch("a").unwrap()
-        );
-    }
-
-    #[test]
     fn a_check_after_a_full_run_passes_and_writes_nothing() {
         let paths = setup("");
         paths.generate(None, false, false).unwrap();
@@ -697,12 +671,13 @@ installer:
     fn two_runs_render_the_same() {
         let paths = setup("");
         let render = || {
-            let (files, network) = read_slipmesh(&paths.config).unwrap();
-            let resolved = sliplib_mesh::secrets::read(&network);
+            let files = read_slipmesh(&paths.config).unwrap();
+            let network = Mesh::of(&files).unwrap();
+            let settings = TalosSettings::of(&files).unwrap();
             render_hosts(
                 &files,
                 &network,
-                &resolved,
+                &settings,
                 &["a", "b", "c", "d"],
                 &paths.patches,
             )

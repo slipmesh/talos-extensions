@@ -1,3 +1,4 @@
+pub mod daemon;
 /// Gated so that `router`'s template code, which the generator builds on, needs no netlink stack:
 /// it is Linux-only, and the generator has to build wherever it is run.
 #[cfg(feature = "netlink")]

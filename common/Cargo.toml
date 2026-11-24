@@ -21,12 +21,14 @@ serde.workspace = true
 sliplib-config.workspace = true
 sliplib-net.workspace = true
 sliplib-secrets.workspace = true
+sliplib-yaml.workspace = true
+thiserror.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync"] }
 tracing.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 tokio = { workspace = true, features = ["time"] }
-sliplib-yaml.workspace = true
 
 [features]
 default = ["netlink"]

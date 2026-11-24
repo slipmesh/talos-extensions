@@ -5,6 +5,8 @@
 //! Talos keeps the annotations it sets in step with the config: a changed value is rewritten, a
 //! value no longer given is taken off the Node.
 
+use sliplib_config::v2::{ClassName, Map, network::Class};
+use sliplib_net::mtu::MESH_MTU_ANNOTATION;
 use sliplib_yaml::Mapping;
 
 /// The namespace of every annotation this generator sets.
@@ -15,7 +17,7 @@ pub struct Values<'a> {
     /// What the name of every interface of a link starts with.
     pub interface_prefix: &'a str,
     /// Each route class by its name, with its protocol number, in the order written.
-    pub classes: &'a [(String, u8)],
+    pub classes: &'a Map<ClassName, Class>,
     /// The node's endpoint as the files give it: an address or a name.
     pub endpoint: Option<&'a str>,
     /// The one MTU of every mesh interface: the largest at which a full-size packet crosses every
@@ -26,24 +28,29 @@ pub struct Values<'a> {
 /// The annotations of a node with `values`, by name, in the order of `values`.
 pub fn for_node(values: &Values) -> Mapping {
     let prefix = (
-        "interface_prefix.mesh".to_owned(),
+        format!("{NAMESPACE}interface_prefix.mesh"),
         Some(values.interface_prefix.to_owned()),
     );
-    let classes = values
-        .classes
-        .iter()
-        .map(|(name, protocol)| (format!("route_proto_id.{name}"), Some(protocol.to_string())));
-    let rest = [
-        ("endpoint".to_owned(), values.endpoint.map(str::to_owned)),
+    let classes = values.classes.iter().map(|(name, class)| {
         (
-            "mesh_mtu".to_owned(),
+            format!("{NAMESPACE}route_proto_id.{name}"),
+            Some(class.protocol.to_string()),
+        )
+    });
+    let rest = [
+        (
+            format!("{NAMESPACE}endpoint"),
+            values.endpoint.map(str::to_owned),
+        ),
+        (
+            MESH_MTU_ANNOTATION.to_owned(),
             values.mesh_mtu.map(|mtu| mtu.to_string()),
         ),
     ];
     std::iter::once(prefix)
         .chain(classes)
         .chain(rest)
-        .filter_map(|(key, value)| Some((format!("{NAMESPACE}{key}").into(), value?.into())))
+        .filter_map(|(key, value)| Some((key.into(), value?.into())))
         .collect()
 }
 
@@ -61,7 +68,8 @@ mod tests {
     #[test]
     fn a_node_publishes_each_value_under_the_namespace_in_order() {
         // Neither sorted by name nor by number: the order they are given in.
-        let classes = [("transit".to_owned(), 153), ("egress".to_owned(), 152)];
+        let classes =
+            sliplib_yaml::from_str("{transit: {protocol: 153}, egress: {protocol: 152}}").unwrap();
         let annotations = for_node(&Values {
             interface_prefix: "wg-",
             classes: &classes,
@@ -84,7 +92,7 @@ mod tests {
     fn a_value_the_node_does_not_have_is_not_published() {
         let annotations = for_node(&Values {
             interface_prefix: "mesh-",
-            classes: &[],
+            classes: &Map::new(),
             endpoint: None,
             mesh_mtu: None,
         });

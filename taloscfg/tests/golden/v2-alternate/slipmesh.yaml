@@ -40,7 +40,7 @@ mesh:
 nodes:
   east:
     platform: talos
-    node_id: 198.51.100.133
+    node_id: 0.0.0.5
     underlay:
       wan:
         endpoint: {ipv6: "2001:db8::1"}
@@ -48,7 +48,7 @@ nodes:
       private_key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
   west:
     platform: talos
-    node_id: 0.0.1.2
+    node_id: 0.0.0.2
     underlay:
       wan: {}
     wireguard:

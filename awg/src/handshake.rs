@@ -24,6 +24,7 @@ use common::ROUTE_PROTOCOL;
 use common::netlink::awg::AwgClient;
 use common::netlink::rt::RtClient;
 use netlink_packet_amneziawg::AmneziaWireguardAttribute;
+use sliplib_net::IpNet;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -33,10 +34,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub struct TrackedInterface {
     pub name: String,
     pub index: u32,
-    pub stale_secs: u64,
-    /// public_key (base64) -> allowed_ips (CIDR strings) - only peers with an explicit
-    /// `allowed_ips` in the config belong here at all.
-    pub peers: HashMap<String, Vec<String>>,
+    /// public_key (base64) -> allowed_ips, only for peers with an explicit `allowed_ips` in the
+    /// config.
+    pub peers: HashMap<String, Vec<IpNet>>,
 }
 
 fn now_unix() -> u64 {
@@ -95,7 +95,7 @@ pub struct ReconcileSnapshot {
 /// route that isn't there.
 fn snapshot_from(
     tracked: &[TrackedInterface],
-    installed: &HashMap<u32, HashSet<String>>,
+    installed: &HashMap<u32, HashSet<IpNet>>,
     now: u64,
 ) -> ReconcileSnapshot {
     let mut connected = HashSet::new();
@@ -121,7 +121,7 @@ async fn reconcile_pass(
     rt: &RtClient,
     awg: &mut AwgClient,
     tracked: &[TrackedInterface],
-    installed: &mut HashMap<u32, HashSet<String>>,
+    installed: &mut HashMap<u32, HashSet<IpNet>>,
 ) {
     let now = now_unix();
     for iface in tracked {
@@ -136,15 +136,15 @@ async fn reconcile_pass(
         let entry = installed.entry(iface.index).or_default();
         let plan = route_plan(iface, &peers, entry, now);
         for cidr in plan.add {
-            if let Err(e) = rt.route_add(iface.index, &cidr, ROUTE_PROTOCOL).await {
-                tracing::warn!(iface = iface.name, cidr, error = %e, "failed to install route");
+            if let Err(e) = rt.route_add(iface.index, cidr, ROUTE_PROTOCOL).await {
+                tracing::warn!(iface = iface.name, %cidr, error = %e, "failed to install route");
                 continue;
             }
             entry.insert(cidr);
         }
         for cidr in plan.remove {
-            if let Err(e) = rt.route_del(iface.index, &cidr, ROUTE_PROTOCOL).await {
-                tracing::warn!(iface = iface.name, cidr, error = %e, "failed to remove stale route");
+            if let Err(e) = rt.route_del(iface.index, cidr, ROUTE_PROTOCOL).await {
+                tracing::warn!(iface = iface.name, %cidr, error = %e, "failed to remove stale route");
                 continue;
             }
             entry.remove(&cidr);
@@ -152,29 +152,32 @@ async fn reconcile_pass(
     }
 }
 
-fn is_fresh(stats: &PeerStats, now: u64, stale_secs: u64) -> bool {
-    stats.last_handshake > 0 && now.saturating_sub(stats.last_handshake) < stale_secs
+/// Seconds after its last handshake that a tracked peer's routes go.
+const STALE_SECS: u64 = 180;
+
+fn is_fresh(stats: &PeerStats, now: u64) -> bool {
+    stats.last_handshake > 0 && now.saturating_sub(stats.last_handshake) < STALE_SECS
 }
 
 /// What a pass changes: the routes of fresh peers it does not hold, and every other it holds.
 #[derive(Debug, PartialEq, Eq)]
 struct RoutePlan {
-    add: BTreeSet<String>,
-    remove: BTreeSet<String>,
+    add: BTreeSet<IpNet>,
+    remove: BTreeSet<IpNet>,
 }
 
 fn route_plan(
     iface: &TrackedInterface,
     dump: &HashMap<String, PeerStats>,
-    installed: &HashSet<String>,
+    installed: &HashSet<IpNet>,
     now: u64,
 ) -> RoutePlan {
-    let fresh: HashSet<&String> = iface
+    let fresh: HashSet<&IpNet> = iface
         .peers
         .iter()
         .filter(|(public_key, _)| {
             dump.get(*public_key)
-                .is_some_and(|stats| is_fresh(stats, now, iface.stale_secs))
+                .is_some_and(|stats| is_fresh(stats, now))
         })
         .flat_map(|(_, allowed_ips)| allowed_ips)
         .collect();
@@ -182,7 +185,7 @@ fn route_plan(
         add: fresh
             .iter()
             .filter(|cidr| !installed.contains(**cidr))
-            .map(|cidr| (*cidr).clone())
+            .map(|cidr| **cidr)
             .collect(),
         remove: installed
             .iter()
@@ -209,7 +212,7 @@ pub async fn run(
     tracked: Vec<TrackedInterface>,
     verdict: tokio::sync::watch::Sender<ReconcileSnapshot>,
 ) -> ! {
-    let mut installed: HashMap<u32, HashSet<String>> = HashMap::new();
+    let mut installed: HashMap<u32, HashSet<IpNet>> = HashMap::new();
     for iface in &tracked {
         match rt.routes_by_protocol(iface.index, ROUTE_PROTOCOL).await {
             Ok(routes) => {
@@ -311,21 +314,20 @@ mod tests {
         TrackedInterface {
             name: format!("iface{index}"),
             index,
-            stale_secs: 180,
             peers: peers
                 .iter()
                 .map(|(k, cidrs)| {
                     (
                         (*k).to_string(),
-                        cidrs.iter().map(|c| (*c).to_string()).collect(),
+                        cidrs.iter().map(|c| c.parse().unwrap()).collect(),
                     )
                 })
                 .collect(),
         }
     }
 
-    fn installed(index: u32, cidrs: &[&str]) -> HashMap<u32, HashSet<String>> {
-        HashMap::from([(index, cidrs.iter().map(|c| (*c).to_string()).collect())])
+    fn installed(index: u32, cidrs: &[&str]) -> HashMap<u32, HashSet<IpNet>> {
+        HashMap::from([(index, cidrs.iter().map(|c| c.parse().unwrap()).collect())])
     }
 
     #[test]
@@ -392,10 +394,10 @@ mod tests {
     #[test]
     fn a_peer_is_fresh_for_stale_secs_after_its_handshake_and_never_without_one() {
         let now = 1_700_000_000;
-        assert!(!is_fresh(&PeerStats::default(), now, 180));
-        assert!(!is_fresh(&PeerStats::default(), 100, 180));
-        assert!(is_fresh(&handshake_secs_ago(now, 179), now, 180));
-        assert!(!is_fresh(&handshake_secs_ago(now, 180), now, 180));
+        assert!(!is_fresh(&PeerStats::default(), now));
+        assert!(!is_fresh(&PeerStats::default(), 100));
+        assert!(is_fresh(&handshake_secs_ago(now, 179), now));
+        assert!(!is_fresh(&handshake_secs_ago(now, 180), now));
     }
 
     #[test]
@@ -413,15 +415,15 @@ mod tests {
             ("fresh".to_string(), handshake_secs_ago(now, 10)),
             ("stale".to_string(), handshake_secs_ago(now, 600)),
         ]);
-        let held: HashSet<String> = [
+        let held: HashSet<IpNet> = [
             "203.0.113.1/32",
             "203.0.113.3/32",
             "203.0.113.4/32",
             "198.51.100.1/32",
         ]
-        .map(String::from)
+        .map(|cidr| cidr.parse().unwrap())
         .into();
-        let set = |cidrs: &[&str]| cidrs.iter().map(|c| (*c).to_string()).collect();
+        let set = |cidrs: &[&str]| cidrs.iter().map(|c| c.parse().unwrap()).collect();
         assert_eq!(
             route_plan(&iface, &dump, &held, now),
             RoutePlan {

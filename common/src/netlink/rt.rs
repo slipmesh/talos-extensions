@@ -315,12 +315,12 @@ impl RtClient {
     /// calls, each with one address, would have each call remove the other's address as "stale"
     /// (see slipmesh-operators' `ensure_address_v6` doc comment for the concrete bug this avoids -
     /// same reasoning here, just generalized to both families and any address count).
-    pub async fn ensure_addresses(&self, index: u32, cidrs: &[String]) -> Result<()> {
+    pub async fn ensure_addresses(&self, index: u32, cidrs: &[IpNet]) -> Result<()> {
         let _guard = self.netlink_lock.lock().await;
         let mut v4 = Vec::new();
         let mut v6 = Vec::new();
         for cidr in cidrs {
-            match sliplib_net::parse(cidr)? {
+            match cidr {
                 IpNet::V4(net) => v4.push((net.addr(), net.prefix_len())),
                 IpNet::V6(net) => v6.push((net.addr(), net.prefix_len())),
             }
@@ -374,9 +374,9 @@ impl RtClient {
 
     /// Equivalent to `ip route replace <cidr> dev <index> proto <protocol>` - either address
     /// family. `protocol` marks the route as ours - see `crate::ROUTE_PROTOCOL`.
-    pub async fn route_add(&self, index: u32, cidr: &str, protocol: RouteProtocol) -> Result<()> {
+    pub async fn route_add(&self, index: u32, cidr: IpNet, protocol: RouteProtocol) -> Result<()> {
         let _guard = self.netlink_lock.lock().await;
-        match sliplib_net::parse(cidr)? {
+        match cidr {
             IpNet::V4(net) => {
                 self.route_add_v4(index, net.addr(), net.prefix_len(), protocol)
                     .await
@@ -392,7 +392,7 @@ impl RtClient {
     /// is success (ESRCH). `protocol` scopes the delete to a route this daemon itself installed -
     /// a route with the same destination but a different `proto` (BIRD, static, ...) is left
     /// alone.
-    pub async fn route_del(&self, index: u32, cidr: &str, protocol: RouteProtocol) -> Result<()> {
+    pub async fn route_del(&self, index: u32, cidr: IpNet, protocol: RouteProtocol) -> Result<()> {
         let _guard = self.netlink_lock.lock().await;
         let del = |msg: RouteMessage| {
             let handle = self.handle.clone();
@@ -404,7 +404,7 @@ impl RtClient {
                 }
             }
         };
-        match sliplib_net::parse(cidr)? {
+        match cidr {
             IpNet::V4(net) => {
                 let (a, p) = (net.addr(), net.prefix_len());
                 let msg: RouteMessage = RouteMessageBuilder::<Ipv4Addr>::new()
@@ -431,7 +431,7 @@ impl RtClient {
         query: RouteMessage,
         index: u32,
         protocol: RouteProtocol,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<IpNet>> {
         use rtnetlink::packet_route::route::RouteAttribute;
         let mut routes = self.handle.route().get(query).execute();
         let mut out = Vec::new();
@@ -449,7 +449,7 @@ impl RtClient {
             let Some((addr, prefix)) = destination_of(&route) else {
                 continue;
             };
-            out.push(format!("{addr}/{prefix}"));
+            out.extend(IpNet::new(addr, prefix).ok());
         }
         Ok(out)
     }
@@ -461,7 +461,7 @@ impl RtClient {
         &self,
         index: u32,
         protocol: RouteProtocol,
-    ) -> Result<Vec<String>> {
+    ) -> Result<Vec<IpNet>> {
         let _guard = self.netlink_lock.lock().await;
         let mut out = self
             .routes_matching(

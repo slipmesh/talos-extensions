@@ -10,39 +10,26 @@
 //! Ported from `slipmesh/operators`' `router/src/bird.rs`, with
 //! the Kubernetes-only pieces dropped (CNI conflist rendering, the `DIRECT_CNI` protocol block,
 //! `ospf_ifaces`/`bgp_peers` derived from CRDs) and replaced by what `router.yaml` declares
-//! directly - see `talos-extensions/README.md`'s design notes and `config.rs`'s doc comments for
-//! the static-config shape this now renders from.
+//! directly - see `talos-extensions/README.md`'s design notes and `sliplib_config::router` for the
+//! static-config shape this now renders from.
 
-use crate::bird_conf::ROUTER_LOOPBACK_IFACE;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use common::netlink::rt::RtClient;
+use sliplib_config::router::ROUTER_LOOPBACK;
+use sliplib_net::Ipv6Net;
 use std::collections::HashSet;
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::Path;
 
 /// This daemon spawns `bird` itself (see `main.rs`) and always launches it with `-s
 /// BIRD_CONTROL_SOCKET`, so the two agree on this path by construction rather than by convention.
 pub const BIRD_CONTROL_SOCKET: &str = "/run/bird.ctl";
 
-/// The subset of `ospf_interfaces` that are exact interface names - no `*`/`?` glob characters,
-/// and not a CIDR. Used by `protocols_healthy` to check `show ospf interface` against a concrete
-/// expected set; glob/CIDR entries have no single expected name to diff against, so they're
-/// excluded here rather than guessed at (see this module's `protocols_healthy` doc comment).
-pub fn exact_iface_names(ospf_interfaces: &[String]) -> Vec<String> {
-    ospf_interfaces
-        .iter()
-        .filter(|entry| {
-            !entry.contains('*') && !entry.contains('?') && sliplib_net::parse(entry).is_err()
-        })
-        .cloned()
-        .collect()
-}
-
 /// Name of this daemon's rendered OSPFv3 protocol block - see `render()`.
 const OSPF_PROTOCOL: &str = "mesh6";
 
-async fn run_birdc_configure() -> Result<()> {
-    let reply = crate::birdc::command(Path::new(BIRD_CONTROL_SOCKET), "configure").await?;
+async fn run_birdc_configure(control_socket: &Path) -> Result<()> {
+    let reply = crate::birdc::command(control_socket, "configure").await?;
     anyhow::ensure!(!reply.is_error(), "birdc configure failed: {}", reply.text);
     Ok(())
 }
@@ -76,8 +63,8 @@ fn ospf_configured_interfaces(show_ospf_interface_output: &str) -> HashSet<&str>
 
 /// True if BIRD's live state (queried fresh via `birdc show ...`, never the rendered config text)
 /// shows no protocol stuck in `Error: No listening socket`, and every name in
-/// `exact_ospf_ifaces` (see `exact_iface_names` - only literal names, not glob/CIDR entries, since
-/// those have no single expected name to diff against here) has a working OSPF interface attached.
+/// `exact_ospf_ifaces` (the patterns' `name()`s: a glob has no single expected name to diff against
+/// here) has a working OSPF interface attached.
 /// Both are symptoms of the same interface-notification race `force_reconfigure`'s doc comment
 /// describes - a config that already lists an interface/peer doesn't mean BIRD's interface manager
 /// actually caught up to it yet, and a config-diff-gated `reconcile()` alone can never detect or
@@ -97,15 +84,11 @@ pub async fn protocols_healthy(exact_ospf_ifaces: &[String]) -> Result<bool> {
         .all(|iface| configured.contains(iface.as_str())))
 }
 
-pub async fn reconcile(path: &Path, desired: &str) -> Result<()> {
-    let current = tokio::fs::read_to_string(path).await.unwrap_or_default();
-    if current == desired {
-        return Ok(());
+pub async fn reconcile(path: &Path, control_socket: &Path, desired: &str) -> Result<()> {
+    if sliplib_fs::write_if_changed(path, desired)? {
+        run_birdc_configure(control_socket).await?;
     }
-    tokio::fs::write(path, desired)
-        .await
-        .with_context(|| format!("failed to write {}", path.display()))?;
-    run_birdc_configure().await
+    Ok(())
 }
 
 /// Unconditional reload, bypassing the config-text diff `reconcile()` uses to skip redundant
@@ -118,7 +101,7 @@ pub async fn reconcile(path: &Path, desired: &str) -> Result<()> {
 /// startup-only timer. Cheap and safe even as a false-positive nudge: BIRD re-applying the same
 /// config doesn't tear down any session already up.
 pub async fn force_reconfigure() -> Result<()> {
-    run_birdc_configure().await
+    run_birdc_configure(Path::new(BIRD_CONTROL_SOCKET)).await
 }
 
 /// Ensures the dedicated router loopback (`router-lo`, a dummy interface) exists and carries this
@@ -149,14 +132,14 @@ pub async fn ensure_loopback(
     loopback: Ipv4Addr,
     ipv6_loopback: Ipv6Addr,
 ) -> Result<()> {
-    let (index, _created) = rt.ensure_link(ROUTER_LOOPBACK_IFACE, "dummy").await?;
+    let (index, _created) = rt.ensure_link(ROUTER_LOOPBACK, "dummy").await?;
     let link_local = sliplib_mesh::addressing::link_local_from_loopback(ipv6_loopback);
     rt.ensure_addresses(
         index,
         &[
-            format!("{loopback}/32"),
-            format!("{ipv6_loopback}/128"),
-            format!("{link_local}/64"),
+            IpAddr::V4(loopback).into(),
+            IpAddr::V6(ipv6_loopback).into(),
+            Ipv6Net::new(link_local, 64)?.into(),
         ],
     )
     .await?;
@@ -168,14 +151,20 @@ pub async fn ensure_loopback(
 mod tests {
     use super::*;
 
-    #[test]
-    fn exact_iface_names_excludes_globs_and_cidrs() {
-        let entries = vec![
-            "mesh-east".to_string(),
-            "mesh-*".to_string(),
-            "198.51.100.192/26".to_string(),
-        ];
-        assert_eq!(exact_iface_names(&entries), vec!["mesh-east".to_string()]);
+    /// Before `birdc configure`, which fails here: no BIRD is listening.
+    #[tokio::test]
+    async fn a_changed_config_is_written_before_bird_is_told() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bird.conf");
+        let no_bird = dir.path().join("bird.ctl");
+        let err = reconcile(&path, &no_bird, "router id 198.51.100.1;\n")
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("bird.ctl"), "{err:#}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "router id 198.51.100.1;\n"
+        );
     }
 
     // Fixtures below are real `birdc` output, captured against BIRD 2.19.1 running in a container
