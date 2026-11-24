@@ -20,7 +20,7 @@ awg = { path = "awg", default-features = false }
 router = { path = "router", default-features = false }
 nftables = { path = "nftables", default-features = false }
 
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 clap = { version = "4.6.9", features = ["derive"] }
 # Templates read at runtime rather than compiled in: `builtins` for filters such as `join`,
 # `serde` to render from the daemons' own context structs.
@@ -38,7 +38,7 @@ yaml_serde = "0.10.7"
 # Lossless YAML editing: `taloscfg` writes what it mints, and the clients `rw-add` adds, into the
 # hand-edited slipmesh.yaml through its typed overlays, which change only the lines they add and
 # leave comments and layout as written.
-yaml-rt = "0.3.3"
+yaml-rt = "0.3.4"
 # QR code encoder - de-facto standard for this in Rust (18M+ downloads). Used by `rw-add`/
 # `rw-inspect --qr` to print a scannable client config straight to the terminal.
 qrcode = "0.14.1"
