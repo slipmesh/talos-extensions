@@ -1,9 +1,9 @@
-//! `generate`: reads `slipmesh.yaml`, computes every target node's `awg`/`router` config through
-//! `sliplib-mesh`, which checks each the way the daemon would, and writes `patches/<node>.yaml`:
-//! the `patch` documents aimed at that node, then the generated `ExtensionServiceConfig`
-//! documents. It only reads `slipmesh.yaml`: what the file lacks is refused, with the command that
-//! writes it. A patch file is output only - nothing in it is read back. `--check`/`--diff` both
-//! stop short of writing; `--diff` also prints what would change.
+//! `generate`: reads the files of `slipmesh.yaml`, computes every target node's `awg`/`router`
+//! config through `sliplib-mesh`, which checks each the way the daemon would, and writes
+//! `patches/<node>.yaml`: the `patch` documents aimed at that node, then the generated
+//! `ExtensionServiceConfig` documents. It only reads the files: what they lack is refused, with
+//! the command that writes it. A patch file is output only - nothing in it is read back.
+//! `--check`/`--diff` both stop short of writing; `--diff` also prints what would change.
 //!
 //! `validate`/`diff`/`apply` are deliberately not separate subcommands: `generate`'s own
 //! `--check`/`--diff` flags already cover them.
@@ -21,7 +21,7 @@ use taloscfg::{defaults, patch_file, patches};
     name = env!("CARGO_BIN_NAME"),
     bin_name = env!("CARGO_BIN_NAME"),
     version,
-    about = "Generates Talos machine-config patches for awg/router/nftables from slipmesh.yaml"
+    about = "Generates Talos machine-config patches for awg/router/nftables from the files of slipmesh.yaml"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -30,10 +30,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Compute and write patches/<node>.yaml for one or every node of `talos` in slipmesh.yaml.
+    /// Compute and write patches/<node>.yaml for one or every node of `talos` in the files.
     Generate {
         /// Only this node's patch file, instead of every node's; a node of `talos`. Only the
-        /// secrets this node's config needs have to be written in slipmesh.yaml.
+        /// secrets this node's config needs have to be written in the files.
         #[arg(long)]
         node: Option<String>,
         /// Validate only, don't write anything to disk.
@@ -42,13 +42,13 @@ enum Command {
         /// Validate and print a unified diff of what would change, don't write.
         #[arg(long)]
         diff: bool,
-        #[arg(long, default_value = "slipmesh.yaml")]
-        config: PathBuf,
+        /// The files of slipmesh.yaml; may be repeated.
+        #[arg(long = "in", num_args = 1.., required = true)]
+        inputs: Vec<PathBuf>,
         #[arg(long, default_value = "patches")]
         patches_dir: PathBuf,
     },
-    /// Print the `template` document holding a daemon's reference template, to add to
-    /// slipmesh.yaml.
+    /// Print the `template` document holding a daemon's reference template, to add to the files.
     Template { daemon: defaults::Service },
 }
 
@@ -59,9 +59,9 @@ fn main() -> Result<()> {
             node,
             check,
             diff,
-            config,
+            inputs,
             patches_dir,
-        } => generate(node.as_deref(), check, diff, &config, &patches_dir),
+        } => generate(node.as_deref(), check, diff, &inputs, &patches_dir),
         Command::Template { daemon } => {
             print!("{}", defaults::document(daemon));
             Ok(())
@@ -70,10 +70,19 @@ fn main() -> Result<()> {
 }
 
 /// Checked as far as this generator reads them.
-fn read_slipmesh(config_path: &Path) -> Result<File> {
-    let files = File::open(config_path)?;
-    patches::check(&files).with_context(|| format!("reading {}", config_path.display()))?;
+fn read_slipmesh(inputs: &[PathBuf]) -> Result<File> {
+    let files = File::open(inputs)?;
+    // Each refusal names its document, and with it the file.
+    patches::check(&files)?;
     Ok(files)
+}
+
+fn shown(inputs: &[PathBuf]) -> String {
+    let shown: Vec<String> = inputs
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    shown.join(", ")
 }
 
 /// A warning for every `template` document reaching one of `targets` whose `base` is not the hash
@@ -121,23 +130,23 @@ fn generate(
     node: Option<&str>,
     check: bool,
     diff: bool,
-    config_path: &Path,
+    inputs: &[PathBuf],
     patches_dir: &Path,
 ) -> Result<()> {
-    let files = read_slipmesh(config_path)?;
-    let reading = || format!("reading {}", config_path.display());
-    let network = Mesh::of(&files).with_context(reading)?;
-    let settings = TalosSettings::of(&files).with_context(reading)?;
+    let files = read_slipmesh(inputs)?;
+    // About the network as a whole, naming no document.
+    let network = Mesh::of(&files).with_context(|| format!("reading {}", shown(inputs)))?;
+    let settings = TalosSettings::of(&files)?;
     if let Some(n) = node {
         network.node_on(n, Platform::Talos)?;
     }
     // A node no firewall template reaches gets no ruleset; one no router template reaches is
     // refused on its own.
     anyhow::ensure!(
-        defaults::has_firewall_template(&files).with_context(reading)?,
-        "{} gives no node a firewall template - `slipmesh-taloscfg template firewall` prints the \
+        defaults::has_firewall_template(&files)?,
+        "{}: no node gets a firewall template - `slipmesh-taloscfg template firewall` prints the \
          document to add",
-        config_path.display()
+        shown(inputs)
     );
     let targets: Vec<&str> = match node {
         Some(n) => vec![n],
@@ -360,7 +369,13 @@ installer:
 
     impl Paths {
         fn generate(&self, node: Option<&str>, check: bool, diff: bool) -> Result<()> {
-            generate(node, check, diff, &self.config, &self.patches)
+            generate(
+                node,
+                check,
+                diff,
+                std::slice::from_ref(&self.config),
+                &self.patches,
+            )
         }
 
         fn patch(&self, host: &str) -> Option<String> {
@@ -425,8 +440,8 @@ installer:
         enum Also {
             /// One line, ending in the command that cures it.
             Minted,
-            /// The file it read.
-            Reading,
+            /// The file it read, once.
+            Named,
             Nothing,
         }
         // The file, the node asked for, what the refusal names, and what else it holds.
@@ -456,7 +471,7 @@ installer:
                 ),
                 None,
                 "has no Talos `kind`".to_owned(),
-                Also::Reading,
+                Also::Named,
             ),
             (
                 setup(
@@ -464,13 +479,13 @@ installer:
                 ),
                 None,
                 "metrics.mesh.port: invalid value".to_owned(),
-                Also::Reading,
+                Also::Named,
             ),
             (
                 holding(&format!("{}---\n{router}", *SLIPMESH)),
                 None,
                 "`slipmesh-taloscfg template firewall`".to_owned(),
-                Also::Nothing,
+                Also::Named,
             ),
             (
                 holding(&format!("{}---\n{firewall}", *SLIPMESH)),
@@ -494,8 +509,9 @@ installer:
                             "{named}: {shown}"
                         );
                     }
-                    Also::Reading => assert!(
-                        shown.starts_with(&format!("reading {}", paths.config.display())),
+                    Also::Named => assert_eq!(
+                        shown.matches(&paths.config.display().to_string()).count(),
+                        1,
                         "{named}: {shown}"
                     ),
                     Also::Nothing => {}

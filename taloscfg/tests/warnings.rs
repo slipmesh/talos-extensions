@@ -1,78 +1,9 @@
 //! What `slipmesh-taloscfg generate` warns about, run the way a caller runs it.
 
-use sliplib_secrets::wireguard::PrivateKey;
-use std::process::Command;
+mod common;
+
+use common::{generate, network};
 use taloscfg::defaults::{Service, document};
-
-/// Four nodes of `talos` and two links, `a`-`b` and `c`-`d`; the first loses data packets to its
-/// range of `h1` with `random_trailers` on. Both reference templates, for every node.
-fn network() -> String {
-    let key = || PrivateKey::generate().expose().to_owned();
-    let nodes: String = ["a", "b", "c", "d"]
-        .iter()
-        .zip(1..)
-        .map(|(name, id)| {
-            format!(
-                "  {name}: {{platform: talos, node_id: 0.0.0.{id}, underlay: {{wan: {{endpoint: \
-                 {{ipv4: 192.0.2.{id}}}}}}}, wireguard: {{private_key: \"{}\"}}}}\n",
-                key()
-            )
-        })
-        .collect();
-    format!(
-        r#"slipmesh: {{kind: network, version: 2, revision: 1}}
-addressing: {{loopback: {{ipv4: 198.51.100.0/25, ipv6: "3fff::/64"}}}}
-routing: {{bgp: {{as: 64512}}}}
-mesh:
-  interface_prefix: mesh-
-  links:
-    a-b:
-      type: amneziawg
-      ends: {{a: {{}}, b: {{}}}}
-      amneziawg:
-        port: 51820
-        obfuscation: {{jc: 4, jmin: 10, jmax: 50, s1: 40, s2: 41, h1: 100-199, h2: 6, h3: 7, h4: 8, random_trailers: true}}
-    c-d:
-      type: amneziawg
-      ends: {{c: {{}}, d: {{}}}}
-      amneziawg:
-        port: 51821
-        obfuscation: {{jc: 4, jmin: 10, jmax: 50, s1: 40, s2: 41, h1: 5, h2: 6, h3: 7, h4: 8}}
-nodes:
-{nodes}---
-{}---
-{}"#,
-        document(Service::Router),
-        document(Service::Firewall),
-    )
-}
-
-/// What a run of `generate` with `args` on `text` gave: its exit status, stdout and stderr. The
-/// patch files go to `patches` beside the file.
-struct Run {
-    success: bool,
-    stdout: String,
-    stderr: String,
-}
-
-fn generate(dir: &std::path::Path, text: &str, args: &[&str]) -> Run {
-    let config = dir.join("slipmesh.yaml");
-    std::fs::write(&config, text).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_slipmesh-taloscfg"))
-        .arg("generate")
-        .args(args)
-        .arg("--config")
-        .arg(&config)
-        .arg("--patches-dir")
-        .arg(dir.join("patches"))
-        .output()
-        .unwrap();
-    Run {
-        success: output.status.success(),
-        stdout: String::from_utf8(output.stdout).unwrap(),
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
-}
 
 /// The lines `generate --check` writes to stderr for `node`, or for every node.
 fn warned(node: Option<&str>) -> Vec<String> {
@@ -81,7 +12,7 @@ fn warned(node: Option<&str>) -> Vec<String> {
     if let Some(node) = node {
         args.extend(["--node", node]);
     }
-    let run = generate(dir.path(), &network(), &args);
+    let run = generate(dir.path(), &[("slipmesh.yaml", &network())], &args);
     assert!(run.success, "{}", run.stderr);
     run.stderr.lines().map(str::to_owned).collect()
 }
@@ -109,7 +40,7 @@ fn a_template_of_another_base_is_warned_about_to_a_run_for_a_node_it_reaches_wit
     let run = |node: &str| {
         let run = generate(
             dir.path(),
-            &with_an_old_firewall_template(),
+            &[("slipmesh.yaml", &with_an_old_firewall_template())],
             &["--check", "--node", node],
         );
         assert!(run.success, "{}", run.stderr);
@@ -142,7 +73,7 @@ fn a_reference_template_of_another_base_is_told_to_set_its_base_alone() {
         .lines()
         .count();
     let dir = tempfile::tempdir().unwrap();
-    let run = generate(dir.path(), &text, &["--check"]);
+    let run = generate(dir.path(), &[("slipmesh.yaml", &text)], &["--check"]);
     assert!(run.success, "{}", run.stderr);
     let warnings: Vec<&str> = run
         .stderr
@@ -152,9 +83,10 @@ fn a_reference_template_of_another_base_is_told_to_set_its_base_alone() {
     assert_eq!(
         warnings,
         [format!(
-            "warning: the `kind: template` document at line {line}: its text is the current \
-             reference firewall template, and its `base` is not that template's hash - set `base` \
-             to {}",
+            "warning: the `kind: template` document at line {line} of {}: its text is the \
+             current reference firewall template, and its `base` is not that template's hash - \
+             set `base` to {}",
+            dir.path().join("slipmesh.yaml").display(),
             Service::Firewall.base()
         )],
         "{}",
@@ -178,7 +110,7 @@ fn a_link_that_loses_packets_is_warned_about_once_to_a_run_for_its_nodes_and_the
 fn a_run_that_writes_or_shows_a_diff_warns_too_and_writes_what_it_would_without() {
     let dir = tempfile::tempdir().unwrap();
     let text = network();
-    let written = generate(dir.path(), &text, &[]);
+    let written = generate(dir.path(), &[("slipmesh.yaml", &text)], &[]);
     assert!(written.success, "{}", written.stderr);
     assert!(
         written.stderr.starts_with("warning: mesh link a-b: "),
@@ -196,7 +128,7 @@ fn a_run_that_writes_or_shows_a_diff_warns_too_and_writes_what_it_would_without(
         );
     }
     // What was written is what the file gives, warning or not: a diff shows nothing to change.
-    let diffed = generate(dir.path(), &text, &["--diff"]);
+    let diffed = generate(dir.path(), &[("slipmesh.yaml", &text)], &["--diff"]);
     assert!(diffed.success, "{}", diffed.stderr);
     assert!(
         diffed.stderr.starts_with("warning: mesh link a-b: "),

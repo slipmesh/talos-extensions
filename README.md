@@ -9,7 +9,7 @@ their config.
 | `awg` | `awg` | on the node, as `ext-awg` | brings up AmneziaWG interfaces and peers over netlink |
 | `router` | `router` | on the node, as `ext-router` | renders BIRD config (OSPFv3 + iBGP), supervises `bird` |
 | `nftables` | `nftables` | on the node, as `ext-nftables` | applies an nftables ruleset and keeps it applied |
-| `taloscfg` | `slipmesh-taloscfg` | on your workstation | renders every `talos` node's patch from one `slipmesh.yaml` |
+| `taloscfg` | `slipmesh-taloscfg` | on your workstation | renders every `talos` node's patch from the files of `slipmesh.yaml` |
 | `common` | — | — | netlink, obfuscation types, shared route tagging |
 
 This repository produces plain binaries and nothing else. They ship in the
@@ -380,15 +380,18 @@ dynamically linked package siderolabs/pkgs already ships.
 
 ---
 
-## `taloscfg`: one file, every node's patch
+## `taloscfg`: the files of one network, every node's patch
 
-`slipmesh-taloscfg` is the only crate here that doesn't run on a node. It reads `slipmesh.yaml` in
-[format version 2](https://github.com/slipmesh/sliplib/blob/main/docs/slipmesh-yaml.md), which
-describes the whole mesh and everything else a node of `platform: talos` carries, and writes
-`patches/<node>.yaml` for every such node, each holding the node's Talos documents followed by the
-`awg`, `router` and `nftables` `ExtensionServiceConfig` documents it generates, which `talosctl
-apply-config -p` then ships to that node. A patch file is output only: nothing in it is read back,
-so edit `slipmesh.yaml` and regenerate rather than editing the patch.
+`slipmesh-taloscfg` is the only crate here that doesn't run on a node. It reads the files of
+`slipmesh.yaml` given with `--in`, which takes several values and may be repeated, in [format
+version 2](https://github.com/slipmesh/sliplib/blob/main/docs/slipmesh-yaml.md), laid over each
+other as [several files](https://github.com/slipmesh/sliplib/blob/main/docs/slipmesh-yaml.md#several-files)
+are: one file, or the same network split into its architecture and its secrets, gives the same
+patch files. The format describes the whole mesh and everything else a node of `platform: talos`
+carries. It writes `patches/<node>.yaml` for every such node, each holding the node's Talos
+documents followed by the `awg`, `router` and `nftables` `ExtensionServiceConfig` documents it
+generates, which `talosctl apply-config -p` then ships to that node. A patch file is output only:
+nothing in it is read back, so edit `slipmesh.yaml` and regenerate rather than editing the patch.
 
 It only reads `slipmesh.yaml`. What writes into the file - its keys, its obfuscation,
 `mesh.interface_prefix` - is [`slipmesh`](https://github.com/slipmesh/sliplib#slipmesh), and where
@@ -531,9 +534,9 @@ Each node's configs are rendered and validated by `sliplib-mesh`, on the config 
 read, so the generator and the daemons check one definition.
 
 ```sh
-slipmesh-taloscfg generate                      # every node of talos, into ./patches
-slipmesh-taloscfg generate --node node-a --diff # one node, print what would change, write nothing
-slipmesh-taloscfg generate --check              # validate only
+slipmesh-taloscfg generate --in mesh.yaml secrets.yaml talos.yaml # every node of talos, into ./patches
+slipmesh-taloscfg generate --in cfg/*.yaml --node node-a --diff   # one node, print what would change, write nothing
+slipmesh-taloscfg generate --in cfg/*.yaml --check                # validate only
 ```
 
 Every run renders and validates every node it was asked for before it writes any patch file, and
@@ -554,6 +557,11 @@ a range, which costs up to the share of data packets the line names; and the lin
 `header_protection_key` while one of `s1` to `s3` stands 1 to 15 bytes above `s4`.
 
 ### Breaking changes
+
+After v1.15.0-beta.0+sm.5, `generate` takes the files of `slipmesh.yaml` with `--in`, one or
+several; `--config` is gone, with no alias and no default file. One file that holds two `network`
+or two `groups` documents is laid, where it was refused. A refusal of the network names the key's
+line and its file, where it named the document's line and a column after a `reading <file>` line.
 
 After v1.15.0-beta.0+sm.5, `slipmesh-taloscfg` reads a `slipmesh.yaml` of format version 2 alone;
 a file of version 1 is converted as sliplib's `docs/slipmesh-yaml-v1-to-v2.md` says, with the
