@@ -61,7 +61,12 @@ fn patches(dir: &Path) -> Vec<(String, Vec<u8>)> {
 fn one_file_and_the_same_split_into_architecture_and_secrets_give_the_same_patch_files() {
     let text = network();
     let (architecture, secrets) = split(&text);
-    assert!(!architecture.contains("private_key") && secrets.contains("private_key"));
+    for moved in ["private_key", "obfuscation"] {
+        assert!(
+            !architecture.contains(moved) && secrets.contains(moved),
+            "{moved}"
+        );
+    }
     let (one, two) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let run = generate(one.path(), &[("slipmesh.yaml", &text)], &[]);
     assert!(run.success, "{}", run.stderr);

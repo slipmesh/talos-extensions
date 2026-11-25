@@ -559,7 +559,9 @@ a range, which costs up to the share of data packets the line names; and the lin
 ### Breaking changes
 
 After v1.15.0-beta.0+sm.5, `generate` takes the files of `slipmesh.yaml` with `--in`, one or
-several; `--config` is gone, with no alias and no default file.
+several; `--config` is gone, with no alias and no default file. One file that holds two `network`
+or two `groups` documents is laid, where it was refused. A refusal of the network names the key's
+line and its file, where it named the document's line and a column after a `reading <file>` line.
 
 After v1.15.0-beta.0+sm.5, `slipmesh-taloscfg` reads a `slipmesh.yaml` of format version 2 alone;
 a file of version 1 is converted as sliplib's `docs/slipmesh-yaml-v1-to-v2.md` says, with the
