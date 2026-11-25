@@ -482,6 +482,15 @@ installer:
                 Also::Named,
             ),
             (
+                setup(
+                    "---\nslipmesh: {kind: patch, platform: talos, include: [nogroup]}\nkind: \
+                     Example\n",
+                ),
+                None,
+                "\"nogroup\", which is neither a node nor a group".to_owned(),
+                Also::Named,
+            ),
+            (
                 holding(&format!("{}---\n{router}", *SLIPMESH)),
                 None,
                 "`slipmesh-taloscfg template firewall`".to_owned(),
