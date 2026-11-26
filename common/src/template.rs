@@ -268,7 +268,7 @@ mark {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.mark.keep }} {{ rule.loo
         let file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(
             file.path(),
-            "bgp_as: 64512\nclasses: {egress: {protocol: 152}}\nvars: {a: 1}\n",
+            "bgp_as: 64496\nclasses: {egress: {protocol: 152}}\nvars: {a: 1}\n",
         )
         .unwrap();
         let values = Values::read(file.path()).unwrap();

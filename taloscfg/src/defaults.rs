@@ -112,7 +112,7 @@ mod tests {
 
     const NETWORK: &str = r#"slipmesh: {kind: network, version: 2, revision: 1}
 addressing: {loopback: {ipv4: 198.51.100.0/25, ipv6: "3fff::/64"}}
-routing: {bgp: {as: 64512}}
+routing: {bgp: {as: 64496}}
 mesh: {interface_prefix: mesh-}
 nodes:
   node-a: {platform: talos, node_id: 0.0.0.1, underlay: {wan: {}}}
@@ -173,7 +173,7 @@ nodes:
     fn the_digest_of_each_reference_is_pinned() {
         assert_eq!(
             Service::Router.digest(),
-            "37259e51772ccc05ce786974fc2f86c4e00f788f63a5cdf192ae93508c633bb0"
+            "57973e92884f81106595b3d2742e22a76f1707e7cd27c7e6df119ae02c408448"
         );
         assert_eq!(
             Service::Firewall.digest(),

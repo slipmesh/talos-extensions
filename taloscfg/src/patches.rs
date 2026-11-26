@@ -178,7 +178,7 @@ mod tests {
 
     const NETWORK: &str = r#"slipmesh: {kind: network, version: 2, revision: 1}
 addressing: {loopback: {ipv4: 198.51.100.0/25, ipv6: "3fff::/64"}}
-routing: {bgp: {as: 64512}}
+routing: {bgp: {as: 64496}}
 mesh: {interface_prefix: mesh-}
 nodes:
   node-a: {platform: talos, node_id: 0.0.0.1, underlay: {wan: {}}}
@@ -408,8 +408,8 @@ nodes:
     #[test]
     fn a_patch_of_a_routing_rule_the_generator_writes_is_refused() {
         let network = NETWORK.replace(
-            "routing: {bgp: {as: 64512}}",
-            "routing:\n  bgp: {as: 64512}\n  classes:\n    egress: {protocol: 152, rules: \
+            "routing: {bgp: {as: 64496}}",
+            "routing:\n  bgp: {as: 64496}\n  classes:\n    egress: {protocol: 152, rules: \
              {uplink-replies: {priority: 1000}}}",
         );
         for name in ["1000", "01000"] {

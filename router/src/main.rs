@@ -324,7 +324,7 @@ mod tests {
         let mesh: config::RouterConfig = sliplib_yaml::from_str(
             r#"
 node: {loopback_addresses: ["198.51.100.1/32", "3fff::1/128"]}
-bgp_as: 64512
+bgp_as: 64496
 bypass: {include: [{kind: literal}]}
 "#,
         )
