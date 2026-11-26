@@ -474,10 +474,7 @@ and the `nftables` document, written after it, the `firewall` template as
 is checked as that daemon will check it and rendered with the node's values, a `router` one with
 the node's config and a `firewall` one with each interface name standing in as its variable's name,
 so one that would fail on a node fails `generate` instead. A template overridden on every node it
-reaches is not checked. The `nftables` document also gets the ruleset as
-`/etc/talos-extensions/nftables.yaml`, the file the daemon read before it took a template: a node
-that falls back to its previous boot slot runs that daemon against this config, and would
-otherwise apply no ruleset at all. That copy goes once no node can fall back that far.
+reaches is not checked.
 
 The values are the route classes of the network and the `vars` that reach the node, laid by rank.
 `router.yaml` carries them as `classes` and `vars`, and the `nftables` document as
