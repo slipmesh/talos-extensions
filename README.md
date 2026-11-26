@@ -355,9 +355,8 @@ failed scrape is not a reason to restart the container and tear down every adjac
 
 ## `nftables`: ruleset loader with a table-loss watchdog
 
-Applies the ruleset template `/etc/talos-extensions/nftables.conf.j2` once at startup, the same way
-`awg`/`router` converge their own state once at startup - but unlike a true oneshot, it doesn't
-exit afterward.
+Applies the ruleset template `/etc/talos-extensions/nftables.conf.j2` at startup, and again
+whenever the node's uplinks change - unlike a true oneshot, it doesn't exit afterward.
 
 **Why it stays resident**: something else's first `iptables`/`ip6tables` invocation transitioning
 into iptables-nft mode (timed around kubelet/kube-proxy's own first sync on a freshly booted node)
@@ -385,6 +384,25 @@ two things to it:
    variable is refused before anything is applied. Only the variables the template actually
    reads get resolved (and retried, bounded, if no default route exists yet) - a v4-only node
    applying a ruleset that never mentions `defaultroute_interface_ipv6` doesn't need one to exist.
+   These two are resolved once, at start.
+
+   `uplink` is always given, and nothing waits for it:
+
+   ```yaml
+   uplink:
+     ipv4: {interface: eth0, addresses: [203.0.113.5]}   # none without an IPv4 default route
+     ipv6: {interface: eth0, addresses: ["2001:db8::5"]} # none without an IPv6 default route
+   ```
+
+   `interface` is that of the family's default route in the main table. `addresses` are the
+   addresses of that family on it that a packet can leave from, in the kernel's order: of scope
+   global, neither tentative nor failed in duplicate address detection, deprecated ones included,
+   and on a point-to-point link the local address, not the peer's. The daemon follows rtnetlink's
+   route and address events: one second after the first of a burst it looks the uplinks up again,
+   and where they differ it renders and applies the ruleset again. A render or an apply that fails
+   then stops the daemon, with the ruleset in place, and Talos restarts it. `generate` renders a
+   firewall template with both families `none`, as at boot, and with both set, so a template that
+   fails in either state is refused there.
 2. **Own-table identification by scanning, not hardcoding** (`nftables.rs`): before applying, it
    finds every `table <family> <name>` the rendered ruleset declares and issues `nft delete
    table <family> <name>` for each (errors ignored - the table not existing yet is normal on the
@@ -392,7 +410,9 @@ two things to it:
    firewall, or anything else on the same node may have nftables tables of its own that must
    survive. The table names live in whoever authors the template, not in this binary; the cost of
    that is that renaming a table between two config versions orphans the old one rather than
-   cleaning it up.
+   cleaning it up. For the same reason a template declares every table on every rendering, empty
+   where there is nothing to put in it: a table one rendering declares and the next does not stays
+   loaded.
 
 No rule content is baked into this binary at all - MSS clamping, NAT, or anything else is just
 whatever the template says; [`nftables/templates/nftables.conf.j2`](nftables/templates/nftables.conf.j2)
@@ -745,24 +765,22 @@ how it read `0.1.0` at tag `v0.1.6`. The Release PR workflow (Actions, then Rele
 commit as a PR with `CHANGELOG.md` regenerated, and merging it tags the release. Release lines,
 versions and the steps are in [docs/RELEASING.md](docs/RELEASING.md).
 
-Pull requests and pushes run fmt, clippy, the tests, the ignored ones as root, `cargo audit`,
-which also runs weekly, and the `licenses` check, which holds every dependency to the licenses and
-sources [`deny.toml`](deny.toml) allows and renders the third-party notices from
-[`about.toml`](about.toml); only
-the push of a merged release PR builds, once every check of that push passes. A pull request also
-builds the image from empty placeholders and pushes nothing, so a Dockerfile the release build would
-fail on fails there. An advisory with no
-fix yet is ignored in `.cargo/audit.toml`, with the reason next to it. It builds every binary for
-the musl target on a runner of each arch and packs the four of them, in `/usr/local/bin/`, into
-`ghcr.io/slipmesh/talos-extensions`, together with the `extension-services/` specs of the three
-daemons in `/usr/local/etc/containers/` and the license notices of what is linked into the binaries
-in `/usr/share/licenses/talos-extensions/`: `THIRD-PARTY-NOTICES` for the crates, rendered by
+Pull requests and pushes run fmt, clippy, the tests, the ignored ones as root, `cargo audit`, which
+also runs weekly, and the `licenses` check, which holds every dependency to the licenses and sources
+[`deny.toml`](deny.toml) allows and renders the third-party notices from [`about.toml`](about.toml);
+only the push of a merged release PR builds, once every check of that push passes. A pull request
+also builds the image from empty placeholders and pushes nothing, so a Dockerfile the release build
+would fail on fails there. An advisory with no fix yet is ignored in `.cargo/audit.toml`, with the
+reason next to it. It builds every binary for the musl target on a runner of each arch and packs the
+four of them, in `/usr/local/bin/`, into `ghcr.io/slipmesh/talos-extensions`, together with the
+`extension-services/` specs of the three daemons in `/usr/local/etc/containers/` and the license
+notices of what is linked into the binaries in `/usr/share/licenses/talos-extensions/`:
+`THIRD-PARTY-NOTICES` for the crates, rendered by
 [cargo-about](https://embarkstudios.github.io/cargo-about/) with [`about.hbs`](about.hbs), and
 `COPYRIGHT-rust-std.html` and `COPYRIGHT-musl` for the Rust standard library and the musl libc. The
-image is pushed as `sha-<commit>`, retagged as the
-release once the build succeeds, the commit is tagged, and the GitHub Release gets the same
-binaries and notices with a `SHA256SUMS`. Only a released image is one talos-installer can pin, so a daemon
-change reaches it through a release.
+image is pushed as `sha-<commit>`, retagged as the release once the build succeeds, the commit is
+tagged, and the GitHub Release gets the same binaries and notices with a `SHA256SUMS`. Only a
+released image is one talos-installer can pin, so a daemon change reaches it through a release.
 
 To reproduce one binary locally, build on a Linux host of that arch with `musl-tools` installed:
 

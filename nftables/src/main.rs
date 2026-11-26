@@ -1,10 +1,10 @@
-use nftables::ruleset;
 use nftables::template::{
     self, CONFIG_PATH, DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6, TEMPLATE_PATH,
 };
+use nftables::{follow, ruleset};
 
 use anyhow::{Context, Result};
-use common::netlink::rt::{Family, RtClient};
+use common::netlink::rt::{self, Family, RtClient};
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
@@ -12,6 +12,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 /// Tries of a default-route lookup at start: network bring-up on the node is not synchronized with
 /// `depends: [{configuration: true}]`, but a route that never appears is a configuration problem.
@@ -59,10 +60,37 @@ async fn run() -> Result<()> {
         interfaces.insert(DEFAULT_ROUTE_IPV6, iface);
     }
 
-    let rendered = template::render(&template, &interfaces, &values)?;
+    // Before the lookup, so that no change between the two goes unseen.
+    let changes = rt::route_and_address_changes()?;
+    let uplinks = follow::lookup(&rt).await?;
+    tracing::info!(?uplinks, "uplinks");
+    let rendered = template::render(&template, &interfaces, &uplinks, &values)?;
     ruleset::apply(&rendered).await?;
 
-    watchdog(rendered).await
+    // The ruleset in force. Held while it is applied, so the watchdog never reapplies one that a
+    // change is replacing.
+    let applied = Mutex::new(rendered);
+    let follow = follow::follow(
+        changes,
+        uplinks,
+        || follow::lookup(&rt),
+        |uplinks| {
+            tracing::info!(?uplinks, "uplinks changed");
+            let rendered = template::render(&template, &interfaces, uplinks, &values);
+            let applied = &applied;
+            async move {
+                let rendered = rendered?;
+                let mut in_force = applied.lock().await;
+                ruleset::apply(&rendered).await?;
+                *in_force = rendered;
+                Ok(())
+            }
+        },
+    );
+    tokio::select! {
+        result = follow => result,
+        result = watchdog(&applied) => result,
+    }
 }
 
 /// The interface of the `family` default route, which `lookup` finds.
@@ -83,7 +111,7 @@ where
     .await
 }
 
-/// Watches for our own tables disappearing and reapplies `rendered` when they do - see
+/// Watches for our own tables disappearing and reapplies the ruleset in force when they do - see
 /// `ruleset.rs`'s own doc comment for *why* this exists (a real, confirmed-on-a-real-node boot
 /// race with something else's first nftables/iptables-nft bootstrap, not a hypothetical). Runs
 /// forever: `nft monitor` streams every nftables event on the node (table/chain/rule/set changes,
@@ -98,7 +126,7 @@ where
 /// whole process's own exit - unlike `router`'s supervised `bird` child, there's no reason a
 /// monitor hiccup should tear down and restart the *entire* container (an oneshot apply during
 /// that restart is redundant work, not a reset of any state that needs it).
-async fn watchdog(rendered: String) -> Result<()> {
+async fn watchdog(applied: &Mutex<String>) -> Result<()> {
     loop {
         let mut monitor = match Command::new(ruleset::NFT_BIN)
             .arg("monitor")
@@ -118,19 +146,24 @@ async fn watchdog(rendered: String) -> Result<()> {
 
         loop {
             match lines.next_line().await {
-                Ok(Some(_line)) => match ruleset::all_present(&rendered).await {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        tracing::warn!(
-                            "our nftables tables are missing (something else on this node reset \
-                             the ruleset) - reapplying"
-                        );
-                        if let Err(e) = ruleset::apply(&rendered).await {
-                            tracing::warn!(error = %e, "reapply after table loss failed");
+                Ok(Some(_line)) => {
+                    let rendered = applied.lock().await;
+                    match ruleset::all_present(&rendered).await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            tracing::warn!(
+                                "our nftables tables are missing (something else on this node \
+                                 reset the ruleset) - reapplying"
+                            );
+                            if let Err(e) = ruleset::apply(&rendered).await {
+                                tracing::warn!(error = %e, "reapply after table loss failed");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to check nftables table state")
                         }
                     }
-                    Err(e) => tracing::warn!(error = %e, "failed to check nftables table state"),
-                },
+                }
                 Ok(None) => {
                     tracing::warn!("nft monitor exited, respawning");
                     break;
