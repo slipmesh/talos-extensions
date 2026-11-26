@@ -102,9 +102,10 @@ pub struct RenderInputs<'a> {
     /// kernel or BGP routes back into the IGP (`export none`).
     pub ospf_interfaces: &'a [InterfacePattern],
     /// iBGP full mesh over the loopbacks (`multihop` + RFC 8950). It carries this node's own
-    /// IPv4 loopback (`source = RTS_DEVICE`), its BYPASS/ANNOUNCE statics (`RTS_STATIC`) and any
-    /// kernel route inside a `learn` range (`RTS_INHERIT`) - but never OSPF-learned routes, which
-    /// would put the two protocols in a preference fight over the same prefix.
+    /// IPv4 loopback (`source = RTS_DEVICE`), its BYPASS/ANNOUNCE statics (`RTS_STATIC`), any
+    /// kernel route inside a `learn` range (`RTS_INHERIT`) and the egress routes it exits itself,
+    /// for both families - but never OSPF-learned routes, which would put the two protocols in a
+    /// preference fight over the same prefix.
     ///
     /// BGP is the only possible carrier for the IPv4 loopbacks: OSPFv3 is IPv6-only by design.
     /// The IPv4 kernel protocol's export filter therefore sets `krt_prefsrc` to this node's own
@@ -427,26 +428,39 @@ learn: [203.0.113.128/26]
     const EGRESS: &str = "classes: {egress: {protocol: 150, table: 152, rules: {}}}";
 
     /// Lines an `egress` class with a table adds.
-    const EGRESS_PARTS: [&str; 8] = [
+    const EGRESS_PARTS: [&str; 9] = [
         "ipv4 table egress4;\nipv6 table egress6;\n",
-        "protocol pipe {\n    table master4;\n    peer table egress4;\n    import none;\n    \
+        "protocol pipe {\n    table master4;\n    peer table egress4;\n    import filter {\n        \
+         if source = RTS_INHERIT then accept;\n        reject;\n    };\n    \
          export filter {\n        if source = RTS_BGP && (64496, 152, 0) ~ bgp_large_community then \
          accept;\n        reject;\n    };\n}\n",
-        "protocol pipe {\n    table master6;\n    peer table egress6;\n    import none;\n    \
+        "protocol pipe {\n    table master6;\n    peer table egress6;\n    import filter {\n        \
+         if source = RTS_INHERIT then accept;\n        reject;\n    };\n    \
          export filter {\n        if source = RTS_BGP && (64496, 152, 0) ~ bgp_large_community then \
          accept;\n        reject;\n    };\n}\n",
-        "protocol kernel {\n    kernel table 152;\n    ipv4 {\n        table egress4;\n        \
+        "protocol kernel kernel_egress4 {\n    kernel table 152;\n    learn;\n    ipv4 {\n        \
+         table egress4;\n        import filter {\n            \
+         if krt_source = 150 then {\n                preference = 200;\n                \
+         accept;\n            }\n            reject;\n        };\n        \
          export filter {\n            krt_prefsrc = 198.51.100.1;\n            accept;\n        \
          };\n    };\n}\n",
-        "protocol kernel {\n    kernel table 152;\n    ipv6 {\n        table egress6;\n        \
+        "protocol kernel kernel_egress6 {\n    kernel table 152;\n    learn;\n    ipv6 {\n        \
+         table egress6;\n        import filter {\n            \
+         if krt_source = 150 then {\n                preference = 200;\n                \
+         accept;\n            }\n            reject;\n        };\n        \
          export filter {\n            krt_prefsrc = 3fff::1;\n            accept;\n        \
          };\n    };\n}\n",
         "            if source = RTS_BGP then {\n                \
          if (64496, 152, 0) ~ bgp_large_community then reject;\n",
-        "            if proto = \"BYPASS\" then {\n                \
+        "            if proto = \"BYPASS\" || proto = \"kernel_egress4\" then {\n                \
          bgp_large_community.add((64496, 152, 0));\n                accept;\n            }\n",
-        // Before the general static accept.
-        "accept;\n            }\n            if source = RTS_STATIC then accept;",
+        // Before the general static and learned accepts.
+        "accept;\n            }\n            if source = RTS_STATIC then accept;\n            \
+         if source = RTS_INHERIT then accept;",
+        "    ipv6 {\n        import all;\n        export filter {\n            \
+         if proto = \"kernel_egress6\" then {\n                \
+         bgp_large_community.add((64496, 152, 0));\n                accept;\n            }\n            \
+         reject;\n        };\n        next hop self;\n    };\n",
     ];
 
     #[test]
@@ -461,10 +475,28 @@ learn: [203.0.113.128/26]
     fn without_an_egress_class_that_has_a_table_nothing_of_it_is_rendered() {
         for values in ["{}", "classes: {egress: {protocol: 152, rules: {}}}"] {
             let out = reference_with(values);
-            for absent in ["egress4", "egress6", "bgp_large_community", "kernel table"] {
+            for absent in [
+                "egress4",
+                "egress6",
+                "bgp_large_community",
+                "kernel table",
+                "preference",
+            ] {
                 assert!(!out.contains(absent), "{values}: {absent}\n---\n{out}");
             }
         }
+    }
+
+    #[test]
+    fn the_kernel_import_takes_roadwarrior_routes_under_both_protocol_numbers() {
+        let out = reference_with("{}");
+        assert!(
+            out.contains(
+                "            if krt_source = 200 then accept;\n            \
+                 if krt_source = 151 then accept;\n            reject;\n"
+            ),
+            "{out}"
+        );
     }
 
     #[test]
