@@ -1,5 +1,5 @@
-//! Following the uplinks: a burst of route and address changes becomes one lookup, and a lookup
-//! that finds them as they were changes nothing.
+//! Following the uplinks: a burst of link, route and address changes becomes one lookup, and a
+//! lookup that finds them as they were changes nothing.
 
 use crate::template::Uplinks;
 use anyhow::{Context, Result};
@@ -55,7 +55,7 @@ async fn settled(changes: &mut (impl Stream<Item = ()> + Unpin)) -> Result<()> {
     changes
         .next()
         .await
-        .context("the route and address changes ended")?;
+        .context("the link, route and address changes ended")?;
     tokio::time::sleep(SETTLE).await;
     while let Some(Some(())) = changes.next().now_or_never() {}
     Ok(())
@@ -127,6 +127,17 @@ mod tests {
             run(rx, vec![on("eth0"), on("eth1")]).await,
             (2, vec![on("eth0"), on("eth1")])
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_change_within_the_settling_time_is_the_same_lookup() {
+        let (tx, rx) = mpsc::unbounded();
+        tx.unbounded_send(()).unwrap();
+        tokio::spawn(async move {
+            tokio::time::sleep(SETTLE / 2).await;
+            tx.unbounded_send(()).unwrap();
+        });
+        assert_eq!(run(rx, vec![on("eth0")]).await, (1, vec![on("eth0")]));
     }
 
     #[tokio::test(start_paused = true)]

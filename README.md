@@ -368,7 +368,7 @@ scheduling alone, so a bare "apply once and exit" is not reliable against it.
 re-check its own tables via `nftables::all_present` and reapply if any are missing) is the same
 strategy Talos's own `network.NfTablesChainController` uses to keep *its* table present - see that
 controller's source (`internal/app/machined/pkg/controllers/network/nftables_chain.go`) for the
-same event-driven reconcile pattern, and `nftables.rs`'s own doc comment for the full story.
+same event-driven reconcile pattern, and `ruleset.rs`'s own doc comment for the full story.
 On SIGTERM it exits with the ruleset still loaded.
 
 The config is not a set of structured fields this binary renders into rules - the template is the
@@ -397,17 +397,20 @@ two things to it:
    `interface` is that of the family's default route in the main table. `addresses` are the
    addresses of that family on it that a packet can leave from, in the kernel's order: of scope
    global, neither tentative nor failed in duplicate address detection, deprecated ones included,
-   and on a point-to-point link the local address, not the peer's. The daemon follows rtnetlink's
-   route and address events: one second after the first of a burst it looks the uplinks up again,
-   and where they differ it renders and applies the ruleset again. A render or an apply that fails
-   then stops the daemon, with the ruleset in place, and Talos restarts it. `generate` renders a
-   firewall template with both families `none`, as at boot, with both set, and with both set but no
-   addresses, as while IPv6 duplicate address detection runs, so a template that fails in any of
-   these states is refused there.
-2. **Own-table identification by scanning, not hardcoding** (`nftables.rs`): before applying, it
-   finds every `table <family> <name>` the rendered ruleset declares and issues `nft delete
-   table <family> <name>` for each (errors ignored - the table not existing yet is normal on the
-   first run). This is deliberately *not* `flush ruleset` - kube-proxy, Talos's own ingress
+   and on a point-to-point link the local address, not the peer's. `addresses` may be empty, for
+   instance while duplicate address detection runs. The daemon follows rtnetlink's link, route and
+   address events: one second after the first of a burst it looks the uplinks up again, and where
+   they differ it renders the ruleset again and applies it unless the rendering is the one in
+   force. A render or an apply that fails then stops the daemon, with the ruleset in place, and
+   Talos restarts it. `generate` renders a firewall template with each family in each of its
+   states - `none`, as at boot, set, and set with no addresses - so a template that fails in any
+   of the nine is refused there.
+2. **Own-table identification by scanning, not hardcoding** (`ruleset.rs`): it finds every
+   `table <family> <name>` the rendered ruleset declares and puts `table <family> <name>` and
+   `delete table <family> <name>` for each before the ruleset, in the same `nft -f`. The first
+   makes the delete succeed where the table is not loaded yet, and in one transaction the old
+   tables go only if the whole ruleset loads: one `nft` refuses leaves them in force. This is
+   deliberately *not* `flush ruleset` - kube-proxy, Talos's own ingress
    firewall, or anything else on the same node may have nftables tables of its own that must
    survive. The table names live in whoever authors the template, not in this binary; the cost of
    that is that renaming a table between two config versions orphans the old one rather than
@@ -429,8 +432,7 @@ value, covers it.
 
 The reference ruleset starts by removing the tables of the mark, `ip talos_mark` and
 `inet talos_mark`, so that a ruleset without the mark leaves neither behind. `destroy` needs Linux
-6.3 and nft 1.0.8: on an older kernel `nft -f` fails after the daemon has deleted its tables, and
-the node is left with none of them.
+6.3 and nft 1.0.8: on an older kernel `nft -f` refuses the whole ruleset.
 
 See talos-installer's
 [docs/nftables.md](https://github.com/slipmesh/talos-installer/blob/main/docs/nftables.md) for the

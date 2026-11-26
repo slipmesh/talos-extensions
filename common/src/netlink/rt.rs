@@ -336,8 +336,8 @@ impl RtClient {
         Ok(self.uplink(family).await?.map(|(name, _)| name))
     }
 
-    /// The interface of the `family` default route of the main table, as [`Self::default_iface`]
-    /// finds it, with its addresses of that family a packet can leave from, in the kernel's order.
+    /// The interface of the first `family` default route of the main table the kernel lists, with
+    /// its addresses of that family a packet can leave from, in the kernel's order.
     pub async fn uplink(&self, family: Family) -> Result<Option<(String, Vec<IpAddr>)>> {
         use rtnetlink::packet_route::AddressFamily;
         use rtnetlink::packet_route::route::{RouteAttribute, RouteHeader};
@@ -397,18 +397,21 @@ impl RtClient {
     }
 }
 
-/// A wake-up for every change to a route or an address of either family, an overrun of the socket
-/// included. The messages are not read: whoever wakes looks up the state again.
-pub fn route_and_address_changes() -> Result<impl futures::Stream<Item = ()> + Unpin> {
+/// A wake-up for every change to a link, or to a route or an address of either family, an overrun
+/// of the socket included. The messages are not read: whoever wakes looks up the state again.
+/// Links too, since the kernel drops the IPv4 routes of a link that goes down without a route
+/// event.
+pub fn link_route_and_address_changes() -> Result<impl futures::Stream<Item = ()> + Unpin> {
     use futures::StreamExt;
     use rtnetlink::MulticastGroup;
     let (connection, _, messages) = rtnetlink::new_multicast_connection(&[
+        MulticastGroup::Link,
         MulticastGroup::Ipv4Route,
         MulticastGroup::Ipv6Route,
         MulticastGroup::Ipv4Ifaddr,
         MulticastGroup::Ipv6Ifaddr,
     ])
-    .context("failed to subscribe to rtnetlink route and address changes")?;
+    .context("failed to subscribe to rtnetlink link, route and address changes")?;
     tokio::spawn(connection);
     Ok(messages.map(|_| ()))
 }

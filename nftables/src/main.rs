@@ -61,15 +61,13 @@ async fn run() -> Result<()> {
     }
 
     // Before the lookup, so that no change between the two goes unseen.
-    let changes = rt::route_and_address_changes()?;
+    let changes = rt::link_route_and_address_changes()?;
     let uplinks = follow::lookup(&rt).await?;
     tracing::info!(?uplinks, "uplinks");
     let rendered = template::render(&template, &interfaces, &uplinks, &values)?;
     ruleset::apply(&rendered).await?;
 
-    // The ruleset in force. Held while it is applied, so the watchdog never reapplies one that a
-    // change is replacing.
-    let applied = Mutex::new(rendered);
+    let in_force = Mutex::new(rendered);
     let follow = follow::follow(
         changes,
         uplinks,
@@ -77,19 +75,13 @@ async fn run() -> Result<()> {
         |uplinks| {
             tracing::info!(?uplinks, "uplinks changed");
             let rendered = template::render(&template, &interfaces, uplinks, &values);
-            let applied = &applied;
-            async move {
-                let rendered = rendered?;
-                let mut in_force = applied.lock().await;
-                ruleset::apply(&rendered).await?;
-                *in_force = rendered;
-                Ok(())
-            }
+            let in_force = &in_force;
+            async move { ruleset::replace(in_force, rendered?).await }
         },
     );
     tokio::select! {
         result = follow => result,
-        result = watchdog(&applied) => result,
+        result = watchdog(&in_force) => result,
     }
 }
 
@@ -126,7 +118,7 @@ where
 /// whole process's own exit - unlike `router`'s supervised `bird` child, there's no reason a
 /// monitor hiccup should tear down and restart the *entire* container (an oneshot apply during
 /// that restart is redundant work, not a reset of any state that needs it).
-async fn watchdog(applied: &Mutex<String>) -> Result<()> {
+async fn watchdog(in_force: &Mutex<String>) -> Result<()> {
     loop {
         let mut monitor = match Command::new(ruleset::NFT_BIN)
             .arg("monitor")
@@ -147,7 +139,7 @@ async fn watchdog(applied: &Mutex<String>) -> Result<()> {
         loop {
             match lines.next_line().await {
                 Ok(Some(_line)) => {
-                    let rendered = applied.lock().await;
+                    let rendered = in_force.lock().await;
                     match ruleset::all_present(&rendered).await {
                         Ok(true) => {}
                         Ok(false) => {

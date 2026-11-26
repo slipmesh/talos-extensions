@@ -4,10 +4,10 @@
 //! size set rt mtu`).
 //!
 //! Doesn't parse or understand the ruleset's *content* - only scans it for `table <family> <name>`
-//! declarations, to `delete table` each one (idempotent, ignores "doesn't exist yet") before
-//! reapplying. This is the whole answer to "how does this loader avoid piling up duplicate/stale
-//! rules on every reapply": identify by whatever the *current* config itself declares, not by a
-//! name hardcoded in this binary. Not `flush ruleset`: something else on the same
+//! declarations, to replace each one in the transaction that loads the ruleset (see
+//! [`transaction`]). This is the whole answer to "how does this loader avoid piling up
+//! duplicate/stale rules on every reapply": identify by whatever the *current* config itself
+//! declares, not by a name hardcoded in this binary. Not `flush ruleset`: something else on the same
 //! node (kube-proxy, Talos's own ingress firewall, ...) may have its own nftables tables that must
 //! survive this.
 //!
@@ -30,6 +30,7 @@ use anyhow::{Context, Result};
 use std::collections::HashSet;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 /// Relative to this service's own entrypoint directory: the extension stages its static `nft` in
 /// `/usr/local/lib/containers/nftables/` beside this binary, as `router/src/main.rs`'s `BIRD_BIN`
@@ -57,19 +58,30 @@ fn declared_tables(ruleset: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-pub async fn apply(ruleset: &str) -> Result<()> {
-    for (family, name) in declared_tables(ruleset) {
-        // Errors ignored: the delete fails (harmlessly) whenever this table doesn't exist yet -
-        // first run ever, or a table this particular config version just introduced.
-        let _ = Command::new(NFT_BIN)
-            .arg("delete")
-            .arg("table")
-            .arg(&family)
-            .arg(&name)
-            .status()
-            .await;
+/// Applies `rendered` unless it is the ruleset in force, and makes it the one in force. Holds
+/// `in_force` meanwhile, so that no one reapplies the ruleset `rendered` is replacing.
+pub async fn replace(in_force: &Mutex<String>, rendered: String) -> Result<()> {
+    let mut in_force = in_force.lock().await;
+    if *in_force != rendered {
+        apply(&rendered).await?;
+        *in_force = rendered;
     }
+    Ok(())
+}
 
+/// `ruleset`, after a `table` and a `delete table` for each table it declares: the `table` makes
+/// the delete succeed on a table not loaded yet, and in one `nft -f` the old tables go only if
+/// the whole ruleset loads.
+fn transaction(ruleset: &str) -> String {
+    let mut text: String = declared_tables(ruleset)
+        .into_iter()
+        .map(|(family, name)| format!("table {family} {name}\ndelete table {family} {name}\n"))
+        .collect();
+    text.push_str(ruleset);
+    text
+}
+
+pub async fn apply(ruleset: &str) -> Result<()> {
     let mut child = Command::new(NFT_BIN)
         .args(["-f", "-"])
         .stdin(std::process::Stdio::piped())
@@ -79,7 +91,7 @@ pub async fn apply(ruleset: &str) -> Result<()> {
         .stdin
         .take()
         .context("nft has no stdin")?
-        .write_all(ruleset.as_bytes())
+        .write_all(transaction(ruleset).as_bytes())
         .await
         .context("failed to write ruleset to nft stdin")?;
     let status = child.wait().await.context("failed waiting on nft")?;
@@ -132,6 +144,30 @@ pub async fn all_present(ruleset: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ruleset_replaces_the_tables_it_declares_in_the_same_transaction() {
+        assert_eq!(
+            transaction("table inet t {\n}\ntable ip n {\n}\n"),
+            "table inet t\ndelete table inet t\ntable ip n\ndelete table ip n\n\
+             table inet t {\n}\ntable ip n {\n}\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_changed_rendering_is_applied_and_only_an_applied_one_is_in_force() {
+        let in_force = Mutex::new("table inet t {\n}\n".to_owned());
+        replace(&in_force, "table inet t {\n}\n".to_owned())
+            .await
+            .unwrap();
+        // No `nft` beside the test, so an apply fails.
+        assert!(
+            replace(&in_force, "table inet u {\n}\n".to_owned())
+                .await
+                .is_err()
+        );
+        assert_eq!(*in_force.lock().await, "table inet t {\n}\n");
+    }
 
     #[test]
     fn declared_tables_finds_every_table_header_indented_or_not_and_no_comment() {

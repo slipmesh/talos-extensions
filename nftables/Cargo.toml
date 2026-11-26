@@ -23,7 +23,7 @@ anyhow.workspace = true
 common.workspace = true
 futures.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "io-util", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "io-util", "fs", "sync"] }
 tracing.workspace = true
 sliplib-runtime.workspace = true
 
