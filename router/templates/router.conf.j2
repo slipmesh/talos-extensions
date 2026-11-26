@@ -24,9 +24,8 @@ protocol direct direct_{{ iface.protocol_id }} {
     ipv4 { import all; };
 }
 {%- endfor %}
-{#- A roadwarrior client's route carries the protocol number of what installed it: awg or the
-     roadwarriors operator. A pool runs on several nodes under one address, so the route is what
-     tells the others which node a client is connected to. #}
+{#- A pool runs on several nodes under one address: a client's route tells the others which
+     node it is on. #}
 protocol kernel {
     ipv4 {
         import filter {
