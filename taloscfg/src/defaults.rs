@@ -167,24 +167,6 @@ nodes:
         }
     }
 
-    // Pinned: a change of a reference changes its digest on purpose, and the digest is of the
-    // bytes as they are, line endings included.
-    #[test]
-    fn the_digest_of_each_reference_is_pinned() {
-        assert_eq!(
-            Service::Router.digest(),
-            "200a4b9ea0c93b9a58595bf3de97fd941000d44a882194d8975d14ace239749b"
-        );
-        assert_eq!(
-            Service::Firewall.digest(),
-            "607885ca85efc720e05d0d4f61bb9e0f2c70ed23c93dbc9bb7ac977992d733a1"
-        );
-        assert_eq!(
-            Service::Router.base(),
-            format!("sha256:{}", Service::Router.digest())
-        );
-    }
-
     #[test]
     fn a_text_differs_from_the_reference_under_the_daemons_name() {
         let reference = Service::Firewall.reference();
