@@ -55,6 +55,7 @@ struct RouterState {
     /// `BIRD_CONF_PATH`.
     render_lock: Mutex<()>,
     template: common::template::Template,
+    values: common::template::Values,
 }
 
 async fn run(shutdown: Shutdown) -> Result<()> {
@@ -112,6 +113,8 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
         .context("failed to read the config file")?;
     daemon.validate().context("config validation failed")?;
     let RouterDaemonConfig { mesh: cfg, metrics } = daemon;
+    let values = common::template::Values::read(Path::new(ROUTER_CONFIG_PATH))
+        .context("failed to read the template values of the config file")?;
     // Read before anything on the node is touched: without a template there is no bird.conf to
     // write, and nothing to fall back on - the template is the node's config, not this binary's.
     let template = common::template::load(bird_conf::TEMPLATE_PATH, bird_conf::compile).await?;
@@ -135,6 +138,7 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
         bypass_cache: Mutex::new(None),
         render_lock: Mutex::new(()),
         template,
+        values,
     });
 
     // Render and write bird.conf *before* spawning bird, which refuses to start without it.
@@ -147,7 +151,8 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     let bypass_routes = current_bypass_routes(&ctx).await;
-    let initial_conf = bird_conf::render_config(&ctx.template, &ctx.mesh, &bypass_routes)?;
+    let initial_conf =
+        bird_conf::render_config(&ctx.template, &ctx.mesh, &ctx.values, &bypass_routes)?;
     sliplib_fs::write_if_changed(conf, &initial_conf)?;
     Ok((ctx, bypass_routes))
 }
@@ -172,7 +177,7 @@ async fn wait_for_control_socket() -> Result<()> {
 
 async fn reconcile(ctx: &RouterState, bypass_routes: &[bird_conf::BypassRoute]) -> Result<()> {
     let _guard = ctx.render_lock.lock().await;
-    let desired = bird_conf::render_config(&ctx.template, &ctx.mesh, bypass_routes)?;
+    let desired = bird_conf::render_config(&ctx.template, &ctx.mesh, &ctx.values, bypass_routes)?;
     bird::reconcile(
         Path::new(BIRD_CONF_PATH),
         Path::new(bird::BIRD_CONTROL_SOCKET),
@@ -330,6 +335,7 @@ bypass: {include: [{kind: literal}]}
             bypass_cache: Mutex::new(cached),
             render_lock: Mutex::new(()),
             template: bird_conf::compile(bird_conf::REFERENCE_TEMPLATE).unwrap(),
+            values: common::template::Values::default(),
         };
         let start = tokio::time::Instant::now();
         let served = current_bypass_routes(&ctx).await;

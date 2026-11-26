@@ -3,7 +3,7 @@
 //! node's template the same way the node will and refuses one that does not render.
 
 use anyhow::Result;
-use common::template::Template;
+use common::template::{Template, Values, ValuesContext};
 use serde::Serialize;
 use sliplib_config::Prefix4;
 use sliplib_config::router::{BgpPeerEntry, InterfacePattern, ROUTER_LOOPBACK, RouterConfig};
@@ -178,6 +178,8 @@ pub const VARIABLES: &[&str] = &[
     "direct_interfaces",
     "bfd",
     "awg_route_protocol",
+    "classes",
+    "vars",
 ];
 
 /// Compiles a `bird.conf` template, refusing one that reads anything outside `VARIABLES`.
@@ -190,8 +192,9 @@ pub fn render(
     identity: RouterIdentity,
     as_number: u32,
     inputs: &RenderInputs,
+    values: &Values,
 ) -> Result<String> {
-    template.render(BirdConfigContext::new(identity, as_number, inputs))
+    template.render(BirdConfigContext::new(identity, as_number, inputs, values))
 }
 
 /// `cfg`, what `router.yaml` fixes for the life of the process, with the bypass routes only the node
@@ -199,6 +202,7 @@ pub fn render(
 pub fn render_config(
     template: &Template,
     cfg: &RouterConfig,
+    values: &Values,
     bypass: &[BypassRoute],
 ) -> Result<String> {
     let loopbacks = cfg.node.loopback_addresses;
@@ -223,7 +227,7 @@ pub fn render_config(
         direct_interfaces: &cfg.direct_interfaces,
         bfd: cfg.bfd.as_ref(),
     };
-    render(template, identity, cfg.bgp_as, &inputs)
+    render(template, identity, cfg.bgp_as, &inputs, values)
 }
 
 #[derive(Serialize)]
@@ -248,7 +252,7 @@ struct RenderedOspfIface {
 /// What a template sees. Every value that came from config is already sanitized here, so the
 /// template is formatting alone and has no string safety of its own to get wrong.
 #[derive(Serialize)]
-struct BirdConfigContext {
+struct BirdConfigContext<'a> {
     loopback: Ipv4Addr,
     ipv6_loopback: Ipv6Addr,
     as_number: u32,
@@ -261,10 +265,17 @@ struct BirdConfigContext {
     direct_interfaces: Vec<RenderedDirectIface>,
     bfd: Option<sliplib_config::router::BfdSettings>,
     awg_route_protocol: u8,
+    #[serde(flatten)]
+    values: ValuesContext<'a>,
 }
 
-impl BirdConfigContext {
-    fn new(identity: RouterIdentity, as_number: u32, inputs: &RenderInputs) -> Self {
+impl<'a> BirdConfigContext<'a> {
+    fn new(
+        identity: RouterIdentity,
+        as_number: u32,
+        inputs: &RenderInputs,
+        values: &'a Values,
+    ) -> Self {
         let rendered_peers: Vec<RenderedBgpPeer> = inputs
             .bgp_peers
             .iter()
@@ -311,6 +322,7 @@ impl BirdConfigContext {
             bfd: inputs.bfd.cloned(),
             awg_route_protocol: common::ROUTE_PROTOCOL_ID,
             direct_interfaces,
+            values: values.context(),
         }
     }
 }
@@ -320,7 +332,27 @@ mod tests {
     use super::*;
 
     fn render(identity: RouterIdentity, as_number: u32, inputs: &RenderInputs) -> Result<String> {
-        super::render(&compile(REFERENCE_TEMPLATE)?, identity, as_number, inputs)
+        super::render(
+            &compile(REFERENCE_TEMPLATE)?,
+            identity,
+            as_number,
+            inputs,
+            &Values::default(),
+        )
+    }
+
+    #[test]
+    fn the_classes_and_vars_of_router_yaml_reach_the_template() {
+        let text = "node:\n  loopback_addresses: [\"198.51.100.1/32\", \"3fff::1/128\"]\n\
+                    bgp_as: 64512\nclasses: {egress: {protocol: 152, table: 152}}\n\
+                    vars: {source: 203.0.113.0/26}\n";
+        let cfg: RouterConfig = sliplib_yaml::from_str(text).unwrap();
+        let values: Values = sliplib_yaml::from_str(text).unwrap();
+        let template = compile("{{ classes.egress.table }} {{ vars.source }}").unwrap();
+        assert_eq!(
+            render_config(&template, &cfg, &values, &[]).unwrap(),
+            "152 203.0.113.0/26"
+        );
     }
 
     #[test]
@@ -345,7 +377,13 @@ learn: [203.0.113.128/26]
             net: "192.0.2.0/24".to_string(),
             label: "example".to_string(),
         }];
-        let out = render_config(&compile(REFERENCE_TEMPLATE).unwrap(), &cfg, &bypass).unwrap();
+        let out = render_config(
+            &compile(REFERENCE_TEMPLATE).unwrap(),
+            &cfg,
+            &Values::default(),
+            &bypass,
+        )
+        .unwrap();
         assert!(out.contains("router id 198.51.100.1;"));
         assert!(out.contains("local 3fff::1 as 64512;"));
         assert!(out.contains("protocol bgp ibgp6_node_b {"));
@@ -382,8 +420,10 @@ learn: [203.0.113.128/26]
             bfd: None,
         };
         inputs.bfd = Some(&bfd);
+        let values = Values::default();
         let context =
-            serde_json::to_value(BirdConfigContext::new(identity(), 64512, &inputs)).unwrap();
+            serde_json::to_value(BirdConfigContext::new(identity(), 64512, &inputs, &values))
+                .unwrap();
         let mut fields: Vec<&str> = context
             .as_object()
             .unwrap()

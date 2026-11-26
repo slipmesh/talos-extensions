@@ -6,8 +6,13 @@ use anyhow::{Context, Result};
 use minijinja::syntax::SyntaxConfig;
 use minijinja::value::Serde;
 use minijinja::{AutoEscape, Environment, UndefinedBehavior};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sliplib_config::Mark;
+use sliplib_config::v2::network::{Class, Lookup, Rule};
+use sliplib_config::v2::{ClassName, Map};
+use sliplib_yaml::Mapping;
 use std::collections::BTreeSet;
+use std::path::Path;
 
 const NAME: &str = "template";
 
@@ -83,6 +88,98 @@ impl Template {
     }
 }
 
+/// What a template of either daemon reads besides that daemon's own values: the route classes of
+/// the network and the node's `vars`, both written into the daemon's config by the generator.
+#[derive(Deserialize, Debug, Default, PartialEq)]
+pub struct Values {
+    #[serde(default)]
+    pub classes: Map<ClassName, Class>,
+    #[serde(default)]
+    pub vars: Mapping,
+}
+
+/// The template's variables of [`Values`].
+pub const VALUES: [&str; 2] = ["classes", "vars"];
+
+impl Values {
+    /// From a daemon's config file, beside its other keys.
+    pub fn read(path: &Path) -> Result<Self> {
+        Ok(sliplib_yaml::read(path)?)
+    }
+
+    /// As a template sees them: a mark as its value and its mask, both written out.
+    pub fn context(&self) -> ValuesContext<'_> {
+        ValuesContext {
+            classes: self
+                .classes
+                .iter()
+                .map(|(name, class)| (name.as_str(), ClassContext::of(class)))
+                .collect(),
+            vars: &self.vars,
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct ValuesContext<'a> {
+    classes: Map<&'a str, ClassContext<'a>>,
+    vars: &'a Mapping,
+}
+
+#[derive(Serialize)]
+struct ClassContext<'a> {
+    protocol: u8,
+    table: Option<u8>,
+    rules: Map<&'a str, RuleContext>,
+}
+
+impl<'a> ClassContext<'a> {
+    fn of(class: &'a Class) -> Self {
+        Self {
+            protocol: class.protocol,
+            table: class.table,
+            rules: class
+                .rules
+                .iter()
+                .map(|(name, rule)| (name.as_str(), RuleContext::of(rule)))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct RuleContext {
+    priority: u32,
+    mark: Option<MarkContext>,
+    lookup: Option<&'static str>,
+}
+
+impl RuleContext {
+    fn of(rule: &Rule) -> Self {
+        Self {
+            priority: rule.priority,
+            mark: rule.mark.map(MarkContext::of),
+            lookup: rule.lookup.map(|Lookup::Main| "main"),
+        }
+    }
+}
+
+/// Written out as nft and `ip rule` take them.
+#[derive(Serialize)]
+struct MarkContext {
+    value: String,
+    mask: String,
+}
+
+impl MarkContext {
+    fn of(mark: Mark) -> Self {
+        Self {
+            value: format!("{:#x}", mark.value),
+            mask: format!("{:#x}", mark.mask),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +213,71 @@ mod tests {
     #[test]
     fn accepts_builtin_functions_as_variables() {
         assert!(Template::new("{% for i in range(2) %}{{ i }}{% endfor %}", &[]).is_ok());
+    }
+
+    const GUARDED: &str = "\
+{% if classes.egress is defined and classes.egress.table %}table {{ classes.egress.table }}
+{% endif %}\
+{% if classes.egress is defined and classes.egress.rules['uplink-replies'] is defined %}\
+{% set rule = classes.egress.rules['uplink-replies'] %}\
+mark {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.lookup }} {{ rule.priority }}
+{% endif %}\
+{% if vars.source is defined %}source {{ vars.source }}
+{% endif %}";
+
+    fn render_guarded(values: &Values) -> String {
+        Template::new(GUARDED, &["classes", "vars"])
+            .unwrap()
+            .render(values.context())
+            .unwrap()
+    }
+
+    #[test]
+    fn a_template_reads_the_classes_and_vars_it_guards_and_skips_those_left_out() {
+        assert_eq!(render_guarded(&Values::default()), "");
+        let values: Values = sliplib_yaml::from_str(
+            "classes:\n  egress:\n    protocol: 152\n    table: 152\n    rules:\n      \
+             uplink-replies: {priority: 1000, mark: 0x100000/0x100000, lookup: main}\n\
+             vars: {source: 203.0.113.0/26}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            render_guarded(&values),
+            "table 152\nmark 0x100000/0x100000 main 1000\nsource 203.0.113.0/26\n"
+        );
+    }
+
+    #[test]
+    fn values_are_read_from_a_config_file_beside_its_other_keys() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            file.path(),
+            "bgp_as: 64512\nclasses: {egress: {protocol: 152}}\nvars: {a: 1}\n",
+        )
+        .unwrap();
+        let values = Values::read(file.path()).unwrap();
+        assert_eq!(values.classes["egress"].protocol, 152);
+        assert_eq!(values.vars, sliplib_yaml::from_str("{a: 1}").unwrap());
+    }
+
+    #[test]
+    fn a_mark_without_a_mask_and_a_rule_to_the_class_table_are_given_as_they_mean() {
+        let values: Values = sliplib_yaml::from_str(
+            "classes:\n  egress:\n    protocol: 152\n    rules:\n      \
+             egress: {priority: 1001, mark: '0xff'}\n",
+        )
+        .unwrap();
+        let template = Template::new(
+            "{% set rule = classes.egress.rules.egress %}{{ classes.egress.table is none }} \
+             {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.lookup is none }} \
+             {{ classes.egress.protocol }}",
+            &["classes"],
+        )
+        .unwrap();
+        assert_eq!(
+            template.render(values.context()).unwrap(),
+            "True 0xff/0xffffffff True 152"
+        );
     }
 
     #[test]
