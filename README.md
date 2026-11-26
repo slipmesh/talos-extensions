@@ -471,13 +471,18 @@ files to `nftables` on a node no `firewall` template reaches is refused, since t
 The `router` document carries the node's router template as `/etc/talos-extensions/router.conf.j2`,
 and the `nftables` document, written after it, the `firewall` template as
 `/etc/talos-extensions/nftables.conf.j2`. The template a node gets, the last by rank of its daemon's,
-is checked as that daemon will check it and rendered, a `router` one with the node's config and a
-`firewall` one with each interface name standing in as its variable's name, so one that would fail
-on a node fails `generate` instead. A template overridden on every node it
+is checked as that daemon will check it and rendered with the node's values, a `router` one with
+the node's config and a `firewall` one with each interface name standing in as its variable's name,
+so one that would fail on a node fails `generate` instead. A template overridden on every node it
 reaches is not checked. The `nftables` document also gets the ruleset as
 `/etc/talos-extensions/nftables.yaml`, the file the daemon read before it took a template: a node
 that falls back to its previous boot slot runs that daemon against this config, and would
 otherwise apply no ruleset at all. That copy goes once no node can fall back that far.
+
+The values are the route classes of the network and the `vars` that reach the node, laid by rank.
+`router.yaml` carries them as `classes` and `vars`, and the `nftables` document as
+`/etc/talos-extensions/firewall.yaml`, beside the template. Neither key is written when it is
+empty, and `firewall.yaml` is not written when both are.
 
 The text in the files is the one in force, and a newer reference does not replace it. `template`
 prints the `template` document that gives every node of `talos` a daemon's reference template,
@@ -583,9 +588,9 @@ none writes `slipmesh.yaml`. With `--node`, only the secrets that node's config 
 there: its own key, and for each of its links the peer's key and the link's obfuscation. `--check`
 and `--diff` write no patch file either.
 
-`--diff` prints no secret. The value of every `private_key`, `header_protection_key` and `password`
-line, at any depth, shows as `<redacted>` when it is the same on both sides and as
-`<redacted, old>` and `<redacted, new>` where it changed.
+`--diff` prints the value of every `private_key`, `header_protection_key` and `password` line, at
+any depth, as `<redacted>` when it is the same on both sides and as `<redacted, old>` and
+`<redacted, new>` where it changed. A `vars` value under any other key is printed as written.
 
 In every mode a run prints a line that starts with `warning:` on standard error for each way a
 link of the nodes it was asked for loses data packets it should deliver, one line each, and for

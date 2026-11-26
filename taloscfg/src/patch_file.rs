@@ -66,14 +66,27 @@ fn legacy_nftables_file(ruleset: String) -> Result<ConfigFile> {
     })
 }
 
-/// The files of the `nftables` document of a node whose ruleset template is `template`: the
-/// template, the files `added` beside it, and the ruleset as [`legacy_nftables_file`] gives it.
-fn nftables_config_files(template: &str, added: Vec<ServiceFile>) -> Result<Vec<ServiceFile>> {
+/// The files of the `nftables` document: the template, its config where `values` has any, the
+/// files `added`, and the ruleset as [`legacy_nftables_file`] gives it.
+fn nftables_config_files(
+    template: &str,
+    values: &Values,
+    added: Vec<ServiceFile>,
+) -> Result<Vec<ServiceFile>> {
     let template_file = ConfigFile {
         mount_path: Service::Firewall.mount_path().to_owned(),
         content: template.to_owned(),
     };
+    let config = if values.is_empty() {
+        None
+    } else {
+        Some(ConfigFile {
+            mount_path: nftables::template::CONFIG_PATH.to_owned(),
+            content: sliplib_yaml::to_string(values)?,
+        })
+    };
     Ok(std::iter::once(ServiceFile::Generated(template_file))
+        .chain(config.map(ServiceFile::Generated))
         .chain(added)
         .chain([ServiceFile::Generated(legacy_nftables_file(
             template.to_owned(),
@@ -82,24 +95,32 @@ fn nftables_config_files(template: &str, added: Vec<ServiceFile>) -> Result<Vec<
 }
 
 /// Refuses a router template the node would fail on: one that does not compile, reads a variable
-/// the daemon does not supply, or fails to render this node's config.
-fn validate_router_template(template: &str, cfg: &RouterConfig) -> Result<()> {
+/// the daemon does not supply, or fails to render this node's config and values.
+fn validate_router_template(template: &str, cfg: &RouterConfig, values: &Values) -> Result<()> {
     let template = router::bird_conf::compile(template.to_owned())?;
-    router::bird_conf::render_config(&template, cfg, &Values::default(), &[])?;
+    router::bird_conf::render_config(&template, cfg, values, &[])?;
     Ok(())
 }
 
-/// Refuses a firewall template the node would fail on: one that does not compile, reads a
-/// variable the daemon does not supply, or fails to render. The interfaces exist only on the node,
-/// so each stands in as its own name, and the text is not kept.
-fn validate_firewall_template(template: &str) -> Result<()> {
+/// Refuses a firewall template that would fail on the node. The interfaces stand in as their own
+/// names; the text is not kept.
+fn validate_firewall_template(template: &str, values: &Values) -> Result<()> {
     use nftables::template::{DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6};
     let template = nftables::template::compile(template.to_owned())?;
     let interfaces = [DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6]
         .map(|name| (name, name.to_owned()))
         .into();
-    nftables::template::render(&template, &interfaces, &Values::default())?;
+    nftables::template::render(&template, &interfaces, values)?;
     Ok(())
+}
+
+/// `router.yaml`: the daemon's config, then the values of its template.
+#[derive(serde::Serialize)]
+struct RouterFile<'a> {
+    #[serde(flatten)]
+    daemon: &'a RouterDaemonConfig,
+    #[serde(flatten)]
+    values: &'a Values,
 }
 
 /// The documents of `patches`, `annotations` put into their `KubeNodeConfig`, or into a new one
@@ -125,8 +146,8 @@ struct Templates {
 
 impl Templates {
     /// Refuses a template the node gets that its daemon would fail on. A router template is
-    /// rendered with `router`, the node's config.
-    fn of(files: &File, host: &str, router: &RouterConfig) -> Result<Self> {
+    /// rendered with `router`, the node's config, and each with `values`, the node's.
+    fn of(files: &File, host: &str, router: &RouterConfig, values: &Values) -> Result<Self> {
         let mut router_template = None;
         let mut firewall_template = None;
         for document in files.templates_for(host) {
@@ -139,13 +160,11 @@ impl Templates {
         }
         Ok(Self {
             router: checked(router_template, Service::Router, |content| {
-                validate_router_template(content, router)
+                validate_router_template(content, router, values)
             })?,
-            firewall: checked(
-                firewall_template,
-                Service::Firewall,
-                validate_firewall_template,
-            )?,
+            firewall: checked(firewall_template, Service::Firewall, |content| {
+                validate_firewall_template(content, values)
+            })?,
         })
     }
 }
@@ -199,7 +218,11 @@ fn render_node(
     awg_cfg: AwgDaemonConfig,
     router_cfg: RouterDaemonConfig,
 ) -> Result<String> {
-    let templates = Templates::of(files, host, &router_cfg.mesh)?;
+    let values = Values {
+        classes: network.network().routing.classes.clone(),
+        vars: sliplib_yaml::from_value(files.vars_for(host))?,
+    };
+    let templates = Templates::of(files, host, &router_cfg.mesh, &values)?;
     let Some(router_template) = templates.router else {
         bail!(
             "no `template` document for the router reaches it, and its routing daemon does not \
@@ -218,7 +241,10 @@ fn render_node(
     let router = [
         ConfigFile {
             mount_path: ROUTER_CONFIG_PATH.to_owned(),
-            content: sliplib_yaml::to_string(&router_cfg)?,
+            content: sliplib_yaml::to_string(&RouterFile {
+                daemon: &router_cfg,
+                values: &values,
+            })?,
         },
         ConfigFile {
             mount_path: Service::Router.mount_path().to_owned(),
@@ -240,7 +266,7 @@ fn render_node(
     match (templates.firewall, nftables_added) {
         (Some(ruleset), _) => generated.push(render_extension_service_document(
             Service::Firewall.name(),
-            nftables_config_files(&ruleset, nftables_files)?,
+            nftables_config_files(&ruleset, &values, nftables_files)?,
         )?),
         (None, Some(added)) if !nftables_files.is_empty() => bail!(
             "{}: adds files to `nftables`, which no `template` document for the firewall reaches \
@@ -481,6 +507,86 @@ content: "table inet x {{}}"
         render(&files, &network, &TalosSettings::of(&files).unwrap(), host)
     }
 
+    /// The config of `name` at `path` in `file`, read.
+    fn config_at(file: &str, name: &str, path: &str) -> Option<sliplib_yaml::Value> {
+        let document = generated_document(file, name)?;
+        let files = document["configFiles"].as_sequence()?.clone();
+        files
+            .into_iter()
+            .find(|file| file["mountPath"] == path)
+            .map(|file| sliplib_yaml::from_str(file["content"].as_str().unwrap()).unwrap())
+    }
+
+    const VARS: &str = "---\nslipmesh: {kind: vars}\nsource: 203.0.113.0/26\n\
+                        ---\nslipmesh: {kind: vars, include: [b]}\nsource: 203.0.113.64/26\n";
+
+    #[test]
+    fn both_daemons_configs_carry_the_classes_and_the_vars_that_reach_the_node() {
+        let raw = format!("{}{VARS}", with_router_files(&[("", TEMPLATE)]));
+        let a = render_raw(&raw, "a").unwrap();
+        let classes: sliplib_yaml::Value = sliplib_yaml::from_str(
+            "egress:\n  protocol: 152\n  table: 152\n  rules:\n    uplink-replies: \
+             {priority: 1000, mark: 0x100000/0x100000, lookup: main}\n    egress: {priority: 1001}\n",
+        )
+        .unwrap();
+        let source = |cidr: &str| {
+            sliplib_yaml::from_str::<sliplib_yaml::Value>(&format!("{{source: {cidr}}}")).unwrap()
+        };
+        for config in [
+            config_at(&a, "router", ROUTER_CONFIG_PATH).unwrap(),
+            config_at(&a, "nftables", nftables::template::CONFIG_PATH).unwrap(),
+        ] {
+            assert_eq!(config["classes"], classes, "{a}");
+            assert_eq!(config["vars"], source("203.0.113.0/26"), "{a}");
+        }
+        let b = render_raw(&raw, "b").unwrap();
+        let router = config_at(&b, "router", ROUTER_CONFIG_PATH).unwrap();
+        assert_eq!(router["vars"], source("203.0.113.64/26"), "{b}");
+    }
+
+    #[test]
+    fn without_classes_and_vars_neither_key_nor_the_firewall_file_is_written() {
+        let raw = with_router_files(&[("", TEMPLATE)]);
+        let start = raw.find("  classes:\n").unwrap();
+        let end = raw.find("mesh:\n").unwrap();
+        let raw = format!("{}{}", &raw[..start], &raw[end..]);
+        let a = render_raw(&raw, "a").unwrap();
+        let router = config_at(&a, "router", ROUTER_CONFIG_PATH).unwrap();
+        assert!(
+            router.get("classes").is_none() && router.get("vars").is_none(),
+            "{a}"
+        );
+        assert!(generated_document(&a, "nftables").is_some(), "{a}");
+        assert!(
+            config_at(&a, "nftables", nftables::template::CONFIG_PATH).is_none(),
+            "{a}"
+        );
+    }
+
+    #[test]
+    fn a_router_template_reading_a_value_a_node_lacks_is_refused_for_that_node() {
+        let raw = format!(
+            "{}---\nslipmesh: {{kind: vars, include: [b]}}\nsource: 203.0.113.64/26\n",
+            with_router_files(&[("", "{{ vars.source }} {{ classes.egress.table }}\n")])
+        );
+        assert!(render_raw(&raw, "b").is_ok());
+        let refused = format!("{:#}", render_raw(&raw, "a").unwrap_err());
+        assert!(refused.contains("router template"), "{refused}");
+    }
+
+    #[test]
+    fn a_firewall_template_reading_a_value_a_node_lacks_is_refused_for_that_node() {
+        let raw = format!(
+            "{}---\nslipmesh: {{kind: vars, include: [b]}}\nsource: 203.0.113.64/26\n\
+             ---\nslipmesh: {{kind: template, platform: talos}}\ndaemon: firewall\nbase: {BASE}\n\
+             content: \"oifname \\\"{{{{ defaultroute_interface_ipv4 }}}}\\\" {{{{ vars.source }}}}\\n\"\n",
+            with_router_files(&[("", TEMPLATE)])
+        );
+        assert!(render_raw(&raw, "b").is_ok());
+        let refused = format!("{:#}", render_raw(&raw, "a").unwrap_err());
+        assert!(refused.contains("firewall template"), "{refused}");
+    }
+
     fn router_files(patch: &str) -> Vec<(String, String)> {
         let documents: Vec<sliplib_yaml::Value> = documents(patch)
             .into_iter()
@@ -561,7 +667,7 @@ content: "table inet x {{}}"
         let a = render_raw(&raw, "a").unwrap();
         let nftables = generated_document(&a, "nftables").unwrap();
         assert_eq!(
-            nftables["configFiles"][1]["mountPath"],
+            nftables["configFiles"][2]["mountPath"],
             "/etc/talos-extensions/extra"
         );
         let err = format!("{:#}", render_raw(&raw, "b").unwrap_err());
@@ -731,9 +837,13 @@ content: "table inet x {{}}"
             .collect();
         assert_eq!(
             files.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
-            [nftables::template::TEMPLATE_PATH, LEGACY_NFTABLES_PATH]
+            [
+                nftables::template::TEMPLATE_PATH,
+                nftables::template::CONFIG_PATH,
+                LEGACY_NFTABLES_PATH
+            ]
         );
-        let legacy: sliplib_yaml::Value = sliplib_yaml::from_str(files[1].1).unwrap();
+        let legacy: sliplib_yaml::Value = sliplib_yaml::from_str(files[2].1).unwrap();
         assert_eq!(legacy["ruleset"].as_str(), Some(files[0].1));
     }
 }

@@ -90,11 +90,11 @@ impl Template {
 
 /// What a template of either daemon reads besides that daemon's own values: the route classes of
 /// the network and the node's `vars`, both written into the daemon's config by the generator.
-#[derive(Deserialize, Debug, Default, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Default, PartialEq)]
 pub struct Values {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub classes: Map<ClassName, Class>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Mapping::is_empty")]
     pub vars: Mapping,
 }
 
@@ -102,6 +102,10 @@ pub struct Values {
 pub const VALUES: [&str; 2] = ["classes", "vars"];
 
 impl Values {
+    pub fn is_empty(&self) -> bool {
+        self.classes.is_empty() && self.vars.is_empty()
+    }
+
     /// From a daemon's config file, beside its other keys.
     pub fn read(path: &Path) -> Result<Self> {
         Ok(sliplib_yaml::read(path)?)
@@ -245,6 +249,15 @@ mark {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.lookup }} {{ rule.priori
             render_guarded(&values),
             "table 152\nmark 0x100000/0x100000 main 1000\nsource 203.0.113.0/26\n"
         );
+    }
+
+    #[test]
+    fn values_are_empty_only_without_classes_and_without_vars() {
+        assert!(Values::default().is_empty());
+        for text in ["classes: {egress: {protocol: 152}}", "vars: {a: 1}"] {
+            let values: Values = sliplib_yaml::from_str(text).unwrap();
+            assert!(!values.is_empty(), "{text}");
+        }
     }
 
     #[test]
