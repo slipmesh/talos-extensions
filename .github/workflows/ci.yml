@@ -21,12 +21,27 @@ jobs:
   checks:
     uses: slipmesh/.github/.github/workflows/rust.yml@v4.0.2
 
+  # The ignored tests need root to make a network namespace each.
+  netns:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: test
+        run: cargo test --locked --tests --config "target.'cfg(target_os = \"linux\")'.runner = 'sudo'" -- --ignored
+
   release-commit:
     if: github.event_name == 'push'
     uses: slipmesh/.github/.github/workflows/release-commit.yml@v4.0.2
 
   build:
-    needs: [release-commit, checks]
+    needs: [release-commit, checks, netns]
     if: needs.release-commit.outputs.version != ''
     uses: slipmesh/.github/.github/workflows/rust-build.yml@v4.0.2
     with:

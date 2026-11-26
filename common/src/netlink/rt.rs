@@ -328,12 +328,12 @@ impl RtClient {
         Ok(out)
     }
 
-    /// Name of the interface the `family` default route points at - equivalent to
-    /// `ip -4 route show default` or `ip -6 …`, then resolving the `dev` name. `Ok(None)` if that
+    /// Name of the interface the `family` default route of the main table points at - equivalent
+    /// to `ip -4 route show default` or `ip -6 …`, then resolving the `dev` name. `Ok(None)` if that
     /// family has none, a common case on a single-stack node. A dual-stack node's two default
     /// routes need not share an interface.
     pub async fn default_iface(&self, family: Family) -> Result<Option<String>> {
-        use rtnetlink::packet_route::route::RouteAttribute;
+        use rtnetlink::packet_route::route::{RouteAttribute, RouteHeader};
 
         let _guard = self.netlink_lock.lock().await;
         let query = match family {
@@ -343,7 +343,9 @@ impl RtClient {
         let mut default_oif = None;
         let mut stream = self.handle.route().get(query).execute();
         while let Some(route) = stream.try_next().await.context("failed to list routes")? {
-            if route.header.destination_prefix_length != 0 {
+            if route.header.destination_prefix_length != 0
+                || route.header.table != RouteHeader::RT_TABLE_MAIN
+            {
                 continue;
             }
             if let Some(oif) = route.attributes.iter().find_map(|a| match a {
