@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "awg"
-version = "1.15.0-beta.0+sm.5"
+version = "1.15.0-beta.0+sm.6"
 dependencies = [
  "anyhow",
  "bytes",
@@ -307,7 +307,7 @@ dependencies = [
 
 [[package]]
 name = "common"
-version = "1.15.0-beta.0+sm.5"
+version = "1.15.0-beta.0+sm.6"
 dependencies = [
  "anyhow",
  "futures",
@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "nftables"
-version = "1.15.0-beta.0+sm.5"
+version = "1.15.0-beta.0+sm.6"
 dependencies = [
  "anyhow",
  "common",
@@ -1444,7 +1444,7 @@ dependencies = [
 
 [[package]]
 name = "router"
-version = "1.15.0-beta.0+sm.5"
+version = "1.15.0-beta.0+sm.6"
 dependencies = [
  "anyhow",
  "common",
@@ -1923,7 +1923,7 @@ dependencies = [
 
 [[package]]
 name = "taloscfg"
-version = "1.15.0-beta.0+sm.5"
+version = "1.15.0-beta.0+sm.6"
 dependencies = [
  "anstream",
  "anstyle",

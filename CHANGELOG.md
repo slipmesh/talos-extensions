@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-beta.0+sm.6] - 2026-11-26
+
+### Breaking changes 💥
+
+- Generate the patch files of a file of format version 2 (#150)
+- Build on sliplib v0.23.0, reading the bodies and writing the daemons' own keys here (#151)
+- Read `$patch` as any other key (#158)
+- Read the files of slipmesh.yaml with --in (#162)
+
+### Added ✨
+
+- Write the routing rules of route classes (#164)
+
+### Build system 🛠️
+
+- Move to sliplib v0.24.1 (#163)
+
+### Changed 🔧
+
+- Publish the annotations from the values they carry (#146)
+- Build an nftables document from its ruleset template (#147)
+- Give each reference template its base and its differences (#148)
+- Check only the template a node gets, and simplify the rest (#159)
+- Share the daemons' code in common, and retry nftables' netlink errors at start (#160)
+
+### Documentation 📚
+
+- Add the code style (#157)
+
+### Fixed 🐛
+
+- Update url to 2.5.9 (RUSTSEC-2026-0592) (#149)
+- Read a peer the dump splits over several messages as one (#154)
+
+### Tests ✅
+
+- Delete the duplicate tests and the taloscfg golden, merge the rest into tables (#156)
+
 ## [1.15.0-beta.0+sm.5] - 2026-11-21
 
 ### Breaking changes 💥
