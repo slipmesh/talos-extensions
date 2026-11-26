@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 and follows [Semantic Versioning](https://semver.org/).
 
+## [1.15.0-beta.0+sm.7] - 2026-11-26
+
+### Breaking changes 💥
+
+- Stop writing the pre-template nftables.yaml (#169)
+
+### Added ✨
+
+- Give the template the route classes and vars (#166)
+- Give the template the route classes and vars (#167)
+- Give both daemons the route classes and vars (#168)
+- Mark uplink replies in the reference ruleset (#170)
+- Route egress routes into their table in the reference template (#171)
+- Learn an exit node's own egress routes in the reference template (#172)
+- Write the reference template where no template document reaches a node (#174)
+- Give the template the uplinks and follow their changes (#176)
+
+### Fixed 🐛
+
+- Take the default route from the main table (#175)
+- Read the change events as they come instead of queueing a burst (#177)
+
 ## [1.15.0-beta.0+sm.6] - 2026-11-26
 
 ### Breaking changes 💥
