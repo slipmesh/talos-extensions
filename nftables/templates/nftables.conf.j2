@@ -1,36 +1,47 @@
-{#- The daemon deletes only the tables it declares. -#}
-destroy table ip talos_mark
-destroy table inet talos_mark
-table inet talos_filter {
-    chain forward {
-        type filter hook forward priority filter; policy accept;
-        tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
+{%- set names = [uplink.ipv4, uplink.ipv6] | select | map(attribute="interface") | unique | list -%}
+table inet talos {
+    set uplinks {
+        type ifname
+{%- if names %}
+        elements = { "{{ names | join('", "') }}" }
+{%- endif %}
     }
-}
-table ip talos_nat {
     set nat_private {
         type ipv4_addr
         flags interval
         elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
     }
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
+    }
+{%- if vars.internal_ports is defined %}
+{%- set ports = vars.internal_ports %}
+    chain input {
+        type filter hook input priority filter; policy accept;
+{%- if ports.tcp is defined %}
+        iifname @uplinks tcp dport { {{ ports.tcp | join(", ") }} } counter reject with tcp reset
+{%- endif %}
+{%- if ports.udp is defined %}
+        iifname @uplinks udp dport { {{ ports.udp | join(", ") }} } counter reject
+{%- endif %}
+    }
+{%- endif %}
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
-        oifname "{{ defaultroute_interface_ipv4 }}" ip saddr @nat_private counter masquerade
+        oifname @uplinks ip saddr @nat_private counter masquerade
     }
-}
 {%- if classes.egress is defined and classes.egress.rules['uplink-replies'] is defined
       and classes.egress.rules['uplink-replies'].mark is not none %}
 {%- set mark = classes.egress.rules['uplink-replies'].mark %}
-{#- The IPv4 uplink for both families: a node may have no IPv6 default route. #}
-table inet talos_mark {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;
-        iifname "{{ defaultroute_interface_ipv4 }}" ct state new ct mark set ct mark & {{ mark.keep }} | {{ mark.value }}
+        iifname @uplinks ct state new ct mark set ct mark & {{ mark.keep }} | {{ mark.value }}
         ct direction reply ct mark & {{ mark.mask }} == {{ mark.value }} meta mark set meta mark & {{ mark.keep }} | {{ mark.value }}
     }
     chain output {
         type route hook output priority mangle; policy accept;
         ct direction reply ct mark & {{ mark.mask }} == {{ mark.value }} meta mark set meta mark & {{ mark.keep }} | {{ mark.value }}
     }
-}
 {%- endif %}
+}

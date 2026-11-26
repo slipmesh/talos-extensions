@@ -419,20 +419,28 @@ two things to it:
    loaded.
 
 No rule content is baked into this binary at all - MSS clamping, NAT, or anything else is just
-whatever the template says; [`nftables/templates/nftables.conf.j2`](nftables/templates/nftables.conf.j2)
-is the reference one, with those two.
+whatever the template says. [`nftables/templates/nftables.conf.j2`](nftables/templates/nftables.conf.j2)
+is the reference one. It reads `uplink`, `classes` and `vars`, and declares one table,
+`inet talos`, whose set `uplinks` holds the interfaces of both uplinks, each once, and nothing
+while there is none. The rules on an uplink match that set, so with none they match nothing.
+Private IPv4 sources are masqueraded out of an uplink, and the MSS clamp is on every forwarded
+connection.
+
+`vars.internal_ports` lists the ports that serve only the cluster and the mesh, which the reference
+ruleset rejects on the uplinks, TCP with a reset:
+
+```yaml
+vars:
+  internal_ports: {tcp: [179, 6443], udp: [4789]}   # either protocol may be left out
+```
+
+Without it there is no `input` chain.
 
 Where the `egress` route class has a rule `uplink-replies` with a mark, the reference ruleset also
-gives that mark to the replies to a connection that came in on the IPv4 default-route interface,
-for both families. Only the bits of the mark's mask are set; the others stay as they are. The
-`RoutingRuleConfig` that `generate` makes of that rule then sends those replies out through `main`
-rather than the class's table. An IPv6 connection that comes in on another interface is not marked,
-and its replies take the class's table; a template that names that interface, through a `vars`
-value, covers it.
-
-The reference ruleset starts by removing the tables of the mark, `ip talos_mark` and
-`inet talos_mark`, so that a ruleset without the mark leaves neither behind. `destroy` needs Linux
-6.3 and nft 1.0.8: on an older kernel `nft -f` refuses the whole ruleset.
+gives that mark to the replies to a connection that came in on an uplink, of either family. Only
+the bits of the mark's mask are set; the others stay as they are. The `RoutingRuleConfig` that
+`generate` makes of that rule then sends those replies out through `main` rather than the class's
+table.
 
 See talos-installer's
 [docs/nftables.md](https://github.com/slipmesh/talos-installer/blob/main/docs/nftables.md) for the

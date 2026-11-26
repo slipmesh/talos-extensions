@@ -89,62 +89,102 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
-    fn reference(values: &str) -> String {
-        let template = compile(REFERENCE_TEMPLATE).unwrap();
-        let interfaces = HashMap::from([(DEFAULT_ROUTE_IPV4, "eth0".to_owned())]);
+    fn uplink(interface: &str, address: &str) -> Option<Uplink> {
+        Some(Uplink {
+            interface: interface.to_owned(),
+            addresses: vec![address.parse().unwrap()],
+        })
+    }
+
+    fn uplinks(ipv4: Option<&str>, ipv6: Option<&str>) -> Uplinks {
+        Uplinks {
+            ipv4: ipv4.and_then(|i| uplink(i, "192.0.2.5")),
+            ipv6: ipv6.and_then(|i| uplink(i, "2001:db8::5")),
+        }
+    }
+
+    fn reference(uplinks: &Uplinks, values: &str) -> String {
         render(
-            &template,
-            &interfaces,
-            &Uplinks::default(),
+            &compile(REFERENCE_TEMPLATE).unwrap(),
+            &HashMap::new(),
+            uplinks,
             &sliplib_yaml::from_str(values).unwrap(),
         )
         .unwrap()
     }
 
-    const WITHOUT_THE_MARK: &str = "destroy table ip talos_mark
-destroy table inet talos_mark
-table inet talos_filter {
-    chain forward {
+    const MARK: &str = "classes: {egress: {protocol: 152, table: 152, rules: {uplink-replies: \
+                        {priority: 1000, mark: 0x100000/0x300000, lookup: main}}}}";
+
+    /// The reference ruleset from the `uplinks` set's elements to the forward chain.
+    fn sets_and_forward(elements: &str) -> String {
+        format!(
+            "table inet talos {{
+    set uplinks {{
+        type ifname{elements}
+    }}
+    set nat_private {{
+        type ipv4_addr
+        flags interval
+        elements = {{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }}
+    }}
+    chain forward {{
         type filter hook forward priority filter; policy accept;
         tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
+    }}
+"
+        )
     }
-}
-table ip talos_nat {
+
+    const POSTROUTING: &str = "    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname @uplinks ip saddr @nat_private counter masquerade
+    }
+";
+
+    #[test]
+    fn the_reference_ruleset_reads_the_uplinks_the_classes_and_the_vars() {
+        assert_eq!(
+            compile(REFERENCE_TEMPLATE).unwrap().variables(),
+            BTreeSet::from(["classes", "uplink", "vars"].map(str::to_owned))
+        );
+    }
+
+    #[test]
+    fn the_reference_ruleset_has_one_table_and_names_an_interface_both_uplinks_share_once() {
+        assert_eq!(
+            reference(&uplinks(Some("eth0"), Some("eth0")), "{}"),
+            "table inet talos {
+    set uplinks {
+        type ifname
+        elements = { \"eth0\" }
+    }
     set nat_private {
         type ipv4_addr
         flags interval
         elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
     }
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
+    }
     chain postrouting {
         type nat hook postrouting priority srcnat; policy accept;
-        oifname \"eth0\" ip saddr @nat_private counter masquerade
+        oifname @uplinks ip saddr @nat_private counter masquerade
     }
 }
-";
-
-    #[test]
-    fn the_reference_ruleset_reads_the_ipv4_default_route_interface_and_the_classes() {
-        let template = compile(REFERENCE_TEMPLATE).unwrap();
-        assert_eq!(
-            template.variables(),
-            BTreeSet::from([DEFAULT_ROUTE_IPV4.to_string(), VALUES[0].to_string()])
+"
         );
-        assert_eq!(reference("{}"), WITHOUT_THE_MARK);
     }
 
     #[test]
-    fn the_reference_ruleset_marks_uplink_replies_with_the_rules_mark_on_both_families() {
-        let ruleset = reference(
-            "classes: {egress: {protocol: 152, table: 152, rules: {uplink-replies: \
-             {priority: 1000, mark: 0x100000/0x300000, lookup: main}}}}",
-        );
+    fn the_reference_ruleset_marks_the_replies_to_connections_in_on_either_uplink() {
         assert_eq!(
-            ruleset,
+            reference(&uplinks(Some("eth0"), Some("eth1")), MARK),
             format!(
-                "{WITHOUT_THE_MARK}table inet talos_mark {{
-    chain prerouting {{
+                "{}{POSTROUTING}    chain prerouting {{
         type filter hook prerouting priority mangle; policy accept;
-        iifname \"eth0\" ct state new ct mark set ct mark & 0xffcfffff | 0x100000
+        iifname @uplinks ct state new ct mark set ct mark & 0xffcfffff | 0x100000
         ct direction reply ct mark & 0x300000 == 0x100000 meta mark set meta mark & 0xffcfffff | 0x100000
     }}
     chain output {{
@@ -152,18 +192,65 @@ table ip talos_nat {
         ct direction reply ct mark & 0x300000 == 0x100000 meta mark set meta mark & 0xffcfffff | 0x100000
     }}
 }}
-"
+",
+                sets_and_forward("\n        elements = { \"eth0\", \"eth1\" }")
             )
         );
     }
 
     #[test]
+    fn the_reference_ruleset_rejects_the_internal_ports_on_the_uplinks() {
+        assert_eq!(
+            reference(
+                &uplinks(None, Some("eth1")),
+                "vars: {internal_ports: {tcp: [179, 6443], udp: [4789]}}"
+            ),
+            format!(
+                "{}    chain input {{
+        type filter hook input priority filter; policy accept;
+        iifname @uplinks tcp dport {{ 179, 6443 }} counter reject with tcp reset
+        iifname @uplinks udp dport {{ 4789 }} counter reject
+    }}
+{POSTROUTING}}}
+",
+                sets_and_forward("\n        elements = { \"eth1\" }")
+            )
+        );
+    }
+
+    #[test]
+    fn with_only_udp_internal_ports_the_reference_ruleset_rejects_no_tcp() {
+        let ruleset = reference(
+            &uplinks(Some("eth0"), None),
+            "vars: {internal_ports: {udp: [4789]}}",
+        );
+        assert!(
+            ruleset.contains("    iifname @uplinks udp dport { 4789 } counter reject\n"),
+            "{ruleset}"
+        );
+        assert!(!ruleset.contains("tcp dport"), "{ruleset}");
+    }
+
+    #[test]
+    fn with_no_uplink_the_reference_ruleset_has_an_empty_uplinks_set() {
+        assert_eq!(
+            reference(&Uplinks::default(), "{}"),
+            format!("{}{POSTROUTING}}}\n", sets_and_forward(""))
+        );
+    }
+
+    #[test]
     fn without_the_uplink_replies_mark_the_reference_ruleset_marks_nothing() {
+        let unmarked = reference(&uplinks(Some("eth0"), None), "{}");
         for values in [
             "classes: {egress: {protocol: 152, table: 152, rules: {egress: {priority: 1001}}}}",
             "classes: {egress: {protocol: 152, rules: {uplink-replies: {priority: 1000}}}}",
         ] {
-            assert_eq!(reference(values), WITHOUT_THE_MARK, "{values}");
+            assert_eq!(
+                reference(&uplinks(Some("eth0"), None), values),
+                unmarked,
+                "{values}"
+            );
         }
     }
 

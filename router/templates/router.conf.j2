@@ -106,7 +106,7 @@ protocol kernel kernel_egress{{ family }} {
      them intercontinental, where a brief stall is normal and a flap costs more than slow
      convergence. 300 ms with the default multiplier detects in ~1.5s against OSPF's 40s dead
      timer - and a timer is the only signal available, since a WireGuard interface stays up
-     whether or not packets still cross it. -#}
+     whether or not packets still cross it. #}
 protocol bfd {
 {%- for iface in ospf_interfaces %}
 {%- if iface.bfd %}
@@ -143,7 +143,7 @@ protocol static BYPASS {
 protocol static ANNOUNCE {
     ipv4 { import all; };
 {%- for r in announce %}
-    route {{ r.net }} via "{{ router_loopback_iface }}"; # {{ r.label }}
+    route {{ r.net }} via "{{ router_loopback_iface }}";{% if r.label %} # {{ r.label }}{% endif %}
 {%- endfor %}
 }
 {%- endif %}

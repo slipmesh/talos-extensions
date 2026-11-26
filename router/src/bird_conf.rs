@@ -369,6 +369,7 @@ ospf_interfaces: [mesh-*]
 direct_interfaces: [lan0, mesh-*, eth0.100]
 announce:
   - {net: 203.0.113.192/26}
+  - {net: 198.51.100.128/25, label: k8s-services}
 learn: [203.0.113.128/26]
 "#,
         )
@@ -388,7 +389,8 @@ learn: [203.0.113.128/26]
         assert!(out.contains("local 3fff::1 as 64496;"));
         assert!(out.contains("protocol bgp ibgp6_node_b {"));
         assert!(out.contains("neighbor 3fff::2 as 64496;"));
-        assert!(out.contains("route 203.0.113.192/26 via \"router-lo\";"));
+        assert!(out.contains("route 203.0.113.192/26 via \"router-lo\";\n"));
+        assert!(out.contains("route 198.51.100.128/25 via \"router-lo\"; # k8s-services\n"));
         assert!(out.contains("if net ~ [ 203.0.113.128/26+ ] then accept;"));
         assert!(out.contains("route 192.0.2.0/24 blackhole; # example"));
         assert!(out.contains("interface \"mesh-*\" { type ptp; bfd on; };"));
@@ -605,7 +607,7 @@ learn: [203.0.113.128/26]
         with.bfd = Some(&settings);
         let on = render(identity(), 64496, &with).unwrap();
 
-        assert!(on.contains("protocol bfd"));
+        assert!(on.contains("\nprotocol bfd {\n"), "{on}");
         // The chosen interval reaches the file, rather than a constant baked into the template.
         assert!(on.contains("min rx interval 500 ms"));
         assert!(on.contains("min tx interval 300 ms"));
