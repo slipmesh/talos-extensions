@@ -1,3 +1,6 @@
+{#- The daemon deletes only the tables it declares. -#}
+destroy table ip talos_mark
+destroy table inet talos_mark
 table inet talos_filter {
     chain forward {
         type filter hook forward priority filter; policy accept;
@@ -15,3 +18,19 @@ table ip talos_nat {
         oifname "{{ defaultroute_interface_ipv4 }}" ip saddr @nat_private counter masquerade
     }
 }
+{%- if classes.egress is defined and classes.egress.rules['uplink-replies'] is defined
+      and classes.egress.rules['uplink-replies'].mark is not none %}
+{%- set mark = classes.egress.rules['uplink-replies'].mark %}
+{#- The IPv4 uplink for both families: a node may have no IPv6 default route. #}
+table inet talos_mark {
+    chain prerouting {
+        type filter hook prerouting priority mangle; policy accept;
+        iifname "{{ defaultroute_interface_ipv4 }}" ct state new ct mark set ct mark & {{ mark.keep }} | {{ mark.value }}
+        ct direction reply ct mark & {{ mark.mask }} == {{ mark.value }} meta mark set meta mark & {{ mark.keep }} | {{ mark.value }}
+    }
+    chain output {
+        type route hook output priority mangle; policy accept;
+        ct direction reply ct mark & {{ mark.mask }} == {{ mark.value }} meta mark set meta mark & {{ mark.keep }} | {{ mark.value }}
+    }
+}
+{%- endif %}
