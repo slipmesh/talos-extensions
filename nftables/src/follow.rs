@@ -14,7 +14,7 @@ pub const SETTLE: Duration = Duration::from_secs(1);
 /// differ from the last, starting from `current`. Returns only on an error, the end of `changes`
 /// among them.
 pub async fn follow<L, LF, C, CF>(
-    mut changes: impl Stream<Item = ()> + Unpin,
+    changes: impl Stream<Item = ()> + Send + Unpin + 'static,
     mut current: Uplinks,
     lookup: L,
     mut changed: C,
@@ -25,6 +25,7 @@ where
     C: FnMut(&Uplinks) -> CF,
     CF: Future<Output = Result<()>>,
 {
+    let mut changes = read_as_they_come(changes);
     loop {
         settled(&mut changes).await?;
         let found = lookup().await?;
@@ -50,7 +51,28 @@ pub async fn lookup(rt: &common::netlink::rt::RtClient) -> Result<Uplinks> {
     })
 }
 
-/// Waits for a change, then for [`SETTLE`], and takes every change that came meanwhile.
+/// `changes` read as they come and dropped, leaving only that one came. A burst left unread while
+/// [`settled`] waits would stay queued.
+fn read_as_they_come(
+    mut changes: impl Stream<Item = ()> + Send + Unpin + 'static,
+) -> impl Stream<Item = ()> + Unpin {
+    let (came, seen) = tokio::sync::watch::channel(());
+    tokio::spawn(async move {
+        while changes.next().await.is_some() {
+            if came.send(()).is_err() {
+                break;
+            }
+        }
+    });
+    Box::pin(
+        futures::stream::unfold(seen, |mut seen| async move {
+            seen.changed().await.ok().map(|()| ((), seen))
+        })
+        .fuse(),
+    )
+}
+
+/// Waits for a change, then for [`SETTLE`], and takes the changes that came meanwhile.
 async fn settled(changes: &mut (impl Stream<Item = ()> + Unpin)) -> Result<()> {
     changes
         .next()
@@ -67,6 +89,8 @@ mod tests {
     use crate::template::Uplink;
     use futures::channel::mpsc;
     use std::cell::RefCell;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn on(interface: &str) -> Uplinks {
         Uplinks {
@@ -153,6 +177,44 @@ mod tests {
             run(rx, vec![Uplinks::default(), on("eth0"), on("eth0")]).await,
             (3, vec![on("eth0")])
         );
+    }
+
+    /// A change not read yet, counted in `unread` until it is dropped.
+    struct Unread(Arc<AtomicUsize>);
+
+    impl Drop for Unread {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_changes_are_read_as_they_come_rather_than_kept_while_settling() {
+        let unread = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = mpsc::unbounded();
+        let send = |count| {
+            for _ in 0..count {
+                unread.fetch_add(1, Ordering::SeqCst);
+                tx.unbounded_send(Unread(unread.clone())).unwrap();
+            }
+        };
+        let following = follow(
+            rx.map(drop),
+            Uplinks::default(),
+            || async { Ok(Uplinks::default()) },
+            |_| async { Ok(()) },
+        );
+        let settling = async {
+            send(1);
+            tokio::time::sleep(SETTLE / 4).await;
+            send(1000);
+            tokio::time::sleep(SETTLE / 4).await;
+            assert_eq!(unread.load(Ordering::SeqCst), 0);
+        };
+        tokio::select! {
+            ended = following => panic!("follow ended: {ended:?}"),
+            () = settling => {}
+        }
     }
 
     #[tokio::test(start_paused = true)]
