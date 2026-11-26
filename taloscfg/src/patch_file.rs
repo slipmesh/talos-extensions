@@ -1,15 +1,14 @@
 //! One host's patch file: the `patch` documents aimed at it, then the `ExtensionServiceConfig`
 //! documents the generator makes - `awg` and `router`, each carrying that daemon's config once the
 //! daemon's own `validate()` accepts it, the `router` one with the node's router template, then
-//! `nftables` with its ruleset where a `firewall` template reaches the node - and in each any
-//! files the `patch` documents add to it. After those documents, a `RoutingRuleConfig` for each
+//! `nftables` with its ruleset - and in each any files the `patch` documents add to it. After those documents, a `RoutingRuleConfig` for each
 //! rule of a route class.
 
 use crate::defaults::Service;
 use crate::documents::{Listener, TalosSettings, Template};
 use crate::patches::{self, HostDocument};
 use crate::talos::{self, ConfigFile, ExtensionServiceConfig, ServiceFile};
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use common::daemon::{
     AWG_CONFIG_PATH, AwgDaemonConfig, MetricsConfig, ROUTER_CONFIG_PATH, RouterDaemonConfig,
 };
@@ -51,27 +50,25 @@ fn added_files(added: Option<&HostDocument>) -> Vec<ServiceFile> {
         .collect()
 }
 
-/// The files of the `nftables` document: the template, its config where `values` has any, and the
-/// files `added`.
+/// The files of the `nftables` document: the template, its config, and the files `added`.
 fn nftables_config_files(
     template: &str,
     values: &Values,
     added: Vec<ServiceFile>,
 ) -> Result<Vec<ServiceFile>> {
-    let template_file = ConfigFile {
-        mount_path: Service::Firewall.mount_path().to_owned(),
-        content: template.to_owned(),
-    };
-    let config = if values.is_empty() {
-        None
-    } else {
-        Some(ConfigFile {
+    let generated = [
+        ConfigFile {
+            mount_path: Service::Firewall.mount_path().to_owned(),
+            content: template.to_owned(),
+        },
+        ConfigFile {
             mount_path: nftables::template::CONFIG_PATH.to_owned(),
             content: sliplib_yaml::to_string(values)?,
-        })
-    };
-    Ok(std::iter::once(ServiceFile::Generated(template_file))
-        .chain(config.map(ServiceFile::Generated))
+        },
+    ];
+    Ok(generated
+        .into_iter()
+        .map(ServiceFile::Generated)
         .chain(added)
         .collect())
 }
@@ -120,10 +117,11 @@ fn publish_annotations(patches: Vec<HostDocument>, annotations: Mapping) -> Vec<
     documents
 }
 
-/// The templates a node gets: of those that reach it, the last by rank for each daemon.
+/// The templates a node gets: of those that reach it, the last by rank for each daemon, or the
+/// daemon's reference where none does.
 struct Templates {
-    router: Option<String>,
-    firewall: Option<String>,
+    router: String,
+    firewall: String,
 }
 
 impl Templates {
@@ -143,10 +141,12 @@ impl Templates {
         Ok(Self {
             router: checked(router_template, Service::Router, |content| {
                 validate_router_template(content, router, values)
-            })?,
+            })?
+            .unwrap_or_else(|| Service::Router.reference().to_owned()),
             firewall: checked(firewall_template, Service::Firewall, |content| {
                 validate_firewall_template(content, values)
-            })?,
+            })?
+            .unwrap_or_else(|| Service::Firewall.reference().to_owned()),
         })
     }
 }
@@ -205,13 +205,6 @@ fn render_node(
         vars: sliplib_yaml::from_value(files.vars_for(host))?,
     };
     let templates = Templates::of(files, host, &router_cfg.mesh, &values)?;
-    let Some(router_template) = templates.router else {
-        bail!(
-            "no `template` document for the router reaches it, and its routing daemon does not \
-             run without one - aim one at it; `slipmesh-taloscfg template router` prints \
-             one holding the reference template"
-        );
-    };
 
     let mut patches = patches::for_host(files, host)?;
     let awg = std::iter::once(ServiceFile::Generated(ConfigFile {
@@ -230,7 +223,7 @@ fn render_node(
         },
         ConfigFile {
             mount_path: Service::Router.mount_path().to_owned(),
-            content: router_template,
+            content: templates.router,
         },
     ]
     .into_iter()
@@ -243,21 +236,11 @@ fn render_node(
         render_extension_service_document("awg", awg)?,
         render_extension_service_document(Service::Router.name(), router)?,
     ];
-    let nftables_added = take_added(&mut patches, Service::Firewall.name());
-    let nftables_files = added_files(nftables_added.as_ref());
-    match (templates.firewall, nftables_added) {
-        (Some(ruleset), _) => generated.push(render_extension_service_document(
-            Service::Firewall.name(),
-            nftables_config_files(&ruleset, &values, nftables_files)?,
-        )?),
-        (None, Some(added)) if !nftables_files.is_empty() => bail!(
-            "{}: adds files to `nftables`, which no `template` document for the firewall reaches \
-             on this node, so it gets no `nftables` document - aim the `patch` or a template so \
-             that both reach the node or neither",
-            added.origin
-        ),
-        (None, _) => {}
-    }
+    let nftables_added = added_files(take_added(&mut patches, Service::Firewall.name()).as_ref());
+    generated.push(render_extension_service_document(
+        Service::Firewall.name(),
+        nftables_config_files(&templates.firewall, &values, nftables_added)?,
+    )?);
 
     let node = network.node(host)?;
     let patches = publish_annotations(
@@ -527,7 +510,7 @@ content: "table inet x {{}}"
     }
 
     #[test]
-    fn without_classes_and_vars_neither_key_nor_the_firewall_file_is_written() {
+    fn without_classes_and_vars_router_yaml_carries_neither_key() {
         let raw = with_router_files(&[("", TEMPLATE)]);
         let start = raw.find("  classes:\n").unwrap();
         let end = raw.find("mesh:\n").unwrap();
@@ -536,11 +519,6 @@ content: "table inet x {{}}"
         let router = config_at(&a, "router", ROUTER_CONFIG_PATH).unwrap();
         assert!(
             router.get("classes").is_none() && router.get("vars").is_none(),
-            "{a}"
-        );
-        assert!(generated_document(&a, "nftables").is_some(), "{a}");
-        assert!(
-            config_at(&a, "nftables", nftables::template::CONFIG_PATH).is_none(),
             "{a}"
         );
     }
@@ -637,45 +615,61 @@ content: "table inet x {{}}"
         );
     }
 
-    #[test]
-    fn files_added_to_nftables_need_a_firewall_template_that_reaches_the_node() {
-        let narrower =
-            adding_to("nftables").replace("platform: talos}", "platform: talos, include: [b]}");
-        let raw = format!(
-            "{}{narrower}{}",
-            with_router_files(&[("", TEMPLATE)]),
-            adding_to("nftables")
-        );
-        let a = render_raw(&raw, "a").unwrap();
-        let nftables = generated_document(&a, "nftables").unwrap();
-        assert_eq!(
-            nftables["configFiles"][2]["mountPath"],
-            "/etc/talos-extensions/extra"
-        );
-        let err = format!("{:#}", render_raw(&raw, "b").unwrap_err());
-        let line = |at: usize| raw[..at].lines().count() + 1;
-        let narrower_at = raw.find(&narrower).unwrap() + "---\n".len();
-        let broader_at = raw.rfind(&adding_to("nftables")).unwrap() + "---\n".len();
-        let by_rank = format!(
-            "the `kind: patch` document at line {} and the `kind: patch` document at line {}",
-            line(broader_at),
-            line(narrower_at)
-        );
-        assert!(
-            err.contains("nftables") && err.contains("\"b\"") && err.contains(&by_rank),
-            "{err}"
-        );
+    /// The paths and contents of the files of `file`'s `nftables` document.
+    fn nftables_files(file: &str) -> Vec<(String, String)> {
+        generated_document(file, "nftables").unwrap()["configFiles"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["mountPath"].as_str().unwrap().to_owned(),
+                    f["content"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
     }
 
     #[test]
-    fn a_patch_of_nftables_adding_no_file_needs_no_firewall_template() {
+    fn a_host_no_firewall_template_reaches_gets_the_reference_with_its_values_and_added_files() {
         let raw = format!(
-            "{}---\nslipmesh: {{kind: patch, platform: talos}}\napiVersion: v1alpha1\nkind: \
-             ExtensionServiceConfig\nname: nftables\nconfigFiles: []\n",
-            with_router_files(&[("", TEMPLATE)])
+            "{}{}",
+            with_router_files(&[("", TEMPLATE)]),
+            adding_to("nftables")
         );
-        let b = render_raw(&raw, "b").unwrap();
-        assert!(generated_document(&b, "nftables").is_none(), "{b}");
+        let b = nftables_files(&render_raw(&raw, "b").unwrap());
+        let paths: Vec<&str> = b.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                nftables::template::TEMPLATE_PATH,
+                nftables::template::CONFIG_PATH,
+                "/etc/talos-extensions/extra",
+            ]
+        );
+        assert_eq!(b[0].1, Service::Firewall.reference());
+    }
+
+    #[test]
+    fn a_host_no_firewall_template_reaches_and_without_values_gets_the_reference_and_no_values() {
+        let raw = with_router_files(&[("", TEMPLATE)]);
+        let start = raw.find("  classes:\n").unwrap();
+        let end = raw.find("mesh:\n").unwrap();
+        let raw = format!("{}{}", &raw[..start], &raw[end..]);
+        let b = nftables_files(&render_raw(&raw, "b").unwrap());
+        assert_eq!(
+            b,
+            [
+                (
+                    nftables::template::TEMPLATE_PATH.to_owned(),
+                    Service::Firewall.reference().to_owned()
+                ),
+                (
+                    nftables::template::CONFIG_PATH.to_owned(),
+                    "{}\n".to_owned()
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -690,17 +684,16 @@ content: "table inet x {{}}"
         assert_eq!(b[1].1, "# b\nrouter id {{ loopback }};\n");
     }
 
-    /// `router` exits without its template, so a host none reaches would crash-loop on a patch
-    /// `generate` reported as fine.
     #[test]
-    fn a_host_no_router_template_reaches_is_not_rendered() {
+    fn a_host_no_router_template_reaches_gets_the_reference() {
         let raw = with_router_files(&[("  include: [a]\n", TEMPLATE)]);
-        render_raw(&raw, "a").unwrap();
-        let err = format!("{:#}", render_raw(&raw, "b").unwrap_err());
-        assert!(
-            err.contains("\"b\"") && err.contains("slipmesh-taloscfg template router"),
-            "{err}"
+        let b = router_files(&render_raw(&raw, "b").unwrap());
+        let paths: Vec<&str> = b.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            paths,
+            [ROUTER_CONFIG_PATH, router::bird_conf::TEMPLATE_PATH]
         );
+        assert_eq!(b[1].1, Service::Router.reference());
     }
 
     /// The line at which the `n`th document appended to `SLIPMESH` starts, counting from 0.

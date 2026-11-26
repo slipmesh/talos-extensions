@@ -1,8 +1,6 @@
 //! The reference template of each daemon that takes one. A template reaches a node from a
-//! `template` document of the files; the reference is what such a document starts from.
-
-use crate::documents::Template;
-use sliplib_config::v2::{Error, File};
+//! `template` document of the files; the reference is what such a document starts from, and what
+//! a node that none reaches gets.
 
 /// A daemon with a reference template, as the `template` command and a `template` document name
 /// it. `firewall` is the daemon of the `nftables` service: this is the one place the two names
@@ -75,19 +73,6 @@ impl std::fmt::Display for Service {
     }
 }
 
-/// Whether a `firewall` `template` document stands in `files` at all. A `template` document whose
-/// keys do not read is refused here, naming it, rather than counted as none.
-///
-/// One for some nodes only counts: who goes without it was decided by whoever aimed it.
-pub fn has_firewall_template(files: &File) -> Result<bool, Error> {
-    let daemons = files
-        .templates()
-        .iter()
-        .map(|template| Ok(template.read::<Template>()?.daemon))
-        .collect::<Result<Vec<Service>, Error>>()?;
-    Ok(daemons.contains(&Service::Firewall))
-}
-
 /// The `template` document that gives every node of `talos` the reference template of
 /// `service`, `base` included, to add to the files and edit there. The content is written as a
 /// literal block so that it reads in the files the way it reads in the file it becomes.
@@ -109,6 +94,8 @@ pub fn document(service: Service) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::documents::Template;
+    use sliplib_config::v2::File;
 
     const NETWORK: &str = r#"slipmesh: {kind: network, version: 2, revision: 1}
 addressing: {loopback: {ipv4: 198.51.100.0/25, ipv6: "3fff::/64"}}
@@ -118,39 +105,6 @@ nodes:
   node-a: {platform: talos, node_id: 0.0.0.1, underlay: {wan: {}}}
   node-b: {platform: talos, node_id: 0.0.0.2, underlay: {wan: {}}}
 "#;
-
-    fn has_firewall_template_in(documents: &[&str]) -> bool {
-        let text = std::iter::once(NETWORK)
-            .chain(documents.iter().copied())
-            .collect::<Vec<_>>()
-            .join("---\n");
-        has_firewall_template(&File::parse(&text).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn a_template_that_does_not_read_is_refused_naming_it_not_counted_as_none() {
-        let reference = document(Service::Firewall);
-        let short_base = reference.replace(&Service::Firewall.base(), "sha256:abc");
-        let unknown_key = reference.replace("content: |", "contnet: |");
-        for broken in [short_base, unknown_key] {
-            let text = format!("{NETWORK}---\n{broken}");
-            let err = has_firewall_template(&File::parse(&text).unwrap()).unwrap_err();
-            assert!(
-                err.to_string()
-                    .contains("`kind: template` document at line 9"),
-                "{err:#}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_firewall_template_for_some_nodes_only_counts() {
-        let firewall = document(Service::Firewall).replace(
-            "  platform: talos\n",
-            "  platform: talos\n  exclude: [node-b]\n",
-        );
-        assert!(has_firewall_template_in(&[&firewall]));
-    }
 
     #[test]
     fn a_daemons_document_gives_every_node_its_reference_template_and_names_its_base() {

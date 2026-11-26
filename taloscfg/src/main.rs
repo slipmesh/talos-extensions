@@ -141,14 +141,6 @@ fn generate(
     if let Some(n) = node {
         network.node_on(n, Platform::Talos)?;
     }
-    // A node no firewall template reaches gets no ruleset; one no router template reaches is
-    // refused on its own.
-    anyhow::ensure!(
-        defaults::has_firewall_template(&files)?,
-        "{}: no node gets a firewall template - `slipmesh-taloscfg template firewall` prints the \
-         document to add",
-        shown(inputs)
-    );
     let targets: Vec<&str> = match node {
         Some(n) => vec![n],
         None => network
@@ -435,15 +427,12 @@ installer:
         };
         let key_of_a = format!("wireguard: {{private_key: \"{}\"}}", *KEY_OF_A);
         let key_of_a_is_not_set = "node \"a\": wireguard.private_key is not set";
-        let router = defaults::document(defaults::Service::Router);
-        let firewall = defaults::document(defaults::Service::Firewall);
         /// What a refusal holds besides its name of the defect.
         enum Also {
             /// One line, ending in the command that cures it.
             Minted,
             /// The file it read, once.
             Named,
-            Nothing,
         }
         // The file, the node asked for, what the refusal names, and what else it holds.
         let cases = [
@@ -491,18 +480,6 @@ installer:
                 "\"nogroup\", which is neither a node nor a group".to_owned(),
                 Also::Named,
             ),
-            (
-                holding(&format!("{}---\n{router}", *SLIPMESH)),
-                None,
-                "`slipmesh-taloscfg template firewall`".to_owned(),
-                Also::Named,
-            ),
-            (
-                holding(&format!("{}---\n{firewall}", *SLIPMESH)),
-                None,
-                "`slipmesh-taloscfg template router`".to_owned(),
-                Also::Nothing,
-            ),
         ];
         for (paths, node, named, also) in cases {
             let before = paths.snapshot();
@@ -524,7 +501,6 @@ installer:
                         1,
                         "{named}: {shown}"
                     ),
-                    Also::Nothing => {}
                 }
                 assert_eq!(paths.snapshot(), before, "{named}");
             }
@@ -542,6 +518,15 @@ installer:
         paths.generate(None, false, false).unwrap();
         assert!(paths.patch("a").is_some());
         assert!(paths.patch("router1").is_none());
+    }
+
+    #[test]
+    fn files_without_a_template_document_give_every_host_its_patch_file() {
+        let paths = holding(&SLIPMESH);
+        paths.generate(None, false, false).unwrap();
+        for host in ["a", "b", "c", "d"] {
+            assert!(paths.patch(host).is_some(), "{host}");
+        }
     }
 
     #[test]
