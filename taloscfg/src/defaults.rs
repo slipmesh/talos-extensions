@@ -173,7 +173,7 @@ nodes:
     fn the_digest_of_each_reference_is_pinned() {
         assert_eq!(
             Service::Router.digest(),
-            "7f2c0ec2d47f23c27baf20c30c144b640d23315753ec09e05a558cd16e7f040a"
+            "57973e92884f81106595b3d2742e22a76f1707e7cd27c7e6df119ae02c408448"
         );
         assert_eq!(
             Service::Firewall.digest(),

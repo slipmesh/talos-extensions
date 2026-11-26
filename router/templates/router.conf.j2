@@ -63,8 +63,7 @@ protocol kernel {
     };
 }
 {%- if egress_table is not none %}
-{#- BIRD takes one kernel protocol per table, so the egress routes reach their kernel table
-     through BIRD tables of their own. #}
+{#- BIRD allows one kernel protocol per table. -#}
 {%- for family in [4, 6] %}
 protocol pipe {
     table master{{ family }};

@@ -404,8 +404,7 @@ learn: [203.0.113.128/26]
         assert!(out.contains("protocol direct direct_eth0_100 {"));
     }
 
-    /// The reference template rendered for a node with one iBGP peer and the bypass route
-    /// `192.0.2.0/24`, under `values`.
+    /// The reference render: one iBGP peer, bypass `192.0.2.0/24`, `values`.
     fn reference_with(values: &str) -> String {
         let cfg: RouterConfig = sliplib_yaml::from_str(
             "node:\n  loopback_addresses: [\"198.51.100.1/32\", \"3fff::1/128\"]\n\
@@ -427,7 +426,7 @@ learn: [203.0.113.128/26]
 
     const EGRESS: &str = "classes: {egress: {protocol: 150, table: 152, rules: {}}}";
 
-    /// What the reference template adds for an `egress` class that sends to a table.
+    /// Lines an `egress` class with a table adds.
     const EGRESS_PARTS: [&str; 8] = [
         "ipv4 table egress4;\nipv6 table egress6;\n",
         "protocol pipe {\n    table master4;\n    peer table egress4;\n    import none;\n    \
@@ -446,7 +445,7 @@ learn: [203.0.113.128/26]
          if (64512, 152, 0) ~ bgp_large_community then reject;\n",
         "            if proto = \"BYPASS\" then {\n                \
          bgp_large_community.add((64512, 152, 0));\n                accept;\n            }\n",
-        // Before the general static line, so a bypass route is not exported without it.
+        // Before the general static accept.
         "accept;\n            }\n            if source = RTS_STATIC then accept;",
     ];
 
