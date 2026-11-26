@@ -72,9 +72,9 @@ mod tests {
             template.variables(),
             BTreeSet::from([DEFAULT_ROUTE_IPV4.to_string()])
         );
-        let values = HashMap::from([(DEFAULT_ROUTE_IPV4, "eth0")]);
+        let interfaces = HashMap::from([(DEFAULT_ROUTE_IPV4, "eth0".to_owned())]);
         assert_eq!(
-            template.render(values).unwrap(),
+            render(&template, &interfaces, &Values::default()).unwrap(),
             REFERENCE_TEMPLATE.replace("{{ defaultroute_interface_ipv4 }}", "eth0")
         );
     }

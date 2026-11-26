@@ -13,6 +13,7 @@ use anyhow::{Context, Result, bail};
 use common::daemon::{
     AWG_CONFIG_PATH, AwgDaemonConfig, MetricsConfig, ROUTER_CONFIG_PATH, RouterDaemonConfig,
 };
+use common::template::Values;
 use sliplib_config::router::RouterConfig;
 use sliplib_config::v2::{AimedDocument, File};
 use sliplib_mesh::Mesh;
@@ -84,7 +85,20 @@ fn nftables_config_files(template: &str, added: Vec<ServiceFile>) -> Result<Vec<
 /// the daemon does not supply, or fails to render this node's config.
 fn validate_router_template(template: &str, cfg: &RouterConfig) -> Result<()> {
     let template = router::bird_conf::compile(template.to_owned())?;
-    router::bird_conf::render_config(&template, cfg, &common::template::Values::default(), &[])?;
+    router::bird_conf::render_config(&template, cfg, &Values::default(), &[])?;
+    Ok(())
+}
+
+/// Refuses a firewall template the node would fail on: one that does not compile, reads a
+/// variable the daemon does not supply, or fails to render. The interfaces exist only on the node,
+/// so each stands in as its own name, and the text is not kept.
+fn validate_firewall_template(template: &str) -> Result<()> {
+    use nftables::template::{DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6};
+    let template = nftables::template::compile(template.to_owned())?;
+    let interfaces = [DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6]
+        .map(|name| (name, name.to_owned()))
+        .into();
+    nftables::template::render(&template, &interfaces, &Values::default())?;
     Ok(())
 }
 
@@ -127,9 +141,11 @@ impl Templates {
             router: checked(router_template, Service::Router, |content| {
                 validate_router_template(content, router)
             })?,
-            firewall: checked(firewall_template, Service::Firewall, |content| {
-                nftables::template::compile(content).map(drop)
-            })?,
+            firewall: checked(
+                firewall_template,
+                Service::Firewall,
+                validate_firewall_template,
+            )?,
         })
     }
 }
@@ -637,6 +653,26 @@ content: "table inet x {{}}"
                 "{place}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn a_firewall_template_that_fails_to_render_is_refused() {
+        let firewall = |content: &str| {
+            format!(
+                "{}---\nslipmesh: {{kind: template, platform: talos, include: [b]}}\n\
+                 daemon: firewall\nbase: {BASE}\ncontent: {content:?}\n",
+                with_router_files(&[("", TEMPLATE)])
+            )
+        };
+        let unguarded =
+            firewall("oifname \"{{ defaultroute_interface_ipv4 }}\" {{ vars.source }}\n");
+        let err = format!("{:#}", render_raw(&unguarded, "b").unwrap_err());
+        assert!(err.contains("firewall template"), "{err}");
+        let guarded = firewall(
+            "oifname \"{{ defaultroute_interface_ipv6 }}\" \
+             {% if vars.source is defined %}{{ vars.source }}{% endif %}\n",
+        );
+        render_raw(&guarded, "b").unwrap();
     }
 
     #[test]
