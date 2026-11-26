@@ -41,8 +41,8 @@ pub(crate) struct HostDocument {
 /// files beside the generated ones, one that sets a generated annotation, and a routing rule of a
 /// generated priority: each document on its own, since merging them deletes a key set to `null`.
 pub fn check(files: &File) -> Result<()> {
-    let rules: Vec<(String, &ClassName, &Name)> = talos::rules(files.network())
-        .map(|(class, _, name, rule)| (rule.priority.to_string(), class, name))
+    let rules: Vec<(u32, &ClassName, &Name)> = talos::rules(files.network())
+        .map(|(class, _, name, rule)| (rule.priority, class, name))
         .collect();
     files
         .patches()
@@ -50,8 +50,8 @@ pub fn check(files: &File) -> Result<()> {
         .try_for_each(|patch| check_one(patch, &rules))
 }
 
-/// `rules`: each generated rule's priority, as its document's name, with its class and its name.
-fn check_one(patch: &AimedDocument, rules: &[(String, &ClassName, &Name)]) -> Result<()> {
+/// `rules`: each generated rule's priority with its class and its name.
+fn check_one(patch: &AimedDocument, rules: &[(u32, &ClassName, &Name)]) -> Result<()> {
     let place = patch.aim();
     let identity: Identity = patch.read()?;
     let Some(kind) = &identity.kind else {
@@ -70,7 +70,8 @@ fn check_one(patch: &AimedDocument, rules: &[(String, &ClassName, &Name)]) -> Re
     }
     if let Some(name) = &identity.name
         && kind == talos::ROUTING_RULE_CONFIG
-        && let Some((_, class, rule)) = rules.iter().find(|(priority, ..)| priority == name)
+        && let Ok(number) = name.parse::<u32>()
+        && let Some((_, class, rule)) = rules.iter().find(|(priority, ..)| *priority == number)
     {
         bail!(
             "{place}: {kind} {name:?} is generated from the rule {:?} of the route class {:?} - \
@@ -398,7 +399,7 @@ nodes:
         );
     }
 
-    fn routing_rule(kind: &str, name: &str) -> String {
+    fn named(kind: &str, name: &str) -> String {
         patch(
             "",
             &format!("apiVersion: v1alpha1\nkind: {kind}\nname: '{name}'\n"),
@@ -412,18 +413,20 @@ nodes:
             "routing:\n  bgp: {as: 64512}\n  classes:\n    egress: {protocol: 152, rules: \
              {uplink-replies: {priority: 1000}}}",
         );
-        let copy = routing_rule("RoutingRuleConfig", "1000");
-        let err = error(&[&network, &copy]);
-        let line = line_of(&[&network, &copy], 1);
-        assert!(
-            err.contains(&format!("the `kind: patch` document at line {line}"))
-                && err.contains("\"uplink-replies\"")
-                && err.contains("\"egress\""),
-            "{err}"
-        );
+        for name in ["1000", "01000"] {
+            let copy = named("RoutingRuleConfig", name);
+            let err = error(&[&network, &copy]);
+            let line = line_of(&[&network, &copy], 1);
+            assert!(
+                err.contains(&format!("the `kind: patch` document at line {line}"))
+                    && err.contains("\"uplink-replies\"")
+                    && err.contains("\"egress\""),
+                "{name}: {err}"
+            );
+        }
         for other in [
-            routing_rule("RoutingRuleConfig", "1001"),
-            routing_rule("HostnameConfig", "1000"),
+            named("RoutingRuleConfig", "1001"),
+            named("HostnameConfig", "1000"),
         ] {
             check(&parse(&[&network, &other])).unwrap();
         }

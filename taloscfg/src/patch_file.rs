@@ -2,8 +2,8 @@
 //! documents the generator makes - `awg` and `router`, each carrying that daemon's config once the
 //! daemon's own `validate()` accepts it, the `router` one with the node's router template, then
 //! `nftables` with its ruleset where a `firewall` template reaches the node - and in each any
-//! files the `patch` documents add to it, then a `RoutingRuleConfig` for each rule of a route
-//! class.
+//! files the `patch` documents add to it. After those documents, a `RoutingRuleConfig` for each
+//! rule of a route class.
 
 use crate::defaults::Service;
 use crate::documents::{Listener, TalosSettings, Template};
@@ -657,27 +657,21 @@ content: "table inet x {{}}"
         }
     }
 
-    /// The `RoutingRuleConfig` documents of `a` with `rules` as the rules of a class without a
-    /// table.
-    fn rule_documents(rules: &str) -> Vec<sliplib_yaml::Value> {
-        let classes = "    egress:\n      protocol: 152\n      table: 152\n";
+    #[test]
+    fn a_rule_without_a_mask_compares_every_bit_and_one_without_a_table_looks_up_main() {
         let raw = with_router_files(&[("", TEMPLATE)]);
-        let at = raw.find(classes).unwrap();
+        let at = raw.find("    egress:\n      protocol: 152\n").unwrap();
         let end = raw[at..].find("mesh:\n").unwrap() + at;
         let raw = format!(
-            "{}    egress:\n      protocol: 152\n      rules: {rules}\n{}",
+            "{}    egress:\n      protocol: 152\n      rules: {{marked: {{priority: 900, mark: \
+             \"0x10\"}}}}\n{}",
             &raw[..at],
             &raw[end..]
         );
-        documents(&render_raw(&raw, "a").unwrap())
+        let documents: Vec<_> = documents(&render_raw(&raw, "a").unwrap())
             .into_iter()
-            .filter(|document| document["kind"] == "RoutingRuleConfig")
-            .collect()
-    }
-
-    #[test]
-    fn a_rule_without_a_mask_compares_every_bit_and_one_without_a_table_looks_up_main() {
-        let documents = rule_documents("{marked: {priority: 900, mark: \"0x10\"}}");
+            .filter(|document| document["kind"] == talos::ROUTING_RULE_CONFIG)
+            .collect();
         assert_eq!(documents.len(), 1, "{documents:?}");
         assert_eq!(documents[0]["fwMark"], 16);
         assert_eq!(documents[0]["fwMask"], 4_294_967_295_u64);

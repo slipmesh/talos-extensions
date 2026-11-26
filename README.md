@@ -522,8 +522,8 @@ but none under `slipmesh.net/`.
 ### Routing rules
 
 Each rule of a route class, `routing.classes.<name>.rules`, becomes a `RoutingRuleConfig` document
-on every node, after the generated `ExtensionServiceConfig` documents, in the order the classes and
-their rules are written:
+on every `talos` node, after the generated `ExtensionServiceConfig` documents, in the order the
+classes and their rules are written:
 
 ```yaml
 apiVersion: v1alpha1
