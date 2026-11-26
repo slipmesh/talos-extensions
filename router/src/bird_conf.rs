@@ -104,8 +104,8 @@ pub struct RenderInputs<'a> {
     /// iBGP full mesh over the loopbacks (`multihop` + RFC 8950). It carries this node's own
     /// IPv4 loopback (`source = RTS_DEVICE`), its BYPASS/ANNOUNCE statics (`RTS_STATIC`), any
     /// kernel route inside a `learn` range (`RTS_INHERIT`) and the egress routes it exits itself,
-    /// for both families - but never OSPF-learned routes, which
-    /// would put the two protocols in a preference fight over the same prefix.
+    /// for both families - but never OSPF-learned routes, which would put the two protocols in a
+    /// preference fight over the same prefix.
     ///
     /// BGP is the only possible carrier for the IPv4 loopbacks: OSPFv3 is IPv6-only by design.
     /// The IPv4 kernel protocol's export filter therefore sets `krt_prefsrc` to this node's own

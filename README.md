@@ -321,19 +321,21 @@ truth. A mapping iterates by name, not in the order written.
 A template that reads any other variable is refused when it is compiled - in any branch, not only
 the ones a given node takes - and `router` exits without one rather than fall back on anything.
 The reference template, [`router/templates/router.conf.j2`](router/templates/router.conf.j2), runs
-OSPFv3 over the mesh links and iBGP over the loopbacks, and learns the routes `awg` installs for the
-roadwarrior clients it holds by their protocol number (`krt_source`, `awg_route_protocol` or 151),
-whatever `learn` says: a pool runs on several nodes under one address, and that route is how the
-others know which node a client is on. iBGP carries IPv4 and IPv6; a peer that offers only IPv4 keeps its session.
+OSPFv3 over the mesh links and iBGP over the loopbacks, and learns the routes of the roadwarrior
+clients a node holds by their protocol number (`krt_source`): `awg`'s `awg_route_protocol`, or the
+roadwarriors operator's 151, whatever `learn` says. A pool runs on several nodes under one address,
+and that route is how the others know which node a client is on. iBGP carries IPv4 and IPv6; a
+peer that offers only IPv4 keeps its session.
 
 Where the `egress` route class has a `table`, the reference template exports the bypass routes to
 iBGP with the large community `(<as_number>, <table>, 0)`. A node puts the iBGP routes that carry
 it into that kernel table, for both families, and not into `main`.
 
-An exit node's own route for the class goes straight into that table, under the class's
-`protocol`. BIRD learns it at preference 200, above BGP's 100, so another exit node's path to the
-same prefix stays out of the table while it is there and takes its place once it goes. BIRD
-announces it with the community, like a bypass route.
+On an exit node, the egress agent puts its route for the class straight into that table, under
+the class's `protocol` and with any metric but BIRD's 32: at that one the kernel refuses the route
+while BIRD's path is in the table. BIRD learns it at preference 200, above BGP's 100, so another
+exit node's path to the same prefix stays out of the table while it is there and takes its place
+once it goes. BIRD announces it with the community, like a bypass route.
 
 ---
 

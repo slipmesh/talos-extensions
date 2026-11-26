@@ -6,6 +6,8 @@ router id {{ loopback }};
 {%- set egress_table = classes.egress.table if classes.egress is defined else none %}
 {%- set egress_community = "(" ~ as_number ~ ", " ~ egress_table ~ ", 0)" %}
 {%- set roadwarrior_route_protocol = 151 %}
+{#- Above BGP's 100: another exit node's path stays out of the egress table. #}
+{%- set egress_route_preference = 200 %}
 {%- if egress_table is not none %}
 ipv4 table egress4;
 ipv6 table egress6;
@@ -22,9 +24,9 @@ protocol direct direct_{{ iface.protocol_id }} {
     ipv4 { import all; };
 }
 {%- endfor %}
-{#- awg tags the routes of the roadwarrior clients it holds with a protocol number of its own. A
-     pool runs on several nodes under one address, so the route is what tells the others which
-     node a client is connected to. #}
+{#- A roadwarrior client's route carries the protocol number of what installed it: awg or the
+     roadwarriors operator. A pool runs on several nodes under one address, so the route is what
+     tells the others which node a client is connected to. #}
 protocol kernel {
     ipv4 {
         import filter {
@@ -85,9 +87,8 @@ protocol kernel kernel_egress{{ family }} {
     ipv{{ family }} {
         table egress{{ family }};
         import filter {
-{#- Above BGP's 100: another exit node's path stays out of the table. #}
             if krt_source = {{ classes.egress.protocol }} then {
-                preference = 200;
+                preference = {{ egress_route_preference }};
                 accept;
             }
             reject;
