@@ -115,9 +115,14 @@ async fn prepare() -> Result<(Arc<RouterState>, Vec<bird_conf::BypassRoute>)> {
     let RouterDaemonConfig { mesh: cfg, metrics } = daemon;
     let values = common::template::Values::read(Path::new(ROUTER_CONFIG_PATH))
         .context("failed to read the template values of the config file")?;
-    // Read before anything on the node is touched: without a template there is no bird.conf to
-    // write, and nothing to fall back on - the template is the node's config, not this binary's.
-    let template = common::template::load(bird_conf::TEMPLATE_PATH, bird_conf::compile).await?;
+    // Read before anything on the node is touched: a template that fails leaves no bird.conf to
+    // write.
+    let template = common::template::load(
+        Path::new(bird_conf::TEMPLATE_PATH),
+        bird_conf::REFERENCE_TEMPLATE,
+        bird_conf::compile,
+    )
+    .await?;
 
     tracing::info!(
         bgp_peers = cfg.bgp_peers.len(),

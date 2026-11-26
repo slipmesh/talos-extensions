@@ -24,6 +24,8 @@ exclude_re = [
     "replace now_unix ",
     # Spawns `nft monitor` and runs forever.
     "nftables/src/main.rs:.*replace watchdog ",
+    # The node's default routes, then `nft`: only a node runs it.
+    "nftables/src/main.rs:.*replace run ",
     # Runs `nft`, which needs the node's netlink.
     "nftables/src/ruleset.rs:.*replace apply ",
     # An HTTPS request to RIPEstat.

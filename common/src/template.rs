@@ -16,15 +16,26 @@ use std::path::Path;
 
 const NAME: &str = "template";
 
-/// Reads the template at `path` and compiles it with its daemon's `compile`.
+/// Compiles with its daemon's `compile` the template at `path`, or `built_in` where no file is
+/// there. Any other failure to read the file is an error.
 pub async fn load(
-    path: &str,
+    path: &Path,
+    built_in: &'static str,
     compile: impl FnOnce(String) -> Result<Template>,
 ) -> Result<Template> {
-    let source = tokio::fs::read_to_string(path)
-        .await
-        .with_context(|| format!("failed to read template {path}"))?;
-    compile(source).with_context(|| format!("template {path} is invalid"))
+    match tokio::fs::read_to_string(path).await {
+        Ok(source) => {
+            tracing::info!(template = %path.display(), "template in force");
+            compile(source).with_context(|| format!("template {} is invalid", path.display()))
+        }
+        Err(absent) if absent.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!(template = "built-in", "template in force");
+            compile(built_in.to_owned()).context("the built-in template is invalid")
+        }
+        Err(unreadable) => {
+            Err(unreadable).with_context(|| format!("failed to read template {}", path.display()))
+        }
+    }
 }
 
 /// One compiled template whose every variable is known to its daemon.
@@ -197,6 +208,49 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    /// The text `load` took, from a template without variables.
+    async fn loaded(path: &Path, built_in: &'static str) -> Result<String> {
+        load(path, built_in, |source| Template::new(source, &[]))
+            .await?
+            .render(context(&[]))
+    }
+
+    #[tokio::test]
+    async fn the_file_at_the_path_is_the_template_in_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.j2");
+        std::fs::write(&path, "from the file\n").unwrap();
+        assert_eq!(
+            loaded(&path, "built in\n").await.unwrap(),
+            "from the file\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_file_at_the_path_the_built_in_template_is_in_force() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.j2");
+        assert_eq!(loaded(&path, "built in\n").await.unwrap(), "built in\n");
+    }
+
+    #[tokio::test]
+    async fn a_path_that_cannot_be_read_is_an_error_rather_than_the_built_in_template() {
+        let dir = tempfile::tempdir().unwrap();
+        let refused = format!("{:#}", loaded(dir.path(), "built in\n").await.unwrap_err());
+        assert!(refused.contains("failed to read template"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn an_invalid_built_in_template_is_named_as_built_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.j2");
+        let refused = format!("{:#}", loaded(&path, "{{ unknown }}").await.unwrap_err());
+        assert!(
+            refused.contains("the built-in template is invalid"),
+            "{refused}"
+        );
     }
 
     #[test]

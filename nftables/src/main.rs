@@ -39,7 +39,12 @@ async fn main() -> Result<()> {
 
 async fn run() -> Result<()> {
     let values = template::read_values(Path::new(CONFIG_PATH))?;
-    let template = common::template::load(TEMPLATE_PATH, template::compile).await?;
+    let template = common::template::load(
+        Path::new(TEMPLATE_PATH),
+        template::REFERENCE_TEMPLATE,
+        template::compile,
+    )
+    .await?;
 
     let referenced = template.variables();
     tracing::info!(variables = ?referenced, "starting nftables ruleset apply");

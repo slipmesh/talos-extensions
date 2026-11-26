@@ -251,12 +251,12 @@ leaves its interfaces, peers and routes as they are, so a restart does not take 
 ## `router`: BIRD-based OSPF/iBGP routing, also driven by a static file
 
 `router` reads two files at startup - `/etc/talos-extensions/router.yaml`, the facts, and
-`/etc/talos-extensions/router.conf.j2`, BIRD's config as a template of them - renders the one with
-the other, and spawns `bird` as a supervised child process - staged into the same
-`rootfs/usr/local/lib/containers/router/` directory as the `router` binary itself, rather than
-running as a separate sidecar container: Talos extension services have no sidecar concept, a
-service is always one `container.entrypoint`. It talks to BIRD over BIRD's own control socket
-protocol directly, so no `birdc` binary is shipped.
+`/etc/talos-extensions/router.conf.j2`, BIRD's config as a template of them, or without that file
+the reference template built into its image - renders the one with the other, and spawns `bird`
+as a supervised child process - staged into the same `rootfs/usr/local/lib/containers/router/`
+directory as the `router` binary itself, rather than running as a separate sidecar container:
+Talos extension services have no sidecar concept, a service is always one `container.entrypoint`.
+It talks to BIRD over BIRD's own control socket protocol directly, so no `birdc` binary is shipped.
 
 On SIGTERM `router` passes the signal on to `bird`, whose own shutdown closes the BGP sessions with a
 NOTIFICATION and withdraws the routes it exported to the kernel, and exits once `bird` has. A `bird`
@@ -319,7 +319,8 @@ missing one fails the rendering. A value that is none, such as a class's `table`
 truth. A mapping iterates by name, not in the order written.
 
 A template that reads any other variable is refused when it is compiled - in any branch, not only
-the ones a given node takes - and `router` exits without one rather than fall back on anything.
+the ones a given node takes - and `router` exits rather than fall back on anything. Only a missing
+file falls back, on the built-in reference; any other failure to read it is fatal too.
 The reference template, [`router/templates/router.conf.j2`](router/templates/router.conf.j2), runs
 OSPFv3 over the mesh links and iBGP over the loopbacks, and learns the routes of the roadwarrior
 clients a node holds by their protocol number (`krt_source`): `awg`'s `awg_route_protocol`, or the
@@ -355,7 +356,8 @@ failed scrape is not a reason to restart the container and tear down every adjac
 
 ## `nftables`: ruleset loader with a table-loss watchdog
 
-Applies the ruleset template `/etc/talos-extensions/nftables.conf.j2` once at startup, the same way
+Applies the ruleset template `/etc/talos-extensions/nftables.conf.j2`, or without that file the
+reference template built into its image, once at startup, the same way
 `awg`/`router` converge their own state once at startup - but unlike a true oneshot, it doesn't
 exit afterward.
 
@@ -394,9 +396,9 @@ two things to it:
    that is that renaming a table between two config versions orphans the old one rather than
    cleaning it up.
 
-No rule content is baked into this binary at all - MSS clamping, NAT, or anything else is just
-whatever the template says; [`nftables/templates/nftables.conf.j2`](nftables/templates/nftables.conf.j2)
-is the reference one, with those two.
+No rule content is fixed in this binary - MSS clamping, NAT, or anything else is whatever the
+template says; [`nftables/templates/nftables.conf.j2`](nftables/templates/nftables.conf.j2) is the
+reference one, with those two, built in for a node without a template file.
 
 Where the `egress` route class has a rule `uplink-replies` with a mark, the reference ruleset also
 gives that mark to the replies to a connection that came in on the IPv4 default-route interface,
@@ -728,9 +730,10 @@ ip -d link show type amneziawg
 ip route show                    # for a tracked peer with a fresh handshake, its route
 ```
 
-`router` also needs `router.conf.j2` (start from `router/templates/router.conf.j2`) and a `bird`
-in its working directory, such as the static one copied out of a built router extension:
-`docker create` the image, then `docker cp <id>:/usr/local/lib/containers/router/bird .`.
+`router` also needs a `bird` in its working directory, such as the static one copied out of a
+built router extension: `docker create` the image, then
+`docker cp <id>:/usr/local/lib/containers/router/bird .`. Without `router.conf.j2` it takes its
+built-in template; an edited one starts from `router/templates/router.conf.j2`.
 Restarting a daemon after editing its config exercises the same converge-and-clean-up path a
 config change on a node does.
 
