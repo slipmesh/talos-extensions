@@ -15,8 +15,7 @@ pub const TEMPLATE_PATH: &str = "/etc/talos-extensions/nftables.conf.j2";
 /// before templates read as its ruleset.
 pub const CONFIG_PATH: &str = "/etc/talos-extensions/firewall.yaml";
 
-/// The ruleset a mesh starts from: `taloscfg` writes it into `slipmesh.yaml` when that file has
-/// none, and from then on the copy there is the one in force.
+/// The ruleset `taloscfg` writes into the patch of a node no `template` document reaches.
 pub const REFERENCE_TEMPLATE: &str = include_str!("../templates/nftables.conf.j2");
 
 pub const DEFAULT_ROUTE_IPV4: &str = "defaultroute_interface_ipv4";

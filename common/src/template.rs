@@ -102,10 +102,6 @@ pub struct Values {
 pub const VALUES: [&str; 2] = ["classes", "vars"];
 
 impl Values {
-    pub fn is_empty(&self) -> bool {
-        self.classes.is_empty() && self.vars.is_empty()
-    }
-
     /// From a daemon's config file, beside its other keys.
     pub fn read(path: &Path) -> Result<Self> {
         Ok(sliplib_yaml::read(path)?)
@@ -252,15 +248,6 @@ mark {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.mark.keep }} {{ rule.loo
             render_guarded(&values),
             "table 152\nmark 0x100000/0x100000 0xffefffff main 1000\nsource 203.0.113.0/26\n"
         );
-    }
-
-    #[test]
-    fn values_are_empty_only_without_classes_and_without_vars() {
-        assert!(Values::default().is_empty());
-        for text in ["classes: {egress: {protocol: 152}}", "vars: {a: 1}"] {
-            let values: Values = sliplib_yaml::from_str(text).unwrap();
-            assert!(!values.is_empty(), "{text}");
-        }
     }
 
     #[test]

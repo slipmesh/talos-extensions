@@ -488,24 +488,25 @@ A `patch` document may also name a generated `ExtensionServiceConfig`, `awg`, `r
 `nftables`, to add files to it: the files follow the generated ones in that same document, since
 Talos takes one document per name. It may set `configFiles` and nothing else. Of an entry the
 generator reads only `mountPath`, a string, and refuses one at a path the generator writes; the
-entry goes to Talos as written. A `patch` that adds
-files to `nftables` on a node no `firewall` template reaches is refused, since that node gets no
-`nftables` document.
+entry goes to Talos as written.
 
 ### Templates
 
 The `router` document carries the node's router template as `/etc/talos-extensions/router.conf.j2`,
 and the `nftables` document, written after it, the `firewall` template as
-`/etc/talos-extensions/nftables.conf.j2`. The template a node gets, the last by rank of its daemon's,
-is checked as that daemon will check it and rendered with the node's values, a `router` one with
-the node's config and a `firewall` one with each interface name standing in as its variable's name,
-so one that would fail on a node fails `generate` instead. A template overridden on every node it
-reaches is not checked.
+`/etc/talos-extensions/nftables.conf.j2`. A node gets the last by rank of the `template` documents
+of a daemon that reach it, or, where none does, that daemon's reference template of the
+`slipmesh-taloscfg` release that runs `generate`. A daemon on the node takes the file it is given
+and has no template of its own. The template a node gets, the reference included, is checked as that
+daemon will check it and rendered with the node's values, a `router` one with the node's config and
+a `firewall` one with each interface name standing in as its variable's name, so one that would fail
+on a node fails `generate` instead; an empty one is refused, since Talos takes no empty file. A
+template overridden on every node it reaches is not checked.
 
 The values are the route classes of the network and the `vars` that reach the node, laid by rank.
 `router.yaml` carries them as `classes` and `vars`, and the `nftables` document as
 `/etc/talos-extensions/firewall.yaml`, beside the template. Neither key is written when it is
-empty, and `firewall.yaml` is not written when both are.
+empty, so `firewall.yaml` holds `{}` when both are.
 
 The text in the files is the one in force, and a newer reference does not replace it. `template`
 prints the `template` document that gives every node of `talos` a daemon's reference template,
@@ -522,10 +523,7 @@ It prints the document alone, without a leading `---`:
 ```
 
 A template whose `base` is not the hash of its daemon's current reference is warned about, with
-the diff from its text to that reference; the warning stops nothing. Files with no `firewall`
-template at all are refused by `generate` in every mode, naming the command above; one aimed at some
-nodes only counts, and a node it leaves out gets no ruleset. A node no `router` template reaches is
-refused, naming the command too, since `router` does not run without one.
+the diff from its text to that reference; the warning stops nothing.
 
 ### Mesh MTU
 
@@ -688,7 +686,7 @@ release assets of its repository or with `cargo install` from a checkout of it:
 | was | is |
 | --- | --- |
 | `generate` creating missing keys and obfuscation, and writing unset network defaults | `slipmesh mint` |
-| `generate` writing the reference templates into a file that sets none | `generate` refuses the file and names `slipmesh-taloscfg template router` or `template firewall`, whose output is added by hand |
+| `generate` writing the reference templates into a file that sets none | `generate` writes the reference into the patch of a node no `template` document reaches, and the file stays as it is |
 | `rw-add`, `rw-del`, `rw-inspect` | none: a file of format version 2 holds no pools |
 
 Install it with `cargo install --path taloscfg`.
