@@ -23,7 +23,11 @@ const GENERATED: [(&str, &[&str]); 3] = [
     ),
     (
         Service::Firewall.name(),
-        &[Service::Firewall.mount_path(), LEGACY_NFTABLES_PATH],
+        &[
+            Service::Firewall.mount_path(),
+            nftables::template::CONFIG_PATH,
+            LEGACY_NFTABLES_PATH,
+        ],
     ),
 ];
 
@@ -325,6 +329,7 @@ nodes:
             ("router", router::bird_conf::TEMPLATE_PATH),
             ("nftables", nftables::template::TEMPLATE_PATH),
             ("nftables", LEGACY_NFTABLES_PATH),
+            ("nftables", nftables::template::CONFIG_PATH),
         ] {
             cases.push((
                 generated_with(

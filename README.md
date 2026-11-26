@@ -368,10 +368,12 @@ two things to it:
 1. **Rendering** (`template.rs`, a minijinja template like `router`'s) with the values that can't
    be known when the ruleset is written - currently `defaultroute_interface_ipv4`/
    `defaultroute_interface_ipv6`, resolved via `common::netlink::rt::RtClient::
-   default_iface_v4`/`default_iface_v6`. A template reading any other variable is refused before
-   anything is applied. Only the variables the template actually reads get resolved (and retried,
-   bounded, if no default route exists yet) - a v4-only node applying a ruleset that never
-   mentions `defaultroute_interface_ipv6` doesn't need one to exist.
+   default_iface_v4`/`default_iface_v6` - and with `classes` and `vars` from
+   `/etc/talos-extensions/firewall.yaml`, given as `router` gives them. Without that file both
+   are empty; a file there that does not read stops the daemon. A template reading any other
+   variable is refused before anything is applied. Only the variables the template actually
+   reads get resolved (and retried, bounded, if no default route exists yet) - a v4-only node
+   applying a ruleset that never mentions `defaultroute_interface_ipv6` doesn't need one to exist.
 2. **Own-table identification by scanning, not hardcoding** (`nftables.rs`): before applying, it
    finds every `table <family> <name>` the rendered ruleset declares and issues `nft delete
    table <family> <name>` for each (errors ignored - the table not existing yet is normal on the
@@ -469,8 +471,9 @@ files to `nftables` on a node no `firewall` template reaches is refused, since t
 The `router` document carries the node's router template as `/etc/talos-extensions/router.conf.j2`,
 and the `nftables` document, written after it, the `firewall` template as
 `/etc/talos-extensions/nftables.conf.j2`. The template a node gets, the last by rank of its daemon's,
-is checked as that daemon will check it, and a `router` one is rendered with the node's config, so
-one that would fail on a node fails `generate` instead. A template overridden on every node it
+is checked as that daemon will check it and rendered, a `router` one with the node's config and a
+`firewall` one with each interface name standing in as its variable's name, so one that would fail
+on a node fails `generate` instead. A template overridden on every node it
 reaches is not checked. The `nftables` document also gets the ruleset as
 `/etc/talos-extensions/nftables.yaml`, the file the daemon read before it took a template: a node
 that falls back to its previous boot slot runs that daemon against this config, and would
