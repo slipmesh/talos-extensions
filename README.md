@@ -378,8 +378,8 @@ two things to it:
 
 1. **Rendering** (`template.rs`, a minijinja template like `router`'s) with the values that can't
    be known when the ruleset is written - currently `defaultroute_interface_ipv4`/
-   `defaultroute_interface_ipv6`, resolved via `common::netlink::rt::RtClient::
-   default_iface_v4`/`default_iface_v6` - and with `classes` and `vars` from
+   `defaultroute_interface_ipv6`, the interface of that family's default route in the main table,
+   resolved via `common::netlink::rt::RtClient::default_iface` - and with `classes` and `vars` from
    `/etc/talos-extensions/firewall.yaml`, given as `router` gives them. Without that file both
    are empty; a file there that does not read stops the daemon. A template reading any other
    variable is refused before anything is applied. Only the variables the template actually
@@ -697,6 +697,7 @@ Install it with `cargo install --path taloscfg`.
 
 ```sh
 cargo test
+unshare -rn cargo test -- --ignored   # the tests that need a network namespace of their own
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 # the build taloscfg uses: features unify across the workspace, so only these packages alone show it
@@ -710,7 +711,8 @@ No mocking framework - pure logic (`config::validate`, `interface::diff_peers`,
 `rt::to_remove`, the bypass set arithmetic in `resolver.rs`, `taloscfg`'s patch files)
 is unit-tested directly; a node's configs are rendered by `sliplib-mesh` and CIDR parsing and
 exclusion come from `sliplib-net`, each tested there;
-netlink I/O is a thin, not-unit-tested shim around it (see `common/src/netlink/`).
+netlink I/O is a thin shim around it (see `common/src/netlink/`), tested against the kernel only
+where the choice is ours, such as which table the default route is taken from.
 
 Exercising a daemon end to end needs a Linux host with `CAP_NET_ADMIN`, and for `awg` the
 `amneziawg` kernel module loaded. Each daemon reads its config from the fixed path its
@@ -741,7 +743,8 @@ how it read `0.1.0` at tag `v0.1.6`. The Release PR workflow (Actions, then Rele
 commit as a PR with `CHANGELOG.md` regenerated, and merging it tags the release. Release lines,
 versions and the steps are in [docs/RELEASING.md](docs/RELEASING.md).
 
-Pull requests and pushes run fmt, clippy, the tests, `cargo audit`, which also runs weekly, and the
+Pull requests and pushes run fmt, clippy, the tests, the ignored ones under `sudo unshare -n`,
+`cargo audit`, which also runs weekly, and the
 `licenses` check, which holds every dependency to the licenses and sources [`deny.toml`](deny.toml)
 allows and renders the third-party notices from [`about.toml`](about.toml); only
 the push of a merged release PR builds, once every check of that push passes. A pull request also

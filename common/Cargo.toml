@@ -41,3 +41,7 @@ netlink = [
     "dep:netlink-packet-generic",
     "dep:rtnetlink",
 ]
+
+[[test]]
+name = "netns"
+required-features = ["netlink"]
