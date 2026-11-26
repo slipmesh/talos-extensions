@@ -697,7 +697,9 @@ Install it with `cargo install --path taloscfg`.
 
 ```sh
 cargo test
-unshare -rn cargo test -- --ignored   # the tests that need a network namespace of their own
+# the tests that need a network namespace each; a user namespace cannot load `dummy`
+sudo modprobe dummy
+cargo test --tests --config "target.'cfg(target_os = \"linux\")'.runner = 'unshare -r'" -- --ignored
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 # the build taloscfg uses: features unify across the workspace, so only these packages alone show it
@@ -743,10 +745,10 @@ how it read `0.1.0` at tag `v0.1.6`. The Release PR workflow (Actions, then Rele
 commit as a PR with `CHANGELOG.md` regenerated, and merging it tags the release. Release lines,
 versions and the steps are in [docs/RELEASING.md](docs/RELEASING.md).
 
-Pull requests and pushes run fmt, clippy, the tests, the ignored ones under `sudo unshare -n`,
-`cargo audit`, which also runs weekly, and the
-`licenses` check, which holds every dependency to the licenses and sources [`deny.toml`](deny.toml)
-allows and renders the third-party notices from [`about.toml`](about.toml); only
+Pull requests and pushes run fmt, clippy, the tests, the ignored ones as root, `cargo audit`,
+which also runs weekly, and the `licenses` check, which holds every dependency to the licenses and
+sources [`deny.toml`](deny.toml) allows and renders the third-party notices from
+[`about.toml`](about.toml); only
 the push of a merged release PR builds, once every check of that push passes. A pull request also
 builds the image from empty placeholders and pushes nothing, so a Dockerfile the release build would
 fail on fails there. An advisory with no

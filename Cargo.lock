@@ -316,6 +316,7 @@ dependencies = [
  "netlink-packet-amneziawg",
  "netlink-packet-core",
  "netlink-packet-generic",
+ "nix 0.32.0",
  "rtnetlink",
  "serde",
  "sliplib-config",

@@ -333,7 +333,7 @@ impl RtClient {
     /// family has none, a common case on a single-stack node. A dual-stack node's two default
     /// routes need not share an interface.
     pub async fn default_iface(&self, family: Family) -> Result<Option<String>> {
-        use rtnetlink::packet_route::route::RouteAttribute;
+        use rtnetlink::packet_route::route::{RouteAttribute, RouteHeader};
 
         let _guard = self.netlink_lock.lock().await;
         let query = match family {
@@ -343,7 +343,9 @@ impl RtClient {
         let mut default_oif = None;
         let mut stream = self.handle.route().get(query).execute();
         while let Some(route) = stream.try_next().await.context("failed to list routes")? {
-            if route.header.destination_prefix_length != 0 || !in_main_table(&route) {
+            if route.header.destination_prefix_length != 0
+                || route.header.table != RouteHeader::RT_TABLE_MAIN
+            {
                 continue;
             }
             if let Some(oif) = route.attributes.iter().find_map(|a| match a {
@@ -390,16 +392,6 @@ fn address_message(index: u32, cidr: IpNet) -> AddressMessage {
     }
 }
 
-/// A dump lists the routes of every table, and the header carries only the low byte of the table.
-fn in_main_table(route: &RouteMessage) -> bool {
-    use rtnetlink::packet_route::route::{RouteAttribute, RouteHeader};
-    let table = route.attributes.iter().find_map(|a| match a {
-        RouteAttribute::Table(table) => Some(*table),
-        _ => None,
-    });
-    table.unwrap_or(route.header.table.into()) == u32::from(RouteHeader::RT_TABLE_MAIN)
-}
-
 /// Extracts `(destination, prefix_len)` from a route message, either address family.
 fn destination_of(route: &RouteMessage) -> Option<(IpAddr, u8)> {
     use rtnetlink::packet_route::route::RouteAttribute;
@@ -432,21 +424,6 @@ mod tests {
         );
         removed.sort();
         assert_eq!(removed, vec![also_stale, stale]);
-    }
-
-    #[test]
-    fn a_route_without_the_table_attribute_is_in_the_table_its_header_names() {
-        let main = RouteMessageBuilder::<Ipv4Addr>::new().build();
-        assert!(
-            !main
-                .attributes
-                .iter()
-                .any(|a| matches!(a, rtnetlink::packet_route::route::RouteAttribute::Table(_)))
-        );
-        assert!(in_main_table(&main));
-        let mut other = main.clone();
-        other.header.table = 152;
-        assert!(!in_main_table(&other));
     }
 
     #[test]

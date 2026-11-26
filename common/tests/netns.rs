@@ -1,18 +1,16 @@
-//! Against the kernel, in a network namespace of the test's own: `unshare -rn cargo test -p common
-//! --test netns -- --ignored`.
+//! Against the kernel, each test in a network namespace of its own. Run as the README's Development
+//! section says.
+
+#[path = "support/netns.rs"]
+mod support;
 
 use common::netlink::rt::{Family, RtClient};
-use std::process::Command;
-
-fn ip(args: &str) -> String {
-    let output = Command::new("ip").args(args.split(' ')).output().unwrap();
-    assert!(output.status.success(), "ip {args}: {output:?}");
-    String::from_utf8(output.stdout).unwrap()
-}
+use support::{ip, own_network_namespace};
 
 #[tokio::test]
 #[ignore = "needs its own network namespace"]
 async fn the_default_route_is_the_main_tables_even_when_another_table_lists_one_first() {
+    own_network_namespace();
     for link in ["main0", "other0"] {
         ip(&format!("link add {link} type dummy"));
         ip(&format!("link set {link} up"));
