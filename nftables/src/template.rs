@@ -65,18 +65,81 @@ mod tests {
     use super::*;
     use std::collections::BTreeSet;
 
+    fn reference(values: &str) -> String {
+        let template = compile(REFERENCE_TEMPLATE).unwrap();
+        let interfaces = HashMap::from([(DEFAULT_ROUTE_IPV4, "eth0".to_owned())]);
+        render(
+            &template,
+            &interfaces,
+            &sliplib_yaml::from_str(values).unwrap(),
+        )
+        .unwrap()
+    }
+
+    const WITHOUT_THE_MARK: &str = "destroy table ip talos_mark
+destroy table inet talos_mark
+table inet talos_filter {
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
+    }
+}
+table ip talos_nat {
+    set nat_private {
+        type ipv4_addr
+        flags interval
+        elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname \"eth0\" ip saddr @nat_private counter masquerade
+    }
+}
+";
+
     #[test]
-    fn the_reference_ruleset_fills_in_the_ipv4_default_route_interface() {
+    fn the_reference_ruleset_reads_the_ipv4_default_route_interface_and_the_classes() {
         let template = compile(REFERENCE_TEMPLATE).unwrap();
         assert_eq!(
             template.variables(),
-            BTreeSet::from([DEFAULT_ROUTE_IPV4.to_string()])
+            BTreeSet::from([DEFAULT_ROUTE_IPV4.to_string(), VALUES[0].to_string()])
         );
-        let interfaces = HashMap::from([(DEFAULT_ROUTE_IPV4, "eth0".to_owned())]);
+        assert_eq!(reference("{}"), WITHOUT_THE_MARK);
+    }
+
+    #[test]
+    fn the_reference_ruleset_marks_uplink_replies_with_the_rules_mark_on_both_families() {
+        let ruleset = reference(
+            "classes: {egress: {protocol: 152, table: 152, rules: {uplink-replies: \
+             {priority: 1000, mark: 0x100000/0x300000, lookup: main}}}}",
+        );
         assert_eq!(
-            render(&template, &interfaces, &Values::default()).unwrap(),
-            REFERENCE_TEMPLATE.replace("{{ defaultroute_interface_ipv4 }}", "eth0")
+            ruleset,
+            format!(
+                "{WITHOUT_THE_MARK}table inet talos_mark {{
+    chain prerouting {{
+        type filter hook prerouting priority mangle; policy accept;
+        iifname \"eth0\" ct state new ct mark set ct mark & 0xffcfffff | 0x100000
+        ct direction reply ct mark & 0x300000 == 0x100000 meta mark set meta mark & 0xffcfffff | 0x100000
+    }}
+    chain output {{
+        type route hook output priority mangle; policy accept;
+        ct direction reply ct mark & 0x300000 == 0x100000 meta mark set meta mark & 0xffcfffff | 0x100000
+    }}
+}}
+"
+            )
         );
+    }
+
+    #[test]
+    fn without_the_uplink_replies_mark_the_reference_ruleset_marks_nothing() {
+        for values in [
+            "classes: {egress: {protocol: 152, table: 152, rules: {egress: {priority: 1001}}}}",
+            "classes: {egress: {protocol: 152, rules: {uplink-replies: {priority: 1000}}}}",
+        ] {
+            assert_eq!(reference(values), WITHOUT_THE_MARK, "{values}");
+        }
     }
 
     #[test]
