@@ -3,7 +3,7 @@
 //! node's template the same way the node will and refuses one that does not render.
 
 use anyhow::Result;
-use common::template::{Template, Values, ValuesContext};
+use common::template::{Template, VALUES, Values, ValuesContext};
 use serde::Serialize;
 use sliplib_config::Prefix4;
 use sliplib_config::router::{BgpPeerEntry, InterfacePattern, ROUTER_LOOPBACK, RouterConfig};
@@ -165,7 +165,7 @@ pub const TEMPLATE_PATH: &str = "/etc/talos-extensions/router.conf.j2";
 pub const REFERENCE_TEMPLATE: &str = include_str!("../templates/router.conf.j2");
 
 /// Every variable `render` supplies - the fields of `BirdConfigContext`.
-pub const VARIABLES: &[&str] = &[
+pub const VARIABLES: [&str; 14] = [
     "loopback",
     "ipv6_loopback",
     "as_number",
@@ -178,13 +178,13 @@ pub const VARIABLES: &[&str] = &[
     "direct_interfaces",
     "bfd",
     "awg_route_protocol",
-    "classes",
-    "vars",
+    VALUES[0],
+    VALUES[1],
 ];
 
 /// Compiles a `bird.conf` template, refusing one that reads anything outside `VARIABLES`.
 pub fn compile(source: impl Into<String>) -> Result<Template> {
-    Template::new(source, VARIABLES)
+    Template::new(source, &VARIABLES)
 }
 
 pub fn render(

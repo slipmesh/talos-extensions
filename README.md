@@ -279,7 +279,7 @@ declares it all:
   part stays "live", unlike everything else in this workspace, since resolving ASN/geoip/DNS
   sources is the whole point of the feature;
 - `classes` and `vars` (optional) - the route classes of `slipmesh.yaml`, in its shape, and this
-  node's `vars`, given to the template as they are and read by nothing else.
+  node's `vars`, given to the template in the shape below and read by nothing else.
 
 See the doc comments of `sliplib_config::router::RouterConfig` for the full schema, with
 `metrics` from `common/src/daemon.rs`, `classes` and `vars` from `common/src/template.rs`, and the
@@ -310,11 +310,13 @@ where BIRD syntax puts it:
 | `bfd` | `{min_rx_ms, min_tx_ms, multiplier}`, or none |
 | `awg_route_protocol` | the protocol number `awg` tags its routes with |
 | `classes` | the route classes by name: `protocol`; `table`, or none; `rules` by name, each `{priority, mark, lookup}`, `mark` as `{value, mask}` in `0x` form, or none, and `lookup` `main`, or none for the class's table. Empty without `classes` |
-| `vars` | `vars` as written, empty without it |
+| `vars` | `vars` as YAML reads it, empty without it |
 
 A template reads a class, a rule or a value that a node may lack behind `is defined`, the outer
 name first: `{% if classes.egress is defined and classes.egress.table %}`. Read without it, a
-missing one fails the rendering.
+missing one fails the rendering. A value that is none, such as a class's `table` or a rule's
+`lookup` left out, is no error: it prints `None`, and a template tests it with `is none` or by its
+truth. A mapping iterates by name, not in the order written.
 
 A template that reads any other variable is refused when it is compiled - in any branch, not only
 the ones a given node takes - and `router` exits without one rather than fall back on anything.

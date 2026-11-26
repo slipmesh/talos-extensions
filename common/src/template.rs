@@ -226,7 +226,7 @@ mark {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.lookup }} {{ rule.priori
 {% endif %}";
 
     fn render_guarded(values: &Values) -> String {
-        Template::new(GUARDED, &["classes", "vars"])
+        Template::new(GUARDED, &VALUES)
             .unwrap()
             .render(values.context())
             .unwrap()
@@ -271,7 +271,7 @@ mark {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.lookup }} {{ rule.priori
             "{% set rule = classes.egress.rules.egress %}{{ classes.egress.table is none }} \
              {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.lookup is none }} \
              {{ classes.egress.protocol }}",
-            &["classes"],
+            &VALUES,
         )
         .unwrap();
         assert_eq!(
