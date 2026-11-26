@@ -385,7 +385,10 @@ two things to it:
 
 No rule content is baked into this binary at all - MSS clamping, NAT, or anything else is just
 whatever the template says; [`nftables/templates/nftables.conf.j2`](nftables/templates/nftables.conf.j2)
-is the reference one, with those two. See talos-installer's
+is the reference one, with those two. Where the `egress` route class has a rule `uplink-replies`
+with a mark, it also gives the replies to a connection that came in on the IPv4 default-route
+interface that mark, for both families, so that rule sends them back out through it; and it
+removes the `ip talos_mark` table that held this mark before. See talos-installer's
 [docs/nftables.md](https://github.com/slipmesh/talos-installer/blob/main/docs/nftables.md) for the
 packaging side: why `nft` is a statically linked binary built from source rather than the
 dynamically linked package siderolabs/pkgs already ships.
