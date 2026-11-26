@@ -3,5 +3,6 @@
 //! ruleset template the way this daemon will instead of duplicating that. `main.rs` is a thin
 //! binary entry point over this same module tree, not a separate copy.
 
+pub mod follow;
 pub mod ruleset;
 pub mod template;

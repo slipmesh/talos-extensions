@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Talos extension service: loads an nftables ruleset supplied via ExtensionServiceConfig as a template with placeholders for values only knowable on the running node (the default-route interface names) and with the route classes and vars of its config, and reapplies it when its tables go missing"
+description = "Talos extension service: loads an nftables ruleset supplied via ExtensionServiceConfig as a template with placeholders for values only knowable on the running node (the default-route interfaces and their addresses) and with the route classes and vars of its config, and reapplies it when the uplinks change or its tables go missing"
 
 [[bin]]
 name = "nftables"
@@ -14,17 +14,24 @@ path = "src/main.rs"
 # The daemon is netlink-backed; a config-only build of this crate builds the library alone.
 required-features = ["runtime"]
 
+[[test]]
+name = "netns"
+required-features = ["runtime"]
+
 [dependencies]
 anyhow.workspace = true
 common.workspace = true
+futures.workspace = true
 serde.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "io-util", "fs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "io-util", "fs", "sync"] }
 tracing.workspace = true
 sliplib-runtime.workspace = true
 
 [dev-dependencies]
+nix = { workspace = true, features = ["sched"] }
 sliplib-yaml.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 default = ["runtime"]

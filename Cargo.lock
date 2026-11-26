@@ -1129,6 +1129,8 @@ version = "1.15.0-beta.0+sm.6"
 dependencies = [
  "anyhow",
  "common",
+ "futures",
+ "nix 0.32.0",
  "serde",
  "sliplib-runtime",
  "sliplib-yaml",

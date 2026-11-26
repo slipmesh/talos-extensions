@@ -1,8 +1,9 @@
 //! One host's patch file: the `patch` documents aimed at it, then the `ExtensionServiceConfig`
 //! documents the generator makes - `awg` and `router`, each carrying that daemon's config once the
 //! daemon's own `validate()` accepts it, the `router` one with the node's router template, then
-//! `nftables` with its ruleset - and in each any files the `patch` documents add to it. After
-//! those documents, a `RoutingRuleConfig` for each rule of a route class.
+//! `nftables` with its firewall template and `firewall.yaml` - and in each any files the `patch`
+//! documents add to it. After those documents, a `RoutingRuleConfig` for each rule of a route
+//! class.
 
 use crate::defaults::Service;
 use crate::documents::{Listener, TalosSettings, Template};
@@ -81,15 +82,37 @@ fn validate_router_template(template: &str, cfg: &RouterConfig, values: &Values)
     Ok(())
 }
 
-/// Refuses a firewall template that would fail on the node. The interfaces stand in as their own
-/// names; the text is not kept.
+/// Refuses a firewall template that would fail on the node, rendered with each uplink in each of
+/// its states: none, as at boot; present; present with no address yet, as while IPv6 duplicate
+/// address detection runs. The interfaces stand in as their own names; the text is not kept.
 fn validate_firewall_template(template: &str, values: &Values) -> Result<()> {
-    use nftables::template::{DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6};
+    use nftables::template::{DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6, Uplink, Uplinks};
     let template = nftables::template::compile(template.to_owned())?;
     let interfaces = [DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6]
         .map(|name| (name, name.to_owned()))
         .into();
-    nftables::template::render(&template, &interfaces, values)?;
+    let states = |interface: &str, address: &str| {
+        let uplink = |addresses: Vec<std::net::IpAddr>| {
+            Some(Uplink {
+                interface: interface.to_owned(),
+                addresses,
+            })
+        };
+        [
+            None,
+            uplink(vec![address.parse().expect("a stand-in address")]),
+            uplink(Vec::new()),
+        ]
+    };
+    for ipv4 in states(DEFAULT_ROUTE_IPV4, "192.0.2.1") {
+        for ipv6 in states(DEFAULT_ROUTE_IPV6, "2001:db8::1") {
+            let uplinks = Uplinks {
+                ipv4: ipv4.clone(),
+                ipv6,
+            };
+            nftables::template::render(&template, &interfaces, &uplinks, values)?;
+        }
+    }
     Ok(())
 }
 
@@ -808,6 +831,33 @@ content: "table inet x {{}}"
              {% if vars.source is defined %}{{ vars.source }}{% endif %}\n",
         );
         render_raw(&guarded, "b").unwrap();
+    }
+
+    #[test]
+    fn a_firewall_template_is_checked_with_each_uplink_absent_present_and_without_addresses() {
+        let firewall = |content: &str| {
+            with_firewall_body_for_b(&format!(
+                "daemon: firewall\nbase: {BASE}\ncontent: {content:?}\n"
+            ))
+        };
+        for fails in [
+            "oifname \"{{ uplink.ipv4.interface }}\"\n",
+            "{% if uplink.ipv6 %}{{ vars.source }}{% endif %}\n",
+            "{% if uplink.ipv4 %}{{ uplink.ipv4.addresses[0] }}{% endif %}\n",
+            "{% if uplink.ipv4 or uplink.ipv6 %}{{ uplink.ipv4.interface }}{% endif %}\n",
+        ] {
+            let err = format!("{:#}", render_raw(&firewall(fails), "b").unwrap_err());
+            assert!(err.contains("firewall template"), "{fails}: {err}");
+        }
+        render_raw(
+            &firewall(
+                "{% for family in ['ipv4', 'ipv6'] %}{% set u = uplink[family] %}\
+                 {% if u %}oifname \"{{ u.interface }}\" {{ u.addresses | join(', ') }}\n{% endif %}\
+                 {% endfor %}",
+            ),
+            "b",
+        )
+        .unwrap();
     }
 
     #[test]
