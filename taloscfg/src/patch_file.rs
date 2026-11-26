@@ -7,7 +7,7 @@
 
 use crate::defaults::Service;
 use crate::documents::{Listener, TalosSettings, Template};
-use crate::patches::{self, HostDocument, LEGACY_NFTABLES_PATH};
+use crate::patches::{self, HostDocument};
 use crate::talos::{self, ConfigFile, ExtensionServiceConfig, ServiceFile};
 use anyhow::{Context, Result, bail};
 use common::daemon::{
@@ -51,23 +51,8 @@ fn added_files(added: Option<&HostDocument>) -> Vec<ServiceFile> {
         .collect()
 }
 
-/// `ruleset` as `nftables.yaml`, the file the daemon read before it took a template. A node that
-/// falls back to its previous boot slot runs that daemon against this config, and without the file
-/// it would apply no ruleset at all. Remove once no node can fall back to a release older than the
-/// template.
-fn legacy_nftables_file(ruleset: String) -> Result<ConfigFile> {
-    #[derive(serde::Serialize)]
-    struct LegacyConfig {
-        ruleset: String,
-    }
-    Ok(ConfigFile {
-        mount_path: LEGACY_NFTABLES_PATH.to_string(),
-        content: sliplib_yaml::to_string(&LegacyConfig { ruleset })?,
-    })
-}
-
-/// The files of the `nftables` document: the template, its config where `values` has any, the
-/// files `added`, and the ruleset as [`legacy_nftables_file`] gives it.
+/// The files of the `nftables` document: the template, its config where `values` has any, and the
+/// files `added`.
 fn nftables_config_files(
     template: &str,
     values: &Values,
@@ -88,9 +73,6 @@ fn nftables_config_files(
     Ok(std::iter::once(ServiceFile::Generated(template_file))
         .chain(config.map(ServiceFile::Generated))
         .chain(added)
-        .chain([ServiceFile::Generated(legacy_nftables_file(
-            template.to_owned(),
-        )?)])
         .collect())
 }
 
@@ -821,29 +803,21 @@ content: "table inet x {{}}"
     }
 
     #[test]
-    fn a_ruleset_also_goes_out_as_the_file_the_previous_daemon_reads() {
+    fn a_ruleset_goes_out_as_its_template_and_its_config_alone() {
         let a = rendered("a");
         let document = generated_document(&a, "nftables").unwrap();
-        let files: Vec<(&str, &str)> = document["configFiles"]
+        let paths: Vec<&str> = document["configFiles"]
             .as_sequence()
             .unwrap()
             .iter()
-            .map(|f| {
-                (
-                    f["mountPath"].as_str().unwrap(),
-                    f["content"].as_str().unwrap(),
-                )
-            })
+            .map(|f| f["mountPath"].as_str().unwrap())
             .collect();
         assert_eq!(
-            files.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
+            paths,
             [
                 nftables::template::TEMPLATE_PATH,
-                nftables::template::CONFIG_PATH,
-                LEGACY_NFTABLES_PATH
+                nftables::template::CONFIG_PATH
             ]
         );
-        let legacy: sliplib_yaml::Value = sliplib_yaml::from_str(files[2].1).unwrap();
-        assert_eq!(legacy["ruleset"].as_str(), Some(files[0].1));
     }
 }

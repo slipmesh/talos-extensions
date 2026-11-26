@@ -8,9 +8,6 @@ use common::daemon::{AWG_CONFIG_PATH, ROUTER_CONFIG_PATH};
 use sliplib_config::v2::{AimedDocument, ClassName, File, Name};
 use sliplib_yaml::Value;
 
-/// Where the `nftables` daemon read its ruleset before it took a template.
-pub(crate) const LEGACY_NFTABLES_PATH: &str = "/etc/talos-extensions/nftables.yaml";
-
 /// The `ExtensionServiceConfig`s the generator makes, by name, with the files it writes there, its
 /// own config first where it has one. Talos keeps `name` unique per `kind`, so a `patch` document
 /// of one of these names is that same document: it may add files to it, and nothing else - not a
@@ -26,7 +23,6 @@ const GENERATED: [(&str, &[&str]); 3] = [
         &[
             Service::Firewall.mount_path(),
             nftables::template::CONFIG_PATH,
-            LEGACY_NFTABLES_PATH,
         ],
     ),
 ];
@@ -328,7 +324,6 @@ nodes:
             ("router", ROUTER_CONFIG_PATH),
             ("router", router::bird_conf::TEMPLATE_PATH),
             ("nftables", nftables::template::TEMPLATE_PATH),
-            ("nftables", LEGACY_NFTABLES_PATH),
             ("nftables", nftables::template::CONFIG_PATH),
         ] {
             cases.push((
