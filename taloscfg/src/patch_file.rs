@@ -2,7 +2,8 @@
 //! documents the generator makes - `awg` and `router`, each carrying that daemon's config once the
 //! daemon's own `validate()` accepts it, the `router` one with the node's router template, then
 //! `nftables` with its ruleset where a `firewall` template reaches the node - and in each any
-//! files the `patch` documents add to it.
+//! files the `patch` documents add to it, then a `RoutingRuleConfig` for each rule of a route
+//! class.
 
 use crate::defaults::Service;
 use crate::documents::{Listener, TalosSettings, Template};
@@ -252,9 +253,16 @@ fn render_node(
         .map(|patch| sliplib_yaml::to_string(patch).context("serializing a patch document"))
         .collect::<Result<Vec<String>>>()?;
 
+    let rules = talos::rules(network.network())
+        .map(|(_, class, _, rule)| {
+            sliplib_yaml::to_string(&talos::RoutingRuleConfig::new(class, rule))
+                .context("serializing a RoutingRuleConfig document")
+        })
+        .collect::<Result<Vec<String>>>()?;
+
     Ok(format!(
         "{HEADER}{}",
-        sliplib_yaml::join(&[patches, generated].concat())
+        sliplib_yaml::join(&[patches, generated, rules].concat())
     ))
 }
 
@@ -288,7 +296,13 @@ mod tests {
 addressing: {{loopback: {{ipv4: 198.51.100.0/25, ipv6: "3fff::/64"}}}}
 routing:
   bgp: {{as: 64512}}
-  classes: {{egress: {{protocol: 152}}}}
+  classes:
+    egress:
+      protocol: 152
+      table: 152
+      rules:
+        uplink-replies: {{priority: 1000, mark: 0x100000/0x100000, lookup: main}}
+        egress: {{priority: 1001}}
 mesh:
   interface_prefix: mesh-
   links:
@@ -630,6 +644,44 @@ content: "table inet x {{}}"
         let raw = with_router_files(&[("", "{{ bfd.min_rx_ms }}\n")]);
         let err = render_raw(&raw, "a").unwrap_err();
         assert!(format!("{err:#}").contains("router"), "{err:#}");
+    }
+
+    #[test]
+    fn every_host_gets_the_rules_of_the_route_classes_after_the_generated_documents() {
+        let rules = "apiVersion: v1alpha1\nkind: RoutingRuleConfig\nname: '1000'\nfwMark: \
+                     1048576\nfwMask: 1048576\ntable: main\n---\napiVersion: v1alpha1\nkind: \
+                     RoutingRuleConfig\nname: '1001'\ntable: '152'\n";
+        for host in ["a", "b"] {
+            let file = rendered(host);
+            assert!(file.ends_with(&format!("\n---\n{rules}")), "{file}");
+        }
+    }
+
+    /// The `RoutingRuleConfig` documents of `a` with `rules` as the rules of a class without a
+    /// table.
+    fn rule_documents(rules: &str) -> Vec<sliplib_yaml::Value> {
+        let classes = "    egress:\n      protocol: 152\n      table: 152\n";
+        let raw = with_router_files(&[("", TEMPLATE)]);
+        let at = raw.find(classes).unwrap();
+        let end = raw[at..].find("mesh:\n").unwrap() + at;
+        let raw = format!(
+            "{}    egress:\n      protocol: 152\n      rules: {rules}\n{}",
+            &raw[..at],
+            &raw[end..]
+        );
+        documents(&render_raw(&raw, "a").unwrap())
+            .into_iter()
+            .filter(|document| document["kind"] == "RoutingRuleConfig")
+            .collect()
+    }
+
+    #[test]
+    fn a_rule_without_a_mask_compares_every_bit_and_one_without_a_table_looks_up_main() {
+        let documents = rule_documents("{marked: {priority: 900, mark: \"0x10\"}}");
+        assert_eq!(documents.len(), 1, "{documents:?}");
+        assert_eq!(documents[0]["fwMark"], 16);
+        assert_eq!(documents[0]["fwMask"], 4_294_967_295_u64);
+        assert_eq!(documents[0]["table"], "main");
     }
 
     #[test]

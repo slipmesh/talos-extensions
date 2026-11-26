@@ -3,12 +3,15 @@
 use anyhow::Context;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
+use sliplib_config::v2::network::{Class, Lookup, Network, Rule};
+use sliplib_config::v2::{ClassName, Name};
 use sliplib_yaml::{Mapping, Value};
 use std::collections::BTreeMap;
 
 const API_VERSION: &str = "v1alpha1";
 pub const EXTENSION_SERVICE_CONFIG: &str = "ExtensionServiceConfig";
 pub const KUBE_NODE_CONFIG: &str = "KubeNodeConfig";
+pub const ROUTING_RULE_CONFIG: &str = "RoutingRuleConfig";
 
 /// What Talos keys a document by: two documents of one identity are one document. Every other key
 /// passes unread.
@@ -79,6 +82,59 @@ impl ExtensionServiceConfig {
             kind: EXTENSION_SERVICE_CONFIG.into(),
             name: name.into(),
             config_files,
+        }
+    }
+}
+
+/// A routing rule, named by its priority as Talos takes one.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutingRuleConfig {
+    api_version: &'static str,
+    kind: &'static str,
+    name: String,
+    #[serde(flatten)]
+    mark: Option<FwMark>,
+    table: String,
+}
+
+/// Both, always: Talos compares a missing mask as 0, where the kernel reports every bit.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct FwMark {
+    fw_mark: u32,
+    fw_mask: u32,
+}
+
+/// Every rule of the route classes of `network`, in the order written, with its class.
+pub fn rules(network: &Network) -> impl Iterator<Item = (&ClassName, &Class, &Name, &Rule)> {
+    network
+        .routing
+        .classes
+        .iter()
+        .flat_map(|(class_name, class)| {
+            class
+                .rules
+                .iter()
+                .map(move |(name, rule)| (class_name, class, name, rule))
+        })
+}
+
+impl RoutingRuleConfig {
+    pub fn new(class: &Class, rule: &Rule) -> Self {
+        let table = match rule.lookup {
+            Some(Lookup::Main) => None,
+            None => class.table,
+        };
+        Self {
+            api_version: API_VERSION,
+            kind: ROUTING_RULE_CONFIG,
+            name: rule.priority.to_string(),
+            mark: rule.mark.map(|mark| FwMark {
+                fw_mark: mark.value.get(),
+                fw_mask: mark.mask.get(),
+            }),
+            table: table.map_or_else(|| "main".to_owned(), |table| table.to_string()),
         }
     }
 }

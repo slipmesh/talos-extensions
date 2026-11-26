@@ -5,7 +5,7 @@ use crate::defaults::Service;
 use crate::talos::{self, AddedToGenerated, Annotations, Identity};
 use anyhow::{Context, Result, bail};
 use common::daemon::{AWG_CONFIG_PATH, ROUTER_CONFIG_PATH};
-use sliplib_config::v2::{AimedDocument, File};
+use sliplib_config::v2::{AimedDocument, ClassName, File, Name};
 use sliplib_yaml::Value;
 
 /// Where the `nftables` daemon read its ruleset before it took a template.
@@ -38,13 +38,20 @@ pub(crate) struct HostDocument {
 }
 
 /// Refuses a `patch` document Talos could not key, one that sets more on a generated document than
-/// files beside the generated ones, and one that sets a generated annotation: each document on its
-/// own, since merging them deletes a key set to `null`.
+/// files beside the generated ones, one that sets a generated annotation, and a routing rule of a
+/// generated priority: each document on its own, since merging them deletes a key set to `null`.
 pub fn check(files: &File) -> Result<()> {
-    files.patches().iter().try_for_each(check_one)
+    let rules: Vec<(String, &ClassName, &Name)> = talos::rules(files.network())
+        .map(|(class, _, name, rule)| (rule.priority.to_string(), class, name))
+        .collect();
+    files
+        .patches()
+        .iter()
+        .try_for_each(|patch| check_one(patch, &rules))
 }
 
-fn check_one(patch: &AimedDocument) -> Result<()> {
+/// `rules`: each generated rule's priority, as its document's name, with its class and its name.
+fn check_one(patch: &AimedDocument, rules: &[(String, &ClassName, &Name)]) -> Result<()> {
     let place = patch.aim();
     let identity: Identity = patch.read()?;
     let Some(kind) = &identity.kind else {
@@ -59,6 +66,17 @@ fn check_one(patch: &AimedDocument) -> Result<()> {
             "{place}: sets the annotation {set}, and those under {} are generated - take it out \
              of the document",
             crate::annotations::NAMESPACE
+        );
+    }
+    if let Some(name) = &identity.name
+        && kind == talos::ROUTING_RULE_CONFIG
+        && let Some((_, class, rule)) = rules.iter().find(|(priority, ..)| priority == name)
+    {
+        bail!(
+            "{place}: {kind} {name:?} is generated from the rule {:?} of the route class {:?} - \
+             take one of the two out",
+            rule.as_str(),
+            class.as_str()
         );
     }
     if let Some(name) = &identity.name
@@ -378,6 +396,37 @@ nodes:
                 && err.contains(&format!("at line {}", start + 6)),
             "{err}"
         );
+    }
+
+    fn routing_rule(kind: &str, name: &str) -> String {
+        patch(
+            "",
+            &format!("apiVersion: v1alpha1\nkind: {kind}\nname: '{name}'\n"),
+        )
+    }
+
+    #[test]
+    fn a_patch_of_a_routing_rule_the_generator_writes_is_refused() {
+        let network = NETWORK.replace(
+            "routing: {bgp: {as: 64512}}",
+            "routing:\n  bgp: {as: 64512}\n  classes:\n    egress: {protocol: 152, rules: \
+             {uplink-replies: {priority: 1000}}}",
+        );
+        let copy = routing_rule("RoutingRuleConfig", "1000");
+        let err = error(&[&network, &copy]);
+        let line = line_of(&[&network, &copy], 1);
+        assert!(
+            err.contains(&format!("the `kind: patch` document at line {line}"))
+                && err.contains("\"uplink-replies\"")
+                && err.contains("\"egress\""),
+            "{err}"
+        );
+        for other in [
+            routing_rule("RoutingRuleConfig", "1001"),
+            routing_rule("HostnameConfig", "1000"),
+        ] {
+            check(&parse(&[&network, &other])).unwrap();
+        }
     }
 
     #[test]
