@@ -111,7 +111,7 @@ impl Values {
         Ok(sliplib_yaml::read(path)?)
     }
 
-    /// As a template sees them: a mark as its value and its mask, both written out.
+    /// As a template sees them: a mark as its value, its mask and the bits it keeps, written out.
     pub fn context(&self) -> ValuesContext<'_> {
         ValuesContext {
             classes: self
@@ -173,6 +173,8 @@ impl RuleContext {
 struct MarkContext {
     value: String,
     mask: String,
+    /// The bits outside the mask, which setting the mark leaves as they are.
+    keep: String,
 }
 
 impl MarkContext {
@@ -180,6 +182,7 @@ impl MarkContext {
         Self {
             value: format!("{:#x}", mark.value),
             mask: format!("{:#x}", mark.mask),
+            keep: format!("{:#x}", !mark.mask.get()),
         }
     }
 }
@@ -224,7 +227,7 @@ mod tests {
 {% endif %}\
 {% if classes.egress is defined and classes.egress.rules['uplink-replies'] is defined %}\
 {% set rule = classes.egress.rules['uplink-replies'] %}\
-mark {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.lookup }} {{ rule.priority }}
+mark {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.mark.keep }} {{ rule.lookup }} {{ rule.priority }}
 {% endif %}\
 {% if vars.source is defined %}source {{ vars.source }}
 {% endif %}";
@@ -247,7 +250,7 @@ mark {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.lookup }} {{ rule.priori
         .unwrap();
         assert_eq!(
             render_guarded(&values),
-            "table 152\nmark 0x100000/0x100000 main 1000\nsource 203.0.113.0/26\n"
+            "table 152\nmark 0x100000/0x100000 0xffefffff main 1000\nsource 203.0.113.0/26\n"
         );
     }
 
@@ -282,14 +285,14 @@ mark {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.lookup }} {{ rule.priori
         .unwrap();
         let template = Template::new(
             "{% set rule = classes.egress.rules.egress %}{{ classes.egress.table is none }} \
-             {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.lookup is none }} \
-             {{ classes.egress.protocol }}",
+             {{ rule.mark.value }}/{{ rule.mark.mask }} {{ rule.mark.keep }} \
+             {{ rule.lookup is none }} {{ classes.egress.protocol }}",
             &VALUES,
         )
         .unwrap();
         assert_eq!(
             template.render(values.context()).unwrap(),
-            "True 0xff/0xffffffff True 152"
+            "True 0xff/0xffffffff 0x0 True 152"
         );
     }
 

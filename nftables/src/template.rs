@@ -76,15 +76,23 @@ mod tests {
         .unwrap()
     }
 
-    const UPLINK_REPLIES: &str = "table inet talos_mark {
-    chain prerouting {
-        type filter hook prerouting priority mangle; policy accept;
-        iifname \"eth0\" ct state new ct mark set ct mark | 0x100000
-        ct direction reply ct mark & 0x100000 == 0x100000 meta mark set meta mark | 0x100000
+    const WITHOUT_THE_MARK: &str = "destroy table ip talos_mark
+destroy table inet talos_mark
+table inet talos_filter {
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        tcp flags syn / syn,rst counter tcp option maxseg size set rt mtu
     }
-    chain output {
-        type route hook output priority mangle; policy accept;
-        ct direction reply ct mark & 0x100000 == 0x100000 meta mark set meta mark | 0x100000
+}
+table ip talos_nat {
+    set nat_private {
+        type ipv4_addr
+        flags interval
+        elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }
+    }
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        oifname \"eth0\" ip saddr @nat_private counter masquerade
     }
 }
 ";
@@ -96,46 +104,41 @@ mod tests {
             template.variables(),
             BTreeSet::from([DEFAULT_ROUTE_IPV4.to_string(), VALUES[0].to_string()])
         );
-        let ruleset = reference("{}");
-        assert!(
-            ruleset.contains("oifname \"eth0\" ip saddr @nat_private counter masquerade"),
-            "{ruleset}"
-        );
+        assert_eq!(reference("{}"), WITHOUT_THE_MARK);
     }
 
     #[test]
     fn the_reference_ruleset_marks_uplink_replies_with_the_rules_mark_on_both_families() {
         let ruleset = reference(
             "classes: {egress: {protocol: 152, table: 152, rules: {uplink-replies: \
-             {priority: 1000, mark: 0x100000/0x100000, lookup: main}}}}",
+             {priority: 1000, mark: 0x100000/0x300000, lookup: main}}}}",
         );
-        assert!(ruleset.contains(UPLINK_REPLIES), "{ruleset}");
+        assert_eq!(
+            ruleset,
+            format!(
+                "{WITHOUT_THE_MARK}table inet talos_mark {{
+    chain prerouting {{
+        type filter hook prerouting priority mangle; policy accept;
+        iifname \"eth0\" ct state new ct mark set ct mark & 0xffcfffff | 0x100000
+        ct direction reply ct mark & 0x300000 == 0x100000 meta mark set meta mark & 0xffcfffff | 0x100000
+    }}
+    chain output {{
+        type route hook output priority mangle; policy accept;
+        ct direction reply ct mark & 0x300000 == 0x100000 meta mark set meta mark & 0xffcfffff | 0x100000
+    }}
+}}
+"
+            )
+        );
     }
 
     #[test]
     fn without_the_uplink_replies_mark_the_reference_ruleset_marks_nothing() {
         for values in [
-            "{}",
             "classes: {egress: {protocol: 152, table: 152, rules: {egress: {priority: 1001}}}}",
             "classes: {egress: {protocol: 152, rules: {uplink-replies: {priority: 1000}}}}",
         ] {
-            let ruleset = reference(values);
-            assert!(!ruleset.contains("inet talos_mark"), "{values}: {ruleset}");
-        }
-    }
-
-    #[test]
-    fn the_reference_ruleset_removes_the_ip_table_the_mark_was_in_before() {
-        for values in [
-            "{}",
-            "classes: {egress: {protocol: 152, rules: {uplink-replies: \
-             {priority: 1000, mark: 0x100000/0x100000}}}}",
-        ] {
-            let ruleset = reference(values);
-            assert!(
-                ruleset.starts_with("destroy table ip talos_mark\n"),
-                "{values}: {ruleset}"
-            );
+            assert_eq!(reference(values), WITHOUT_THE_MARK, "{values}");
         }
     }
 

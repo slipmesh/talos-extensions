@@ -385,10 +385,22 @@ two things to it:
 
 No rule content is baked into this binary at all - MSS clamping, NAT, or anything else is just
 whatever the template says; [`nftables/templates/nftables.conf.j2`](nftables/templates/nftables.conf.j2)
-is the reference one, with those two. Where the `egress` route class has a rule `uplink-replies`
-with a mark, it also gives the replies to a connection that came in on the IPv4 default-route
-interface that mark, for both families, so that rule sends them back out through it; and it
-removes the `ip talos_mark` table that held this mark before. See talos-installer's
+is the reference one, with those two.
+
+Where the `egress` route class has a rule `uplink-replies` with a mark, the reference ruleset also
+gives that mark to the replies to a connection that came in on the IPv4 default-route interface,
+for both families. Only the bits of the mark's mask are set; the others stay as they are. The
+`RoutingRuleConfig` that `generate` makes of that rule then sends those replies out through `main`
+rather than the class's table. An IPv6 connection that comes in on another interface is not marked,
+and its replies take the class's table; a template that names that interface, through a `vars`
+value, covers it.
+
+The reference ruleset starts by removing the tables of the mark, `ip talos_mark` and
+`inet talos_mark`, so that a ruleset without the mark leaves neither behind. `destroy` needs Linux
+6.3 and nft 1.0.8: on an older kernel `nft -f` fails after the daemon has deleted its tables, and
+the node is left with none of them.
+
+See talos-installer's
 [docs/nftables.md](https://github.com/slipmesh/talos-installer/blob/main/docs/nftables.md) for the
 packaging side: why `nft` is a statically linked binary built from source rather than the
 dynamically linked package siderolabs/pkgs already ships.
