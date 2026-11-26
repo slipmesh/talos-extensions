@@ -324,7 +324,11 @@ The reference template, [`router/templates/router.conf.j2`](router/templates/rou
 OSPFv3 over the mesh links and iBGP over the loopbacks, and learns the routes `awg` installs for the
 roadwarrior clients it holds by their protocol number (`krt_source`), whatever `learn` says: a pool
 runs on several nodes under one address, and that route is how the others know which node a client
-is on.
+is on. iBGP carries IPv4 and IPv6; a peer that offers only IPv4 keeps its session.
+
+Where the `egress` route class has a `table`, the reference template exports the bypass routes to
+iBGP with the large community `(<as_number>, <table>, 0)`. A node puts the iBGP routes that carry
+it into that kernel table, for both families, and not into `main`.
 
 ---
 

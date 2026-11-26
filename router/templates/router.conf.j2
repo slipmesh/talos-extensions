@@ -3,6 +3,12 @@
 timeformat protocol iso long;
 log stderr { info, remote, warning, error, auth, fatal, bug };
 router id {{ loopback }};
+{%- set egress_table = classes.egress.table if classes.egress is defined else none %}
+{%- set egress_community = "(" ~ as_number ~ ", " ~ egress_table ~ ", 0)" %}
+{%- if egress_table is not none %}
+ipv4 table egress4;
+ipv6 table egress6;
+{%- endif %}
 protocol device {
 }
 protocol direct direct1 {
@@ -29,6 +35,9 @@ protocol kernel {
         };
         export filter {
             if source = RTS_BGP then {
+{%- if egress_table is not none %}
+                if {{ egress_community }} ~ bgp_large_community then reject;
+{%- endif %}
                 krt_prefsrc = {{ loopback }};
                 accept;
             }
@@ -53,6 +62,28 @@ protocol kernel {
         };
     };
 }
+{%- if egress_table is not none %}
+{#- BIRD takes one kernel protocol per table, so the egress routes reach their kernel table
+     through BIRD tables of their own. #}
+{%- for family in [4, 6] %}
+protocol pipe {
+    table master{{ family }};
+    peer table egress{{ family }};
+    import none;
+    export filter {
+        if source = RTS_BGP && {{ egress_community }} ~ bgp_large_community then accept;
+        reject;
+    };
+}
+protocol kernel {
+    kernel table {{ egress_table }};
+    ipv{{ family }} {
+        table egress{{ family }};
+        export all;
+    };
+}
+{%- endfor %}
+{%- endif %}
 {%- if bfd %}
 {#- BIRD's defaults (min tx 100 ms, multiplier 5) declare a session dead after ~500 ms, which
      these links cannot honour: every mesh interface is an obfuscated WireGuard tunnel, several of
@@ -110,10 +141,21 @@ protocol bgp ibgp6_{{ peer.protocol_id }} {
         import all;
         export filter {
             if source = RTS_DEVICE then accept;
+{%- if egress_table is not none %}
+            if proto = "BYPASS" then {
+                bgp_large_community.add({{ egress_community }});
+                accept;
+            }
+{%- endif %}
             if source = RTS_STATIC then accept;
             if source = RTS_INHERIT then accept;
             reject;
         };
+        next hop self;
+    };
+    ipv6 {
+        import all;
+        export none;
         next hop self;
     };
 }

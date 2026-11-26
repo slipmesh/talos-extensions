@@ -404,6 +404,80 @@ learn: [203.0.113.128/26]
         assert!(out.contains("protocol direct direct_eth0_100 {"));
     }
 
+    /// The reference template rendered for a node with one iBGP peer and the bypass route
+    /// `192.0.2.0/24`, under `values`.
+    fn reference_with(values: &str) -> String {
+        let cfg: RouterConfig = sliplib_yaml::from_str(
+            "node:\n  loopback_addresses: [\"198.51.100.1/32\", \"3fff::1/128\"]\n\
+             bgp_as: 64512\nbgp_peers:\n  - {name: node-b, address: \"3fff::2\"}\n",
+        )
+        .unwrap();
+        let bypass = [BypassRoute {
+            net: "192.0.2.0/24".to_string(),
+            label: "example".to_string(),
+        }];
+        render_config(
+            &compile(REFERENCE_TEMPLATE).unwrap(),
+            &cfg,
+            &sliplib_yaml::from_str(values).unwrap(),
+            &bypass,
+        )
+        .unwrap()
+    }
+
+    const EGRESS: &str = "classes: {egress: {protocol: 152, table: 152, rules: {}}}";
+
+    /// What the reference template adds for an `egress` class that sends to a table.
+    const EGRESS_PARTS: [&str; 8] = [
+        "ipv4 table egress4;\nipv6 table egress6;\n",
+        "protocol pipe {\n    table master4;\n    peer table egress4;\n    import none;\n    \
+         export filter {\n        if source = RTS_BGP && (64512, 152, 0) ~ bgp_large_community then \
+         accept;\n        reject;\n    };\n}\n",
+        "protocol pipe {\n    table master6;\n    peer table egress6;\n    import none;\n    \
+         export filter {\n        if source = RTS_BGP && (64512, 152, 0) ~ bgp_large_community then \
+         accept;\n        reject;\n    };\n}\n",
+        "protocol kernel {\n    kernel table 152;\n    ipv4 {\n        table egress4;\n        \
+         export all;\n    };\n}\n",
+        "protocol kernel {\n    kernel table 152;\n    ipv6 {\n        table egress6;\n        \
+         export all;\n    };\n}\n",
+        "            if source = RTS_BGP then {\n                \
+         if (64512, 152, 0) ~ bgp_large_community then reject;\n",
+        "            if proto = \"BYPASS\" then {\n                \
+         bgp_large_community.add((64512, 152, 0));\n                accept;\n            }\n",
+        // Before the general static line, so a bypass route is not exported without it.
+        "accept;\n            }\n            if source = RTS_STATIC then accept;",
+    ];
+
+    #[test]
+    fn an_egress_class_with_a_table_routes_its_community_into_that_table_for_both_families() {
+        let out = reference_with(EGRESS);
+        for part in EGRESS_PARTS {
+            assert!(out.contains(part), "{part}\n---\n{out}");
+        }
+    }
+
+    #[test]
+    fn without_an_egress_class_that_has_a_table_nothing_of_it_is_rendered() {
+        for values in ["{}", "classes: {egress: {protocol: 152, rules: {}}}"] {
+            let out = reference_with(values);
+            for absent in ["egress4", "egress6", "bgp_large_community", "kernel table"] {
+                assert!(!out.contains(absent), "{values}: {absent}\n---\n{out}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_ibgp_session_carries_ipv6_beside_ipv4() {
+        let out = reference_with("{}");
+        assert!(
+            out.contains(
+                "        next hop self;\n    };\n    ipv6 {\n        import all;\n        \
+                 export none;\n        next hop self;\n    };\n}"
+            ),
+            "{out}"
+        );
+    }
+
     /// `VARIABLES` is what a template is checked against, the context is what it gets - a field
     /// added to one and not the other would refuse a template that renders, or pass one that
     /// does not.
