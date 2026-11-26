@@ -368,8 +368,10 @@ two things to it:
 1. **Rendering** (`template.rs`, a minijinja template like `router`'s) with the values that can't
    be known when the ruleset is written - currently `defaultroute_interface_ipv4`/
    `defaultroute_interface_ipv6`, resolved via `common::netlink::rt::RtClient::
-   default_iface_v4`/`default_iface_v6`. A template reading any other variable is refused before
-   anything is applied. Only the variables the template actually reads get resolved (and retried,
+   default_iface_v4`/`default_iface_v6` - and with `classes` and `vars` from
+   `/etc/talos-extensions/firewall.yaml`, given as `router` gives them. Without that file both
+   are empty; a file there that does not read stops the daemon. A template reading any other
+   variable is refused before anything is applied. Only the variables the template actually reads get resolved (and retried,
    bounded, if no default route exists yet) - a v4-only node applying a ruleset that never
    mentions `defaultroute_interface_ipv6` doesn't need one to exist.
 2. **Own-table identification by scanning, not hardcoding** (`nftables.rs`): before applying, it

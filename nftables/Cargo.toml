@@ -22,6 +22,10 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "pr
 tracing.workspace = true
 sliplib-runtime.workspace = true
 
+[dev-dependencies]
+sliplib-yaml.workspace = true
+tempfile.workspace = true
+
 [features]
 default = ["runtime"]
 # The netlink-backed modules and the binary over them; `config` builds without any of it.

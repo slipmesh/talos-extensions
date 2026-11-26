@@ -1,10 +1,13 @@
 use nftables::ruleset;
-use nftables::template::{self, DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6, TEMPLATE_PATH};
+use nftables::template::{
+    self, CONFIG_PATH, DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6, TEMPLATE_PATH,
+};
 
 use anyhow::{Context, Result};
 use common::netlink::rt::{Family, RtClient};
 use std::collections::HashMap;
 use std::future::Future;
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -35,6 +38,7 @@ async fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
+    let values = template::read_values(Path::new(CONFIG_PATH))?;
     let template = common::template::load(TEMPLATE_PATH, template::compile).await?;
 
     let referenced = template.variables();
@@ -45,17 +49,17 @@ async fn run() -> Result<()> {
     // Only resolve (and retry on) whichever values this particular ruleset reads - a node with no
     // IPv6 default route shouldn't fail to apply a ruleset that never mentions
     // `defaultroute_interface_ipv6`, and vice versa.
-    let mut values: HashMap<&str, String> = HashMap::new();
+    let mut interfaces: HashMap<&str, String> = HashMap::new();
     if referenced.contains(DEFAULT_ROUTE_IPV4) {
         let iface = default_iface("IPv4", || rt.default_iface(Family::Ipv4)).await?;
-        values.insert(DEFAULT_ROUTE_IPV4, iface);
+        interfaces.insert(DEFAULT_ROUTE_IPV4, iface);
     }
     if referenced.contains(DEFAULT_ROUTE_IPV6) {
         let iface = default_iface("IPv6", || rt.default_iface(Family::Ipv6)).await?;
-        values.insert(DEFAULT_ROUTE_IPV6, iface);
+        interfaces.insert(DEFAULT_ROUTE_IPV6, iface);
     }
 
-    let rendered = template.render(&values)?;
+    let rendered = template::render(&template, &interfaces, &values)?;
     ruleset::apply(&rendered).await?;
 
     watchdog(rendered).await
