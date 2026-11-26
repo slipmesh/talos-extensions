@@ -82,25 +82,35 @@ fn validate_router_template(template: &str, cfg: &RouterConfig, values: &Values)
     Ok(())
 }
 
-/// Refuses a firewall template that would fail on the node: with no uplink, as at boot, or with
-/// both. The interfaces stand in as their own names; the text is not kept.
+/// Refuses a firewall template that would fail on the node: with no uplink, as at boot, with both,
+/// and with both before they have an address, as while IPv6 duplicate address detection runs. The
+/// interfaces stand in as their own names; the text is not kept.
 fn validate_firewall_template(template: &str, values: &Values) -> Result<()> {
     use nftables::template::{DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6, Uplink, Uplinks};
     let template = nftables::template::compile(template.to_owned())?;
     let interfaces = [DEFAULT_ROUTE_IPV4, DEFAULT_ROUTE_IPV6]
         .map(|name| (name, name.to_owned()))
         .into();
-    let stand_in = |interface: &str, address: &str| {
-        Some(Uplink {
-            interface: interface.to_owned(),
-            addresses: vec![address.parse().expect("a stand-in address")],
-        })
+    let stand_ins = |ipv4: &[&str], ipv6: &[&str]| {
+        let uplink = |interface: &str, addresses: &[&str]| {
+            Some(Uplink {
+                interface: interface.to_owned(),
+                addresses: addresses
+                    .iter()
+                    .map(|a| a.parse().expect("a stand-in address"))
+                    .collect(),
+            })
+        };
+        Uplinks {
+            ipv4: uplink(DEFAULT_ROUTE_IPV4, ipv4),
+            ipv6: uplink(DEFAULT_ROUTE_IPV6, ipv6),
+        }
     };
-    let both = Uplinks {
-        ipv4: stand_in(DEFAULT_ROUTE_IPV4, "192.0.2.1"),
-        ipv6: stand_in(DEFAULT_ROUTE_IPV6, "2001:db8::1"),
-    };
-    for uplinks in [Uplinks::default(), both] {
+    for uplinks in [
+        Uplinks::default(),
+        stand_ins(&["192.0.2.1"], &["2001:db8::1"]),
+        stand_ins(&[], &[]),
+    ] {
         nftables::template::render(&template, &interfaces, &uplinks, values)?;
     }
     Ok(())
@@ -824,7 +834,7 @@ content: "table inet x {{}}"
     }
 
     #[test]
-    fn a_firewall_template_is_checked_with_no_uplink_and_with_both() {
+    fn a_firewall_template_is_checked_with_no_uplink_with_both_and_with_no_addresses_on_them() {
         let firewall = |content: &str| {
             with_firewall_body_for_b(&format!(
                 "daemon: firewall\nbase: {BASE}\ncontent: {content:?}\n"
@@ -833,6 +843,7 @@ content: "table inet x {{}}"
         for fails in [
             "oifname \"{{ uplink.ipv4.interface }}\"\n",
             "{% if uplink.ipv6 %}{{ vars.source }}{% endif %}\n",
+            "{% if uplink.ipv4 %}{{ uplink.ipv4.addresses[0] }}{% endif %}\n",
         ] {
             let err = format!("{:#}", render_raw(&firewall(fails), "b").unwrap_err());
             assert!(err.contains("firewall template"), "{fails}: {err}");
@@ -840,7 +851,7 @@ content: "table inet x {{}}"
         render_raw(
             &firewall(
                 "{% for family in ['ipv4', 'ipv6'] %}{% set u = uplink[family] %}\
-                 {% if u %}oifname \"{{ u.interface }}\" {{ u.addresses[0] }}\n{% endif %}\
+                 {% if u %}oifname \"{{ u.interface }}\" {{ u.addresses | join(', ') }}\n{% endif %}\
                  {% endfor %}",
             ),
             "b",

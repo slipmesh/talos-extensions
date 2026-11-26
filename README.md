@@ -401,8 +401,9 @@ two things to it:
    route and address events: one second after the first of a burst it looks the uplinks up again,
    and where they differ it renders and applies the ruleset again. A render or an apply that fails
    then stops the daemon, with the ruleset in place, and Talos restarts it. `generate` renders a
-   firewall template with both families `none`, as at boot, and with both set, so a template that
-   fails in either state is refused there.
+   firewall template with both families `none`, as at boot, with both set, and with both set but no
+   addresses, as while IPv6 duplicate address detection runs, so a template that fails in any of
+   these states is refused there.
 2. **Own-table identification by scanning, not hardcoding** (`nftables.rs`): before applying, it
    finds every `table <family> <name>` the rendered ruleset declares and issues `nft delete
    table <family> <name>` for each (errors ignored - the table not existing yet is normal on the
