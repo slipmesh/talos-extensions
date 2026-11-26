@@ -5,7 +5,8 @@
 //! loopbacks) and an iBGP full mesh over those loopbacks using `multihop` + RFC 8950 (`extended
 //! next hop on`) to carry the IPv4 payload prefixes - BYPASS/ANNOUNCE statics, kernel routes
 //! inside `learn`, and the road-warrior routes `ext-awg` installs, learned by their protocol
-//! number - with an IPv6 next-hop. Still out of scope: eBGP peers. What it renders from is
+//! number - with an IPv6 next-hop, and IPv6 prefixes in an `ipv6` channel beside it. Still out of
+//! scope: eBGP peers. What it renders from is
 //! `router.yaml`, `sliplib_config::router`'s shape.
 
 use anyhow::Result;

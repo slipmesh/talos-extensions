@@ -79,7 +79,10 @@ protocol kernel {
     kernel table {{ egress_table }};
     ipv{{ family }} {
         table egress{{ family }};
-        export all;
+        export filter {
+            krt_prefsrc = {{ loopback if family == 4 else ipv6_loopback }};
+            accept;
+        };
     };
 }
 {%- endfor %}

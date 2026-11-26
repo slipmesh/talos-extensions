@@ -425,7 +425,7 @@ learn: [203.0.113.128/26]
         .unwrap()
     }
 
-    const EGRESS: &str = "classes: {egress: {protocol: 152, table: 152, rules: {}}}";
+    const EGRESS: &str = "classes: {egress: {protocol: 150, table: 152, rules: {}}}";
 
     /// What the reference template adds for an `egress` class that sends to a table.
     const EGRESS_PARTS: [&str; 8] = [
@@ -437,9 +437,11 @@ learn: [203.0.113.128/26]
          export filter {\n        if source = RTS_BGP && (64512, 152, 0) ~ bgp_large_community then \
          accept;\n        reject;\n    };\n}\n",
         "protocol kernel {\n    kernel table 152;\n    ipv4 {\n        table egress4;\n        \
-         export all;\n    };\n}\n",
+         export filter {\n            krt_prefsrc = 198.51.100.1;\n            accept;\n        \
+         };\n    };\n}\n",
         "protocol kernel {\n    kernel table 152;\n    ipv6 {\n        table egress6;\n        \
-         export all;\n    };\n}\n",
+         export filter {\n            krt_prefsrc = 3fff::1;\n            accept;\n        \
+         };\n    };\n}\n",
         "            if source = RTS_BGP then {\n                \
          if (64512, 152, 0) ~ bgp_large_community then reject;\n",
         "            if proto = \"BYPASS\" then {\n                \
