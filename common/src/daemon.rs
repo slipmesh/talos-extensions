@@ -112,7 +112,7 @@ mod tests {
     use super::*;
 
     const ROUTER: &str =
-        "node:\n  loopback_addresses: [\"198.51.100.1/32\", \"3fff::1/128\"]\nbgp_as: 64512\n";
+        "node:\n  loopback_addresses: [\"198.51.100.1/32\", \"3fff::1/128\"]\nbgp_as: 64496\n";
 
     fn metrics(listen: &str) -> Option<MetricsConfig> {
         Some(MetricsConfig {
@@ -193,7 +193,7 @@ mod tests {
             ),
             "{unnamed}"
         );
-        let as_zero = router(&ROUTER.replace("bgp_as: 64512", "bgp_as: 0"));
+        let as_zero = router(&ROUTER.replace("bgp_as: 64496", "bgp_as: 0"));
         assert!(
             matches!(
                 as_zero.downcast_ref(),

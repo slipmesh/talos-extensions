@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn the_classes_and_vars_of_router_yaml_reach_the_template() {
         let text = "node:\n  loopback_addresses: [\"198.51.100.1/32\", \"3fff::1/128\"]\n\
-                    bgp_as: 64512\nclasses: {egress: {protocol: 152, table: 152}}\n\
+                    bgp_as: 64496\nclasses: {egress: {protocol: 152, table: 152}}\n\
                     vars: {source: 203.0.113.0/26}\n";
         let cfg: RouterConfig = sliplib_yaml::from_str(text).unwrap();
         let values: Values = sliplib_yaml::from_str(text).unwrap();
@@ -361,7 +361,7 @@ mod tests {
             r#"
 node:
   loopback_addresses: ["198.51.100.1/32", "3fff::1/128"]
-bgp_as: 64512
+bgp_as: 64496
 bgp_peers:
   - {name: node-b, address: "3fff::2"}
 bfd: {min_rx_ms: 300, min_tx_ms: 300, multiplier: 5}
@@ -385,9 +385,9 @@ learn: [203.0.113.128/26]
         )
         .unwrap();
         assert!(out.contains("router id 198.51.100.1;"));
-        assert!(out.contains("local 3fff::1 as 64512;"));
+        assert!(out.contains("local 3fff::1 as 64496;"));
         assert!(out.contains("protocol bgp ibgp6_node_b {"));
-        assert!(out.contains("neighbor 3fff::2 as 64512;"));
+        assert!(out.contains("neighbor 3fff::2 as 64496;"));
         assert!(out.contains("route 203.0.113.192/26 via \"router-lo\";"));
         assert!(out.contains("if net ~ [ 203.0.113.128/26+ ] then accept;"));
         assert!(out.contains("route 192.0.2.0/24 blackhole; # example"));
@@ -408,7 +408,7 @@ learn: [203.0.113.128/26]
     fn reference_with(values: &str) -> String {
         let cfg: RouterConfig = sliplib_yaml::from_str(
             "node:\n  loopback_addresses: [\"198.51.100.1/32\", \"3fff::1/128\"]\n\
-             bgp_as: 64512\nbgp_peers:\n  - {name: node-b, address: \"3fff::2\"}\n",
+             bgp_as: 64496\nbgp_peers:\n  - {name: node-b, address: \"3fff::2\"}\n",
         )
         .unwrap();
         let bypass = [BypassRoute {
@@ -430,10 +430,10 @@ learn: [203.0.113.128/26]
     const EGRESS_PARTS: [&str; 8] = [
         "ipv4 table egress4;\nipv6 table egress6;\n",
         "protocol pipe {\n    table master4;\n    peer table egress4;\n    import none;\n    \
-         export filter {\n        if source = RTS_BGP && (64512, 152, 0) ~ bgp_large_community then \
+         export filter {\n        if source = RTS_BGP && (64496, 152, 0) ~ bgp_large_community then \
          accept;\n        reject;\n    };\n}\n",
         "protocol pipe {\n    table master6;\n    peer table egress6;\n    import none;\n    \
-         export filter {\n        if source = RTS_BGP && (64512, 152, 0) ~ bgp_large_community then \
+         export filter {\n        if source = RTS_BGP && (64496, 152, 0) ~ bgp_large_community then \
          accept;\n        reject;\n    };\n}\n",
         "protocol kernel {\n    kernel table 152;\n    ipv4 {\n        table egress4;\n        \
          export filter {\n            krt_prefsrc = 198.51.100.1;\n            accept;\n        \
@@ -442,9 +442,9 @@ learn: [203.0.113.128/26]
          export filter {\n            krt_prefsrc = 3fff::1;\n            accept;\n        \
          };\n    };\n}\n",
         "            if source = RTS_BGP then {\n                \
-         if (64512, 152, 0) ~ bgp_large_community then reject;\n",
+         if (64496, 152, 0) ~ bgp_large_community then reject;\n",
         "            if proto = \"BYPASS\" then {\n                \
-         bgp_large_community.add((64512, 152, 0));\n                accept;\n            }\n",
+         bgp_large_community.add((64496, 152, 0));\n                accept;\n            }\n",
         // Before the general static accept.
         "accept;\n            }\n            if source = RTS_STATIC then accept;",
     ];
@@ -497,7 +497,7 @@ learn: [203.0.113.128/26]
         inputs.bfd = Some(&bfd);
         let values = Values::default();
         let context =
-            serde_json::to_value(BirdConfigContext::new(identity(), 64512, &inputs, &values))
+            serde_json::to_value(BirdConfigContext::new(identity(), 64496, &inputs, &values))
                 .unwrap();
         let mut fields: Vec<&str> = context
             .as_object()
@@ -572,7 +572,7 @@ learn: [203.0.113.128/26]
         };
         let mut with = inputs(&ifaces, &[], &[], &[], &[]);
         with.bfd = Some(&settings);
-        let on = render(identity(), 64512, &with).unwrap();
+        let on = render(identity(), 64496, &with).unwrap();
 
         assert!(on.contains("protocol bfd"));
         // The chosen interval reaches the file, rather than a constant baked into the template.
@@ -594,7 +594,7 @@ learn: [203.0.113.128/26]
         assert!(bfd_block.contains("interface \"mesh-*\""));
         assert!(!bfd_block.contains("router-lo"));
 
-        let off = render(identity(), 64512, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
+        let off = render(identity(), 64496, &inputs(&ifaces, &[], &[], &[], &[])).unwrap();
         assert!(!off.contains("bfd"));
     }
 
@@ -610,7 +610,7 @@ learn: [203.0.113.128/26]
         }];
         let out = render(
             identity(),
-            64512,
+            64496,
             &inputs(&[], &[], &bypass, &announce, &[]),
         )
         .unwrap();
@@ -642,7 +642,7 @@ learn: [203.0.113.128/26]
         let direct_interfaces = patterns(&["cni0", "my-bridge"]);
         let out = render(
             identity(),
-            64512,
+            64496,
             &inputs_with_direct(&[], &[], &[], &[], &[], &direct_interfaces),
         )
         .unwrap();
@@ -657,7 +657,7 @@ learn: [203.0.113.128/26]
             name: "peer1".to_string(),
             address: "3fff::2".parse().unwrap(),
         }];
-        let conf = render(identity(), 64512, &inputs(&[], &peers, &[], &[], &[])).unwrap();
+        let conf = render(identity(), 64496, &inputs(&[], &peers, &[], &[], &[])).unwrap();
         // A bare `learn` takes only routes other daemons installed - awg's are exactly that.
         assert!(conf.contains("    learn;\n"), "{conf}");
         assert!(conf.contains("if krt_source = 200 then accept;"), "{conf}");
@@ -676,7 +676,7 @@ learn: [203.0.113.128/26]
             address: "3fff::2".parse().unwrap(),
         }];
         let learn = vec![Prefix4::try_from("203.0.113.128/26".to_owned()).unwrap()];
-        let conf = render(identity(), 64512, &inputs(&[], &peers, &[], &[], &learn)).unwrap();
+        let conf = render(identity(), 64496, &inputs(&[], &peers, &[], &[], &learn)).unwrap();
         // `all`, not a bare `learn` - see `RenderInputs`'s doc comment: without it BIRD skips
         // KRT_SRC_KERNEL routes, which is the only kind a node's own podCIDR route ever is.
         assert!(conf.contains("    learn all;\n"));
