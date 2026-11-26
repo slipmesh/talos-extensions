@@ -66,9 +66,8 @@ fn legacy_nftables_file(ruleset: String) -> Result<ConfigFile> {
     })
 }
 
-/// The files of the `nftables` document of a node whose ruleset template is `template`: the
-/// template, its config where `values` has any, the files `added` beside them, and the ruleset as
-/// [`legacy_nftables_file`] gives it.
+/// The files of the `nftables` document: the template, its config where `values` has any, the
+/// files `added`, and the ruleset as [`legacy_nftables_file`] gives it.
 fn nftables_config_files(
     template: &str,
     values: &Values,
@@ -78,14 +77,14 @@ fn nftables_config_files(
         mount_path: Service::Firewall.mount_path().to_owned(),
         content: template.to_owned(),
     };
-    let config = (!values.is_empty())
-        .then(|| {
-            Ok::<_, anyhow::Error>(ConfigFile {
-                mount_path: nftables::template::CONFIG_PATH.to_owned(),
-                content: sliplib_yaml::to_string(values)?,
-            })
+    let config = if values.is_empty() {
+        None
+    } else {
+        Some(ConfigFile {
+            mount_path: nftables::template::CONFIG_PATH.to_owned(),
+            content: sliplib_yaml::to_string(values)?,
         })
-        .transpose()?;
+    };
     Ok(std::iter::once(ServiceFile::Generated(template_file))
         .chain(config.map(ServiceFile::Generated))
         .chain(added)
@@ -573,6 +572,19 @@ content: "table inet x {{}}"
         assert!(render_raw(&raw, "b").is_ok());
         let refused = format!("{:#}", render_raw(&raw, "a").unwrap_err());
         assert!(refused.contains("router template"), "{refused}");
+    }
+
+    #[test]
+    fn a_firewall_template_reading_a_value_a_node_lacks_is_refused_for_that_node() {
+        let raw = format!(
+            "{}---\nslipmesh: {{kind: vars, include: [b]}}\nsource: 203.0.113.64/26\n\
+             ---\nslipmesh: {{kind: template, platform: talos}}\ndaemon: firewall\nbase: {BASE}\n\
+             content: \"oifname \\\"{{{{ defaultroute_interface_ipv4 }}}}\\\" {{{{ vars.source }}}}\\n\"\n",
+            with_router_files(&[("", TEMPLATE)])
+        );
+        assert!(render_raw(&raw, "b").is_ok());
+        let refused = format!("{:#}", render_raw(&raw, "a").unwrap_err());
+        assert!(refused.contains("firewall template"), "{refused}");
     }
 
     fn router_files(patch: &str) -> Vec<(String, String)> {

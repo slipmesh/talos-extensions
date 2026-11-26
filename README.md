@@ -588,9 +588,9 @@ none writes `slipmesh.yaml`. With `--node`, only the secrets that node's config 
 there: its own key, and for each of its links the peer's key and the link's obfuscation. `--check`
 and `--diff` write no patch file either.
 
-`--diff` prints no secret. The value of every `private_key`, `header_protection_key` and `password`
-line, at any depth, shows as `<redacted>` when it is the same on both sides and as
-`<redacted, old>` and `<redacted, new>` where it changed.
+`--diff` prints the value of every `private_key`, `header_protection_key` and `password` line, at
+any depth, as `<redacted>` when it is the same on both sides and as `<redacted, old>` and
+`<redacted, new>` where it changed. A `vars` value under any other key is printed as written.
 
 In every mode a run prints a line that starts with `warning:` on standard error for each way a
 link of the nodes it was asked for loses data packets it should deliver, one line each, and for
