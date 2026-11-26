@@ -497,10 +497,11 @@ and the `nftables` document, written after it, the `firewall` template as
 `/etc/talos-extensions/nftables.conf.j2`. A node gets the last by rank of the `template` documents
 of a daemon that reach it, or, where none does, that daemon's reference template of the
 `slipmesh-taloscfg` release that runs `generate`. A daemon on the node takes the file it is given
-and has no template of its own. A template from the files is checked as that daemon will check it
-and rendered with the node's values, a `router` one with the node's config and a `firewall` one with
-each interface name standing in as its variable's name, so one that would fail on a node fails
-`generate` instead. A template overridden on every node it reaches is not checked.
+and has no template of its own. The template a node gets, the reference included, is checked as that
+daemon will check it and rendered with the node's values, a `router` one with the node's config and
+a `firewall` one with each interface name standing in as its variable's name, so one that would fail
+on a node fails `generate` instead; an empty one is refused, since Talos takes no empty file. A
+template overridden on every node it reaches is not checked.
 
 The values are the route classes of the network and the `vars` that reach the node, laid by rank.
 `router.yaml` carries them as `classes` and `vars`, and the `nftables` document as

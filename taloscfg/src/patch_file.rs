@@ -1,8 +1,8 @@
 //! One host's patch file: the `patch` documents aimed at it, then the `ExtensionServiceConfig`
 //! documents the generator makes - `awg` and `router`, each carrying that daemon's config once the
 //! daemon's own `validate()` accepts it, the `router` one with the node's router template, then
-//! `nftables` with its ruleset - and in each any files the `patch` documents add to it. After those documents, a `RoutingRuleConfig` for each
-//! rule of a route class.
+//! `nftables` with its ruleset - and in each any files the `patch` documents add to it. After
+//! those documents, a `RoutingRuleConfig` for each rule of a route class.
 
 use crate::defaults::Service;
 use crate::documents::{Listener, TalosSettings, Template};
@@ -141,28 +141,34 @@ impl Templates {
         Ok(Self {
             router: checked(router_template, Service::Router, |content| {
                 validate_router_template(content, router, values)
-            })?
-            .unwrap_or_else(|| Service::Router.reference().to_owned()),
+            })?,
             firewall: checked(firewall_template, Service::Firewall, |content| {
                 validate_firewall_template(content, values)
-            })?
-            .unwrap_or_else(|| Service::Firewall.reference().to_owned()),
+            })?,
         })
     }
 }
 
-/// The content of `last`, the `service` template a node gets, once `check` accepts it.
+/// The `service` template a node gets, `last` or else the reference, once `check` accepts it.
 fn checked(
     last: Option<(&AimedDocument, String)>,
     service: Service,
     check: impl FnOnce(&str) -> Result<()>,
-) -> Result<Option<String>> {
-    last.map(|(document, content)| {
-        check(&content)
-            .with_context(|| format!("{}: the {service} template is invalid", document.aim()))?;
-        Ok(content)
-    })
-    .transpose()
+) -> Result<String> {
+    let (named, content) = match last {
+        Some((document, content)) => (
+            format!("{}: the {service} template", document.aim()),
+            content,
+        ),
+        None => (
+            format!("the reference {service} template"),
+            service.reference().to_owned(),
+        ),
+    };
+    // Talos refuses a config file without content.
+    anyhow::ensure!(!content.is_empty(), "{named} is empty");
+    check(&content).with_context(|| format!("{named} is invalid"))?;
+    Ok(content)
 }
 
 /// The patch file of `host`, a node of `talos`, as the text written to disk. A refusal names the
@@ -704,6 +710,54 @@ content: "table inet x {{}}"
             .map(|(at, _)| start + at)
             .collect();
         raw[..separators[n]].lines().count() + 2
+    }
+
+    #[test]
+    fn the_reference_a_node_gets_is_checked_like_a_document_and_named_as_the_reference() {
+        let err = checked(None, Service::Firewall, |content| {
+            assert_eq!(content, Service::Firewall.reference());
+            anyhow::bail!("refused")
+        })
+        .unwrap_err();
+        assert_eq!(
+            format!("{err:#}"),
+            "the reference firewall template is invalid: refused"
+        );
+    }
+
+    /// `SLIPMESH` with a router template for every host and one `firewall` template body for `b`.
+    fn with_firewall_body_for_b(body: &str) -> String {
+        format!(
+            "{}---\nslipmesh: {{kind: template, platform: talos, include: [b]}}\n{body}",
+            with_router_files(&[("", TEMPLATE)])
+        )
+    }
+
+    #[test]
+    fn an_empty_template_is_refused_naming_its_document() {
+        let raw =
+            with_firewall_body_for_b(&format!("daemon: firewall\nbase: {BASE}\ncontent: \"\"\n"));
+        let err = format!("{:#}", render_raw(&raw, "b").unwrap_err());
+        let place = format!(
+            "`kind: template` document at line {}",
+            appended_line(&raw, 1)
+        );
+        assert!(
+            err.contains(&place) && err.contains("firewall template is empty"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_template_body_with_an_unknown_key_is_refused_naming_its_document() {
+        let raw =
+            with_firewall_body_for_b(&format!("daemon: firewall\nbase: {BASE}\ncontnet: x\n"));
+        let err = format!("{:#}", render_raw(&raw, "b").unwrap_err());
+        let place = format!(
+            "`kind: template` document at line {}",
+            appended_line(&raw, 1)
+        );
+        assert!(err.contains(&place) && err.contains("contnet"), "{err}");
     }
 
     #[test]
