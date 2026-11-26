@@ -51,8 +51,8 @@ pub async fn lookup(rt: &common::netlink::rt::RtClient) -> Result<Uplinks> {
     })
 }
 
-/// `changes` read as they come and dropped, leaving only that one came: while [`settled`] waits, a
-/// burst left unread would stay queued, every message parsed.
+/// `changes` read as they come and dropped, leaving only that one came. A burst left unread while
+/// [`settled`] waits would stay queued.
 fn read_as_they_come(
     mut changes: impl Stream<Item = ()> + Send + Unpin + 'static,
 ) -> impl Stream<Item = ()> + Unpin {
@@ -72,7 +72,7 @@ fn read_as_they_come(
     )
 }
 
-/// Waits for a change, then for [`SETTLE`], and takes every change that came meanwhile.
+/// Waits for a change, then for [`SETTLE`], and takes the changes that came meanwhile.
 async fn settled(changes: &mut (impl Stream<Item = ()> + Unpin)) -> Result<()> {
     changes
         .next()
