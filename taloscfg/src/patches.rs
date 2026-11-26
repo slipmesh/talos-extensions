@@ -8,10 +8,9 @@ use common::daemon::{AWG_CONFIG_PATH, ROUTER_CONFIG_PATH};
 use sliplib_config::v2::{AimedDocument, ClassName, File, Name};
 use sliplib_yaml::Value;
 
-/// The `ExtensionServiceConfig`s the generator makes, by name, with the files it writes there, its
-/// own config first where it has one. Talos keeps `name` unique per `kind`, so a `patch` document
-/// of one of these names is that same document: it may add files to it, and nothing else - not a
-/// file the generator writes.
+/// The `ExtensionServiceConfig`s the generator makes, by name, with the files it writes there. Talos
+/// keeps `name` unique per `kind`, so a `patch` document of one of these names is that same
+/// document: it may add files to it, and nothing else - not a file the generator writes.
 const GENERATED: [(&str, &[&str]); 3] = [
     ("awg", &[AWG_CONFIG_PATH]),
     (

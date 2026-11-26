@@ -803,21 +803,15 @@ content: "table inet x {{}}"
     }
 
     #[test]
-    fn a_ruleset_goes_out_as_its_template_and_its_config_alone() {
+    fn the_nftables_document_carries_the_nodes_firewall_template_as_written() {
         let a = rendered("a");
         let document = generated_document(&a, "nftables").unwrap();
-        let paths: Vec<&str> = document["configFiles"]
+        let template = document["configFiles"]
             .as_sequence()
             .unwrap()
             .iter()
-            .map(|f| f["mountPath"].as_str().unwrap())
-            .collect();
-        assert_eq!(
-            paths,
-            [
-                nftables::template::TEMPLATE_PATH,
-                nftables::template::CONFIG_PATH
-            ]
-        );
+            .find(|f| f["mountPath"] == nftables::template::TEMPLATE_PATH)
+            .unwrap();
+        assert_eq!(template["content"], "table inet x {}");
     }
 }
