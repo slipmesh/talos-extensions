@@ -177,7 +177,7 @@ nodes:
         );
         assert_eq!(
             Service::Firewall.digest(),
-            "43214a29fd29d750a9b32e9470ef8930a8ccdc36f0bcf405bf0be31cbe59edbd"
+            "607885ca85efc720e05d0d4f61bb9e0f2c70ed23c93dbc9bb7ac977992d733a1"
         );
         assert_eq!(
             Service::Router.base(),

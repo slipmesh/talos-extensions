@@ -1,4 +1,4 @@
-{#- Removes the tables of the mark, old and current: the daemon deletes only the tables it declares. -#}
+{#- The daemon deletes only the tables it declares. -#}
 destroy table ip talos_mark
 destroy table inet talos_mark
 table inet talos_filter {
@@ -21,8 +21,7 @@ table ip talos_nat {
 {%- if classes.egress is defined and classes.egress.rules['uplink-replies'] is defined
       and classes.egress.rules['uplink-replies'].mark is not none %}
 {%- set mark = classes.egress.rules['uplink-replies'].mark %}
-{#- A reply to a connection that came in on the uplink leaves through it, by the rule of this mark.
-     The IPv4 uplink stands for both families: a node may have no IPv6 default route. #}
+{#- The IPv4 uplink for both families: a node may have no IPv6 default route. #}
 table inet talos_mark {
     chain prerouting {
         type filter hook prerouting priority mangle; policy accept;

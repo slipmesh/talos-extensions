@@ -111,7 +111,7 @@ impl Values {
         Ok(sliplib_yaml::read(path)?)
     }
 
-    /// As a template sees them: a mark as its value, its mask and the bits it keeps, written out.
+    /// As a template sees them, marks written out in hex.
     pub fn context(&self) -> ValuesContext<'_> {
         ValuesContext {
             classes: self
@@ -173,7 +173,7 @@ impl RuleContext {
 struct MarkContext {
     value: String,
     mask: String,
-    /// The bits outside the mask, which setting the mark leaves as they are.
+    /// The bits outside the mask.
     keep: String,
 }
 
