@@ -389,8 +389,9 @@ other as [several files](https://github.com/slipmesh/sliplib/blob/main/docs/slip
 are: one file, or the same network split into its architecture and its secrets, gives the same
 patch files. The format describes the whole mesh and everything else a node of `platform: talos`
 carries. It writes `patches/<node>.yaml` for every such node, each holding the node's Talos
-documents followed by the `awg`, `router` and `nftables` `ExtensionServiceConfig` documents it
-generates, which `talosctl apply-config -p` then ships to that node. A patch file is output only:
+documents followed by the `awg`, `router` and `nftables` `ExtensionServiceConfig` documents and the
+[routing rules](#routing-rules) it generates, which `talosctl apply-config -p` then ships to that
+node. A patch file is output only:
 nothing in it is read back, so edit `slipmesh.yaml` and regenerate rather than editing the patch.
 
 It only reads `slipmesh.yaml`. What writes into the file - its keys, its obfuscation,
@@ -517,6 +518,31 @@ specification lists:
 Talos keeps the annotations it sets in step with the config: a changed value is rewritten on the
 Node, and one no longer given is taken off it. A `patch` document may set annotations of its own,
 but none under `slipmesh.net/`.
+
+### Routing rules
+
+Each rule of a route class, `routing.classes.<name>.rules`, becomes a `RoutingRuleConfig` document
+on every `talos` node, after the generated `ExtensionServiceConfig` documents, in the order the
+classes and their rules are written:
+
+```yaml
+apiVersion: v1alpha1
+kind: RoutingRuleConfig
+name: '1000'
+fwMark: 1048576
+fwMask: 1048576
+table: main
+```
+
+`name` is the rule's `priority`. `table` is `main` for `lookup: main`, and otherwise the class's
+`table`, or `main` for a class without one. A rule with a `mark` gets `fwMark` and `fwMask` both,
+in decimal, and `fwMask` is `4294967295` where the mark has no mask: the kernel compares every bit
+then and reports that mask, and Talos would replace a document without `fwMask` on every pass. A
+rule names no `dst`, so Talos makes it for IPv4 and IPv6 both.
+
+A `patch` that is a `RoutingRuleConfig` named by a generated rule's priority is refused, naming
+that rule and its class: Talos takes one document per name, and the two would merge without a word.
+A `RoutingRuleConfig` of any other name goes to Talos as written.
 
 ### Secrets
 

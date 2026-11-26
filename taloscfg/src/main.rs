@@ -1,8 +1,9 @@
 //! `generate`: reads the files of `slipmesh.yaml`, computes every target node's `awg`/`router`
 //! config through `sliplib-mesh`, which checks each the way the daemon would, and writes
 //! `patches/<node>.yaml`: the `patch` documents aimed at that node, then the generated
-//! `ExtensionServiceConfig` documents. It only reads the files: what they lack is refused, with
-//! the command that writes it. A patch file is output only - nothing in it is read back.
+//! `ExtensionServiceConfig` documents and routing rules. It only reads the files: what they lack is
+//! refused, with the command that writes it. A patch file is output only - nothing in it is read
+//! back.
 //! `--check`/`--diff` both stop short of writing; `--diff` also prints what would change.
 //!
 //! `validate`/`diff`/`apply` are deliberately not separate subcommands: `generate`'s own
