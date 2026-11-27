@@ -1,7 +1,7 @@
 //! Handshake polling + kernel route management for "tracked" peers (config entries with an
 //! explicit `allowed_ips` - see `config::PeerEntry`), on any number of interfaces:
 //!
-//! - Routes are tagged with `common::ROUTE_PROTOCOL` on add/delete, and the in-memory
+//! - Routes are tagged with `common::ROUTE_PROTOCOL_ID` on add/delete, and the in-memory
 //!   "what did I already install" tracking is *seeded from the kernel's own routes carrying that
 //!   tag* at startup, not assumed empty - Talos restarts this whole process on every config
 //!   change, so a route installed by a previous run and left behind must still be recognized as
@@ -15,11 +15,11 @@
 //! signal, visible via `talosctl get routes` with no code here at all.
 
 use anyhow::Result;
-use common::ROUTE_PROTOCOL;
+use common::ROUTE_PROTOCOL_ID;
 use common::netlink::awg::AwgClient;
-use common::netlink::rt::RtClient;
 use netlink_packet_amneziawg::AmneziaWireguardAttribute;
 use sliplib_net::IpNet;
+use sliplib_net::route::{MAIN_TABLE, Route, RtClient};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -85,7 +85,7 @@ pub struct ReconcileSnapshot {
 }
 
 /// A peer counts as connected only when *every* one of its `allowed_ips` is installed - not when
-/// its handshake merely looks fresh. The two differ whenever `route_add` failed: that is logged
+/// its handshake merely looks fresh. The two differ whenever a route replace failed: that is logged
 /// and skipped, the loop carries on, and a verdict derived from the handshake alone would claim a
 /// route that isn't there.
 fn snapshot_from(
@@ -131,19 +131,31 @@ async fn reconcile_pass(
         let entry = installed.entry(iface.index).or_default();
         let plan = route_plan(iface, &peers, entry, now);
         for cidr in plan.add {
-            if let Err(e) = rt.route_add(iface.index, cidr, ROUTE_PROTOCOL).await {
+            if let Err(e) = rt.route_replace(&route(iface.index, cidr)).await {
                 tracing::warn!(iface = iface.name, %cidr, error = %e, "failed to install route");
                 continue;
             }
             entry.insert(cidr);
         }
         for cidr in plan.remove {
-            if let Err(e) = rt.route_del(iface.index, cidr, ROUTE_PROTOCOL).await {
+            if let Err(e) = rt.route_del(&route(iface.index, cidr)).await {
                 tracing::warn!(iface = iface.name, %cidr, error = %e, "failed to remove stale route");
                 continue;
             }
             entry.remove(&cidr);
         }
+    }
+}
+
+/// `cidr` on link `index`, tagged as ours, in the main table.
+fn route(index: u32, cidr: IpNet) -> Route {
+    Route {
+        destination: cidr,
+        table: MAIN_TABLE,
+        protocol: ROUTE_PROTOCOL_ID,
+        gateway: None,
+        oif: Some(index),
+        metric: None,
     }
 }
 
@@ -193,7 +205,7 @@ fn route_plan(
 /// Runs forever, at 1Hz. The first pass runs as part of the loop's first iteration - `tokio::time
 /// ::interval`'s first `tick()` completes immediately, not after a full period - so route state is
 /// actualized right away, not up to a second after startup. Seeds `installed` from the kernel's own
-/// `ROUTE_PROTOCOL`-tagged routes before that first pass, so a route left behind by a previous
+/// `ROUTE_PROTOCOL_ID`-tagged routes before that first pass, so a route left behind by a previous
 /// instance of this process is recognized as ours from the very first reconciliation, not just
 /// eventually.
 ///
@@ -209,9 +221,15 @@ pub async fn run(
 ) -> ! {
     let mut installed: HashMap<u32, HashSet<IpNet>> = HashMap::new();
     for iface in &tracked {
-        match rt.routes_by_protocol(iface.index, ROUTE_PROTOCOL).await {
+        match rt.routes(MAIN_TABLE, ROUTE_PROTOCOL_ID).await {
             Ok(routes) => {
-                installed.insert(iface.index, routes.into_iter().collect());
+                let on_iface = routes
+                    .into_iter()
+                    .filter(|route| route.oif == Some(iface.index));
+                installed.insert(
+                    iface.index,
+                    on_iface.map(|route| route.destination).collect(),
+                );
             }
             Err(e) => {
                 tracing::warn!(iface = iface.name, error = %e, "failed to read existing routes at startup - starting with an empty set for this interface");
@@ -316,7 +334,7 @@ mod tests {
         let both: &[&str] = &["203.0.113.1/32", "203.0.113.2/32"];
         for (allowed, installed, connected) in [
             (both, installed(4, both), true),
-            // What a failed `route_add` looks like: the pass logged it and carried on.
+            // What a failed route replace looks like: the pass logged it and carried on.
             (both, installed(4, &["203.0.113.1/32"]), false),
             (&["203.0.113.1/32"][..], HashMap::new(), false),
             // `all()` over nothing is true: a peer with nothing to install is not connected.

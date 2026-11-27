@@ -15,16 +15,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 common = { workspace = true, features = ["netlink"] }
-bytes.workspace = true
-http-body-util.workspace = true
-hyper.workspace = true
-hyper-util.workspace = true
 netlink-packet-amneziawg.workspace = true
 prometheus-client.workspace = true
 sliplib-config.workspace = true
-sliplib-net.workspace = true
+sliplib-net = { workspace = true, features = ["netlink"] }
 sliplib-secrets.workspace = true
-socket2.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tracing.workspace = true
-sliplib-runtime.workspace = true
+sliplib-runtime = { workspace = true, features = ["metrics"] }

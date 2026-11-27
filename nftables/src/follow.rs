@@ -38,9 +38,9 @@ where
 
 /// The uplinks of the node as they are now.
 #[cfg(feature = "runtime")]
-pub async fn lookup(rt: &common::netlink::rt::RtClient) -> Result<Uplinks> {
+pub async fn lookup(rt: &sliplib_net::route::RtClient) -> Result<Uplinks> {
     use crate::template::Uplink;
-    use common::netlink::rt::Family;
+    use sliplib_net::Family;
     let uplink = |(interface, addresses)| Uplink {
         interface,
         addresses,

@@ -27,7 +27,6 @@ tokio = { workspace = true, features = ["fs", "net", "rt-multi-thread", "macros"
 tracing.workspace = true
 
 [dev-dependencies]
-nix = { workspace = true, features = ["sched"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util", "time"] }
 
@@ -42,7 +41,3 @@ netlink = [
     "dep:netlink-packet-generic",
     "dep:rtnetlink",
 ]
-
-[[test]]
-name = "netns"
-required-features = ["netlink"]

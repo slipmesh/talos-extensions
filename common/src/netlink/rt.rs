@@ -1,19 +1,14 @@
-//! Thin wrapper around `rtnetlink` - the route/link/address netlink family (`NETLINK_ROUTE`,
-//! distinct from the "amneziawg" genl one in `awg.rs`). Replaces `ip` subprocess calls entirely.
-//! Routes carry a `RouteProtocol` tag, so a daemon's own routes are told apart from any other on
-//! the same interface (see `crate::ROUTE_PROTOCOL`).
+//! Thin wrapper around `rtnetlink` for links and addresses - the route/link/address netlink family
+//! (`NETLINK_ROUTE`, distinct from the "amneziawg" genl one in `awg.rs`). Routes are
+//! `sliplib_net::route`'s.
 
 use anyhow::{Context, Result};
 use futures::TryStreamExt;
 use rtnetlink::packet_route::address::AddressMessage;
 use rtnetlink::packet_route::link::InfoKind;
-use rtnetlink::packet_route::route::{RouteMessage, RouteProtocol};
-use rtnetlink::{
-    AddressMessageBuilder, Handle, LinkMessageBuilder, RouteMessageBuilder, new_connection,
-};
-pub use sliplib_config::v2::network::Family;
+use rtnetlink::{AddressMessageBuilder, Handle, LinkMessageBuilder, new_connection};
 use sliplib_net::IpNet;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -240,209 +235,6 @@ impl RtClient {
         }
         Ok(())
     }
-
-    /// Equivalent to `ip route replace <cidr> dev <index> proto <protocol>` - either address
-    /// family. `protocol` marks the route as ours - see `crate::ROUTE_PROTOCOL`.
-    pub async fn route_add(&self, index: u32, cidr: IpNet, protocol: RouteProtocol) -> Result<()> {
-        let _guard = self.netlink_lock.lock().await;
-        self.handle
-            .route()
-            .add(route_message(index, cidr, protocol)?)
-            .replace()
-            .execute()
-            .await
-            .with_context(|| format!("failed to add route {cidr} dev {index}"))
-    }
-
-    /// Equivalent to `ip route del <cidr> dev <index> proto <protocol>`. Deleting a missing route
-    /// is success (ESRCH). `protocol` scopes the delete to a route this daemon itself installed -
-    /// a route with the same destination but a different `proto` (BIRD, static, ...) is left
-    /// alone.
-    pub async fn route_del(&self, index: u32, cidr: IpNet, protocol: RouteProtocol) -> Result<()> {
-        let _guard = self.netlink_lock.lock().await;
-        match self
-            .handle
-            .route()
-            .del(route_message(index, cidr, protocol)?)
-            .execute()
-            .await
-        {
-            Ok(()) => Ok(()),
-            Err(rtnetlink::Error::NetlinkError(ref e)) if e.raw_code() == -3 => Ok(()), // ESRCH
-            Err(e) => Err(e).with_context(|| format!("failed to delete route {cidr} dev {index}")),
-        }
-    }
-
-    async fn routes_matching(
-        &self,
-        query: RouteMessage,
-        index: u32,
-        protocol: RouteProtocol,
-    ) -> Result<Vec<IpNet>> {
-        use rtnetlink::packet_route::route::RouteAttribute;
-        let mut routes = self.handle.route().get(query).execute();
-        let mut out = Vec::new();
-        while let Some(route) = routes.try_next().await.context("failed to list routes")? {
-            if route.header.protocol != protocol {
-                continue;
-            }
-            let oif = route.attributes.iter().find_map(|a| match a {
-                RouteAttribute::Oif(i) => Some(*i),
-                _ => None,
-            });
-            if oif != Some(index) {
-                continue;
-            }
-            let Some((addr, prefix)) = destination_of(&route) else {
-                continue;
-            };
-            out.extend(IpNet::new(addr, prefix).ok());
-        }
-        Ok(out)
-    }
-
-    /// Every route on `index` tagged with `protocol` (our own `ROUTE_PROTOCOL`, in practice) -
-    /// used at startup to seed route tracking from what's actually in the kernel, rather than
-    /// assuming nothing survived a previous instance of this process (see `handshake.rs`).
-    pub async fn routes_by_protocol(
-        &self,
-        index: u32,
-        protocol: RouteProtocol,
-    ) -> Result<Vec<IpNet>> {
-        let _guard = self.netlink_lock.lock().await;
-        let mut out = self
-            .routes_matching(
-                RouteMessageBuilder::<Ipv4Addr>::new().build(),
-                index,
-                protocol,
-            )
-            .await?;
-        out.extend(
-            self.routes_matching(
-                RouteMessageBuilder::<Ipv6Addr>::new().build(),
-                index,
-                protocol,
-            )
-            .await?,
-        );
-        Ok(out)
-    }
-
-    /// Name of the interface the `family` default route of the main table points at - equivalent
-    /// to `ip -4 route show default` or `ip -6 …`, then resolving the `dev` name. `Ok(None)` if that
-    /// family has none, a common case on a single-stack node. A dual-stack node's two default
-    /// routes need not share an interface.
-    pub async fn default_iface(&self, family: Family) -> Result<Option<String>> {
-        Ok(self.uplink(family).await?.map(|(name, _)| name))
-    }
-
-    /// The interface of the first `family` default route of the main table the kernel lists, with
-    /// its addresses of that family a packet can leave from, in the kernel's order.
-    pub async fn uplink(&self, family: Family) -> Result<Option<(String, Vec<IpAddr>)>> {
-        use rtnetlink::packet_route::AddressFamily;
-        use rtnetlink::packet_route::route::{RouteAttribute, RouteHeader};
-
-        let _guard = self.netlink_lock.lock().await;
-        let (query, address_family) = match family {
-            Family::Ipv4 => (
-                RouteMessageBuilder::<Ipv4Addr>::new().build(),
-                AddressFamily::Inet,
-            ),
-            Family::Ipv6 => (
-                RouteMessageBuilder::<Ipv6Addr>::new().build(),
-                AddressFamily::Inet6,
-            ),
-        };
-        let mut default_oif = None;
-        let mut stream = self.handle.route().get(query).execute();
-        while let Some(route) = stream.try_next().await.context("failed to list routes")? {
-            if route.header.destination_prefix_length != 0
-                || route.header.table != RouteHeader::RT_TABLE_MAIN
-            {
-                continue;
-            }
-            if let Some(oif) = route.attributes.iter().find_map(|a| match a {
-                RouteAttribute::Oif(index) => Some(*index),
-                _ => None,
-            }) {
-                default_oif = Some(oif);
-                break;
-            }
-        }
-        let Some(oif) = default_oif else {
-            return Ok(None);
-        };
-
-        let links = self.list_links_inner().await?;
-        let Some((name, _, _)) = links.into_iter().find(|(_, index, _)| *index == oif) else {
-            return Ok(None);
-        };
-        let mut addresses = Vec::new();
-        let mut stream = self
-            .handle
-            .address()
-            .get()
-            .set_link_index_filter(oif)
-            .execute();
-        while let Some(message) = stream
-            .try_next()
-            .await
-            .with_context(|| format!("failed to list addresses on link {name:?}"))?
-        {
-            if message.header.family == address_family {
-                addresses.extend(source_address(&message));
-            }
-        }
-        Ok(Some((name, addresses)))
-    }
-}
-
-/// A wake-up for every change to a link, or to a route or an address of either family, an overrun
-/// of the socket included. The messages are not read: whoever wakes looks up the state again.
-/// Links too, since the kernel drops the IPv4 routes of a link that goes down without a route
-/// event.
-pub fn link_route_and_address_changes() -> Result<impl futures::Stream<Item = ()> + Unpin> {
-    use futures::StreamExt;
-    use rtnetlink::MulticastGroup;
-    let (connection, _, messages) = rtnetlink::new_multicast_connection(&[
-        MulticastGroup::Link,
-        MulticastGroup::Ipv4Route,
-        MulticastGroup::Ipv6Route,
-        MulticastGroup::Ipv4Ifaddr,
-        MulticastGroup::Ipv6Ifaddr,
-    ])
-    .context("failed to subscribe to rtnetlink link, route and address changes")?;
-    tokio::spawn(connection);
-    Ok(messages.map(|_| ()))
-}
-
-/// The address `message` gives a packet to leave from: of scope universe, neither tentative nor
-/// failed in duplicate address detection. On a point-to-point link `IFA_ADDRESS` is the peer's.
-fn source_address(message: &AddressMessage) -> Option<IpAddr> {
-    use rtnetlink::packet_route::address::{AddressAttribute, AddressHeaderFlags, AddressScope};
-    let unusable = AddressHeaderFlags::Tentative | AddressHeaderFlags::Dadfailed;
-    if message.header.scope != AddressScope::Universe || message.header.flags.intersects(unusable) {
-        return None;
-    }
-    let local = message.attributes.iter().find_map(|a| match a {
-        AddressAttribute::Local(address) => Some(*address),
-        _ => None,
-    });
-    let address = message.attributes.iter().find_map(|a| match a {
-        AddressAttribute::Address(address) => Some(*address),
-        _ => None,
-    });
-    local.or(address)
-}
-
-/// `cidr` on `index`, tagged `protocol`: the route to add or to delete.
-fn route_message(index: u32, cidr: IpNet, protocol: RouteProtocol) -> Result<RouteMessage> {
-    Ok(RouteMessageBuilder::<IpAddr>::new()
-        .destination_prefix(cidr.addr(), cidr.prefix_len())
-        .with_context(|| format!("route {cidr}"))?
-        .output_interface(index)
-        .protocol(protocol)
-        .build())
 }
 
 /// `cidr` on `index`. rtnetlink builds an address message for one family at a time.
@@ -457,21 +249,6 @@ fn address_message(index: u32, cidr: IpNet) -> AddressMessage {
             .address(net.addr(), net.prefix_len())
             .build(),
     }
-}
-
-/// Extracts `(destination, prefix_len)` from a route message, either address family.
-fn destination_of(route: &RouteMessage) -> Option<(IpAddr, u8)> {
-    use rtnetlink::packet_route::route::RouteAttribute;
-    let prefix = route.header.destination_prefix_length;
-    route.attributes.iter().find_map(|a| match a {
-        RouteAttribute::Destination(rtnetlink::packet_route::route::RouteAddress::Inet(a)) => {
-            Some((IpAddr::V4(*a), prefix))
-        }
-        RouteAttribute::Destination(rtnetlink::packet_route::route::RouteAddress::Inet6(a)) => {
-            Some((IpAddr::V6(*a), prefix))
-        }
-        _ => None,
-    })
 }
 
 #[cfg(test)]
@@ -492,73 +269,15 @@ mod tests {
         removed.sort();
         assert_eq!(removed, vec![also_stale, stale]);
     }
-
-    fn address(text: &str) -> AddressMessage {
-        let cidr: IpNet = text.parse().unwrap();
-        address_message(7, cidr)
-    }
-
     #[test]
-    fn a_source_address_is_global_and_neither_tentative_nor_failed() {
-        use rtnetlink::packet_route::address::{AddressHeaderFlags, AddressScope};
-        let global = address("2001:db8::5/64");
-        assert_eq!(
-            source_address(&global),
-            Some("2001:db8::5".parse().unwrap())
-        );
-
-        let mut deprecated = global.clone();
-        deprecated.header.flags = AddressHeaderFlags::Deprecated;
-        assert_eq!(source_address(&deprecated), source_address(&global));
-
-        for flags in [AddressHeaderFlags::Tentative, AddressHeaderFlags::Dadfailed] {
-            let mut refused = global.clone();
-            refused.header.flags = flags | AddressHeaderFlags::Permanent;
-            assert_eq!(source_address(&refused), None, "{flags:?}");
-        }
-        for scope in [AddressScope::Link, AddressScope::Host, AddressScope::Site] {
-            let mut refused = global.clone();
-            refused.header.scope = scope;
-            assert_eq!(source_address(&refused), None, "{scope:?}");
-        }
-    }
-
-    #[test]
-    fn a_point_to_point_address_is_its_local_one_not_the_peers() {
-        use rtnetlink::packet_route::address::AddressAttribute;
-        let mut point_to_point = address("192.0.2.1/32");
-        point_to_point.attributes = vec![
-            AddressAttribute::Address("192.0.2.1".parse().unwrap()),
-            AddressAttribute::Local("192.0.2.5".parse().unwrap()),
-        ];
-        assert_eq!(
-            source_address(&point_to_point),
-            Some("192.0.2.5".parse().unwrap())
-        );
-    }
-
-    #[test]
-    fn a_route_and_an_address_message_carry_the_family_link_and_protocol_of_either_kind() {
+    fn an_address_message_carries_the_family_and_link_of_either_kind() {
         use rtnetlink::packet_route::AddressFamily;
         use rtnetlink::packet_route::address::AddressAttribute;
-        use rtnetlink::packet_route::route::{RouteAttribute, RouteHeader, RouteScope, RouteType};
         for (cidr, family) in [
             ("192.0.2.0/24", AddressFamily::Inet),
             ("2001:db8::/32", AddressFamily::Inet6),
         ] {
             let cidr: IpNet = cidr.parse().unwrap();
-            let route = route_message(7, cidr, crate::ROUTE_PROTOCOL).unwrap();
-            assert_eq!(route.header.address_family, family, "{cidr}");
-            assert_eq!(route.header.protocol, crate::ROUTE_PROTOCOL, "{cidr}");
-            assert_eq!(route.header.table, RouteHeader::RT_TABLE_MAIN, "{cidr}");
-            assert_eq!(route.header.scope, RouteScope::Universe, "{cidr}");
-            assert_eq!(route.header.kind, RouteType::Unicast, "{cidr}");
-            assert_eq!(
-                destination_of(&route),
-                Some((cidr.addr(), cidr.prefix_len()))
-            );
-            assert!(route.attributes.contains(&RouteAttribute::Oif(7)), "{cidr}");
-
             let address = address_message(7, cidr);
             assert_eq!(address.header.family, family, "{cidr}");
             assert_eq!(address.header.index, 7, "{cidr}");

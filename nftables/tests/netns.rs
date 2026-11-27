@@ -4,9 +4,9 @@
 #[path = "../../common/tests/support/netns.rs"]
 mod support;
 
-use common::netlink::rt::{self, RtClient};
 use nftables::follow::{follow, lookup};
 use nftables::template::{Uplink, Uplinks};
+use sliplib_net::route::{self as rt, RtClient};
 use std::time::Duration;
 use support::{ip, own_network_namespace};
 use tokio::sync::mpsc;
