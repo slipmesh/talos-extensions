@@ -119,7 +119,7 @@ mod tests {
     /// The reference ruleset from the `uplinks` set's elements to the forward chain.
     fn sets_and_forward(elements: &str) -> String {
         format!(
-            "table inet talos {{
+            "table inet slipmesh {{
     set uplinks {{
         type ifname{elements}
     }}
@@ -154,7 +154,7 @@ mod tests {
     fn the_reference_ruleset_has_one_table_and_names_an_interface_both_uplinks_share_once() {
         assert_eq!(
             reference(&uplinks(Some("eth0"), Some("eth0")), "{}"),
-            "table inet talos {
+            "table inet slipmesh {
     set uplinks {
         type ifname
         elements = { \"eth0\" }

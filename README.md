@@ -421,10 +421,11 @@ two things to it:
 No rule content is baked into this binary at all - MSS clamping, NAT, or anything else is just
 whatever the template says. [`nftables/templates/nftables.conf.j2`](nftables/templates/nftables.conf.j2)
 is the reference one. It reads `uplink`, `classes` and `vars`, and declares one table,
-`inet talos`, whose set `uplinks` holds the interfaces of both uplinks, each once, and nothing
+`inet slipmesh`, whose set `uplinks` holds the interfaces of both uplinks, each once, and nothing
 while there is none. The rules on an uplink match that set, so with none they match nothing.
 Private IPv4 sources are masqueraded out of an uplink, and the MSS clamp is on every forwarded
-connection.
+connection. A firewall template declares no table named `talos`, in any family: Talos owns that
+name and deletes every chain of such a table that is not its own.
 
 `vars.internal_ports` lists the ports that serve only the cluster and the mesh, which the reference
 ruleset rejects on the uplinks, TCP with a reset:

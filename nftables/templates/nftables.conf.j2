@@ -1,5 +1,5 @@
 {%- set names = [uplink.ipv4, uplink.ipv6] | select | map(attribute="interface") | unique | list -%}
-table inet talos {
+table inet slipmesh {
     set uplinks {
         type ifname
 {%- if names %}
