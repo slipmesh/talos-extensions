@@ -5,12 +5,12 @@
 //! Talos keeps the annotations it sets in step with the config: a changed value is rewritten, a
 //! value no longer given is taken off the Node.
 
+use sliplib_config::annotations::{ENDPOINT, INTERFACE_PREFIX_MESH, MESH_MTU, route_proto_id};
 use sliplib_config::v2::{ClassName, Map, network::Class};
-use sliplib_net::mtu::MESH_MTU_ANNOTATION;
 use sliplib_yaml::Mapping;
+use std::borrow::Borrow;
 
-/// The namespace of every annotation this generator sets.
-pub const NAMESPACE: &str = "slipmesh.net/";
+pub use sliplib_config::annotations::NAMESPACE;
 
 /// What a node publishes about the mesh.
 pub struct Values<'a> {
@@ -28,22 +28,19 @@ pub struct Values<'a> {
 /// The annotations of a node with `values`, by name, in the order of `values`.
 pub fn for_node(values: &Values) -> Mapping {
     let prefix = (
-        format!("{NAMESPACE}interface_prefix.mesh"),
+        INTERFACE_PREFIX_MESH.to_owned(),
         Some(values.interface_prefix.to_owned()),
     );
     let classes = values.classes.iter().map(|(name, class)| {
         (
-            format!("{NAMESPACE}route_proto_id.{name}"),
+            route_proto_id(name.borrow()),
             Some(class.protocol.to_string()),
         )
     });
     let rest = [
+        (ENDPOINT.to_owned(), values.endpoint.map(str::to_owned)),
         (
-            format!("{NAMESPACE}endpoint"),
-            values.endpoint.map(str::to_owned),
-        ),
-        (
-            MESH_MTU_ANNOTATION.to_owned(),
+            MESH_MTU.to_owned(),
             values.mesh_mtu.map(|mtu| mtu.to_string()),
         ),
     ];

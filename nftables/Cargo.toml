@@ -25,6 +25,7 @@ futures.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "io-util", "fs", "sync"] }
 tracing.workspace = true
+sliplib-net = { workspace = true, optional = true, features = ["netlink"] }
 sliplib-runtime.workspace = true
 
 [dev-dependencies]
@@ -36,4 +37,4 @@ tokio = { workspace = true, features = ["test-util"] }
 [features]
 default = ["runtime"]
 # The netlink-backed modules and the binary over them; `config` builds without any of it.
-runtime = ["common/netlink"]
+runtime = ["dep:sliplib-net"]

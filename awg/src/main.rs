@@ -84,7 +84,9 @@ async fn run() -> Result<()> {
         tracked_interfaces = tracked.len(),
         "startup converged, entering handshake/route tracking loop"
     );
-    handshake::run(rt, awg, tracked, verdict_tx).await;
+    let routes =
+        sliplib_net::route::RtClient::connect().context("failed to open rtnetlink socket")?;
+    handshake::run(routes, awg, tracked, verdict_tx).await;
 }
 
 /// Starts the metrics endpoint, if this node is configured for one. A task of its own with its own
@@ -146,7 +148,7 @@ async fn log_handshake_summary(awg: &mut AwgClient, cfg: &config::AwgConfig) {
 /// Every interface from `cfg` is included here, even ones with an empty `peers` map (no peer
 /// currently has an explicit `allowed_ips`) - `reconcile_pass`/`run` in `handshake.rs` treat "no
 /// entries stayed fresh this pass" and "there were never any tracked peers" identically, removing
-/// every previously-installed `ROUTE_PROTOCOL` route for the interface either way. Skipping an
+/// every previously-installed `ROUTE_PROTOCOL_ID` route for the interface either way. Skipping an
 /// empty-peers interface here used to drop it from `tracked` entirely, which meant a route
 /// installed while it *did* have a tracked peer was never seen again by either the startup route
 /// seeding or the reconcile loop - `gc.rs` only ever removes whole links, not individual routes -

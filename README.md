@@ -180,7 +180,7 @@ config gets deleted (`gc.rs`). This is safe *because* nothing else on a node is 
 create an `amneziawg`-kind interface - if that assumption is ever wrong, GC will delete it.
 
 Routes this daemon installs are tagged with a dedicated `RouteProtocol` value
-(`common::ROUTE_PROTOCOL`, see its doc comment) - the same mechanism BIRD/other routing daemons use
+(`common::ROUTE_PROTOCOL_ID`, see its doc comment) - the same mechanism BIRD/other routing daemons use
 to mark their own routes. This is what makes route bookkeeping correct across a restart (see below):
 only routes carrying that exact tag are ever treated as "ours".
 
@@ -220,7 +220,7 @@ from the config disappears on the next scrape and a peer the kernel still has bu
 longer names is not reported at all. `slipmesh_awg_peer_connected` is the routing loop's own
 verdict, published over a watch channel and emitted only while the snapshot behind it is fresh: it
 says a route is installed, which is not the same as "the handshake looks recent" whenever
-`route_add` failed. A peer's `Endpoint` is deliberately never read into a label - a roaming client
+a route replace failed. A peer's `Endpoint` is deliberately never read into a label - a roaming client
 changes address with its network, and each change would mint a new time series.
 
 The prefix is `slipmesh_awg_`, not `slipmesh_`: `ext-router` has peers of its own (BGP, OSPF) and
@@ -236,7 +236,7 @@ per Talos source (`internal/app/machined/pkg/controllers/runtime/extension_servi
 process, from scratch. Every startup step is written to be correct under that assumption:
 `ensure_link`/`ensure_addresses` are idempotent, peer sync reads the kernel's actual peer set
 (`interface::current_peers`) rather than assuming none exist, and route tracking seeds its
-"already installed" set from the kernel's own `ROUTE_PROTOCOL`-tagged routes (`handshake.rs`)
+"already installed" set from the kernel's own `ROUTE_PROTOCOL_ID`-tagged routes (`handshake.rs`)
 before doing anything else - not from an empty set, which would leak routes across a restart.
 
 `restart: always` in `extension-services/awg.yaml`: `awg` is a perpetual daemon (the route-tracking
@@ -378,7 +378,7 @@ two things to it:
 1. **Rendering** (`template.rs`, a minijinja template like `router`'s) with the values that can't
    be known when the ruleset is written - currently `defaultroute_interface_ipv4`/
    `defaultroute_interface_ipv6`, the interface of that family's default route in the main table,
-   resolved via `common::netlink::rt::RtClient::default_iface` - and with `classes` and `vars` from
+   resolved via `sliplib_net::route::RtClient::uplink` - and with `classes` and `vars` from
    `/etc/talos-extensions/firewall.yaml`, given as `router` gives them. Without that file both
    are empty; a file there that does not read stops the daemon. A template reading any other
    variable is refused before anything is applied. Only the variables the template actually

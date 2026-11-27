@@ -26,13 +26,13 @@ clap = { version = "4.6.9", features = ["derive"] }
 minijinja = { version = "3.1.0", default-features = false, features = ["builtins", "serde"] }
 base64 = "0.23.1"
 # Ours, from a release tag: sliplib is not published to crates.io.
-sliplib-config = { git = "https://github.com/slipmesh/sliplib", tag = "v0.27.0" }
-sliplib-fs = { git = "https://github.com/slipmesh/sliplib", tag = "v0.27.0" }
-sliplib-mesh = { git = "https://github.com/slipmesh/sliplib", tag = "v0.27.0" }
-sliplib-net = { git = "https://github.com/slipmesh/sliplib", tag = "v0.27.0" }
-sliplib-runtime = { git = "https://github.com/slipmesh/sliplib", tag = "v0.27.0" }
-sliplib-secrets = { git = "https://github.com/slipmesh/sliplib", tag = "v0.27.0" }
-sliplib-yaml = { git = "https://github.com/slipmesh/sliplib", tag = "v0.27.0" }
+sliplib-config = { git = "https://github.com/slipmesh/sliplib", tag = "v0.28.0" }
+sliplib-fs = { git = "https://github.com/slipmesh/sliplib", tag = "v0.28.0" }
+sliplib-mesh = { git = "https://github.com/slipmesh/sliplib", tag = "v0.28.0" }
+sliplib-net = { git = "https://github.com/slipmesh/sliplib", tag = "v0.28.0" }
+sliplib-runtime = { git = "https://github.com/slipmesh/sliplib", tag = "v0.28.0" }
+sliplib-secrets = { git = "https://github.com/slipmesh/sliplib", tag = "v0.28.0" }
+sliplib-yaml = { git = "https://github.com/slipmesh/sliplib", tag = "v0.28.0" }
 futures = "0.3.34"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -42,25 +42,12 @@ tempfile = "3.27.0"
 tokio = { version = "1.54.1" }
 tracing = "0.1.44"
 
-# The metrics endpoint's HTTP surface (`awg::metrics`). Not a new stack: `router`'s `reqwest`
-# already pulls hyper/hyper-util/http-body-util into this workspace, so this only turns on hyper's
-# `server` feature over crates that are already built and already audited here. One route, no TLS,
-# no routing - but request-line parsing, malformed input and half-close are not worth re-deriving.
-hyper = { version = "1.12.0", features = ["server", "http1"] }
-hyper-util = { version = "0.1.21", features = ["tokio"] }
-http-body-util = "0.1.5"
-# Hyper's own body type; already in the lock graph via the same reqwest dependency.
-bytes = "1.12.2"
 # Prometheus exposition. Used by building a fresh `Registry` per scrape rather than through the
 # `Collector` trait, whose `encode` is synchronous and so cannot host the async netlink dump the
 # values come from - a per-scrape registry also means a peer removed from the config is simply
 # never registered, with no state carried between scrapes. Brings escaping, HELP/TYPE, counter
 # `_total` handling and family grouping, which is precisely what a hand-written encoder gets wrong.
 prometheus-client = "0.26.0"
-# `IP_FREEBIND` has no tokio API (see `awg::metrics::bind`), so the listening socket is configured
-# through socket2 before `bind()`. Already in the lock graph at this version via tokio's own `net`
-# feature - a manifest line, not a new crate.
-socket2 = { version = "0.6.5", features = ["all"] }
 
 genetlink = "0.3.1"
 # Ours, from a release tag: the amneziawg kernel module speaks genl family version 3, which carries

@@ -4,7 +4,8 @@ use nftables::template::{
 use nftables::{follow, ruleset};
 
 use anyhow::{Context, Result};
-use common::netlink::rt::{self, Family, RtClient};
+use sliplib_net::Family;
+use sliplib_net::route::{self as rt, RtClient};
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::Path;
@@ -52,11 +53,11 @@ async fn run() -> Result<()> {
     // `defaultroute_interface_ipv6`, and vice versa.
     let mut interfaces: HashMap<&str, String> = HashMap::new();
     if referenced.contains(DEFAULT_ROUTE_IPV4) {
-        let iface = default_iface("IPv4", || rt.default_iface(Family::Ipv4)).await?;
+        let iface = default_iface("IPv4", || interface_of(&rt, Family::Ipv4)).await?;
         interfaces.insert(DEFAULT_ROUTE_IPV4, iface);
     }
     if referenced.contains(DEFAULT_ROUTE_IPV6) {
-        let iface = default_iface("IPv6", || rt.default_iface(Family::Ipv6)).await?;
+        let iface = default_iface("IPv6", || interface_of(&rt, Family::Ipv6)).await?;
         interfaces.insert(DEFAULT_ROUTE_IPV6, iface);
     }
 
@@ -86,6 +87,11 @@ async fn run() -> Result<()> {
 }
 
 /// The interface of the `family` default route, which `lookup` finds.
+/// The interface of `family`'s default route.
+async fn interface_of(rt: &RtClient, family: Family) -> Result<Option<String>> {
+    Ok(rt.uplink(family).await?.map(|(interface, _)| interface))
+}
+
 async fn default_iface<Fut>(family: &str, lookup: impl Fn() -> Fut) -> Result<String>
 where
     Fut: Future<Output = Result<Option<String>>>,

@@ -12,15 +12,7 @@
 
 use crate::handshake::{PeerStats, ReconcileSnapshot, dump_peers, now_unix};
 use anyhow::{Context, Result};
-use bytes::Bytes;
 use common::netlink::awg::AwgClient;
-use http_body_util::Full;
-use hyper::body::Incoming;
-use hyper::header::HeaderValue;
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Method, Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
 use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::encoding::text::encode;
 use prometheus_client::metrics::counter::Counter;
@@ -28,13 +20,12 @@ use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
 use prometheus_client::registry::Registry;
 use sliplib_config::awg::AwgConfig;
-use socket2::{Domain, Protocol, Socket, Type};
+use sliplib_runtime::metrics::{OPENMETRICS, Page, Rendering};
 use std::collections::{BTreeMap, HashMap};
-use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::TcpListener;
 use tokio::sync::{Mutex, watch};
 use tokio::time::timeout;
 
@@ -48,15 +39,8 @@ const SNAPSHOT_MAX_AGE_SECS: u64 = 5;
 /// completes would otherwise hold the only client this task has for the life of the process.
 const DUMP_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Ceiling on a single connection, so a client that opens a socket and then says nothing cannot
-/// hold a scrape slot indefinitely.
-const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// What `prometheus-client`'s text encoder actually emits. Prometheus chooses its parser from this
-/// header, so it must say OpenMetrics rather than the older text format.
-const CONTENT_TYPE: HeaderValue =
-    HeaderValue::from_static("application/openmetrics-text; version=1.0.0; charset=utf-8");
-const TEXT: HeaderValue = HeaderValue::from_static("text/plain; charset=utf-8");
+/// Scrapes served at once; past it a client waits in the listen backlog.
+const CONNECTIONS: NonZeroUsize = NonZeroUsize::new(4).unwrap();
 
 /// One interface's dump, or `None` when reading it failed this scrape.
 pub type Dumps = BTreeMap<String, Option<HashMap<String, PeerStats>>>;
@@ -168,7 +152,7 @@ pub fn render(
                 .inc();
 
             // The verdict is the loop's, not a re-derivation from the handshake: it says a route
-            // is installed, which a failed `route_add` makes false while the handshake still looks
+            // is installed, which a failed route replace makes false while the handshake still looks
             // fresh. Its absence for a mesh peer is meaningful - nothing tracks those - so no
             // series is emitted rather than a zero.
             if kind == "roadwarrior" && verdict_is_fresh {
@@ -235,32 +219,6 @@ pub fn render(
     Ok(out)
 }
 
-/// Binds the listening socket, tolerating an address that does not exist yet.
-///
-/// The mesh loopback belongs to a *different* extension - `ext-router` creates `router-lo` and puts
-/// `node.loopback_addresses` on it - and Talos does not order extension startup, so this often
-/// reaches `bind()` first and would get `EADDRNOTAVAIL`. `IP_FREEBIND` permits binding an address
-/// that is not present, and the listener starts answering once it appears; until then Prometheus
-/// reports `up=0` for the node, which is the correct reading rather than a fault to paper over.
-/// It requires no capability, and has no tokio API, which is why the socket is built through
-/// socket2 first.
-fn bind(listen: SocketAddr) -> Result<TcpListener> {
-    let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))
-        .context("failed to create the metrics socket")?;
-    socket
-        .set_freebind_v4(true)
-        .context("failed to set IP_FREEBIND on the metrics socket")?;
-    socket
-        .set_reuse_address(true)
-        .context("failed to set SO_REUSEADDR on the metrics socket")?;
-    socket.set_nonblocking(true)?;
-    socket
-        .bind(&listen.into())
-        .with_context(|| format!("failed to bind the metrics socket to {listen}"))?;
-    socket.listen(128).context("failed to listen")?;
-    TcpListener::from_std(socket.into()).context("failed to hand the metrics socket to tokio")
-}
-
 /// Dumps every configured interface for one scrape.
 ///
 /// Holds the task's own `AwgClient` - `get_device` takes `&mut self`, so scrapes serialize on it,
@@ -318,97 +276,44 @@ async fn collect(client: &Mutex<Option<AwgClient>>, cfg: &AwgConfig) -> Dumps {
     dumps
 }
 
-fn respond(status: StatusCode, content_type: HeaderValue, body: String) -> Response<Full<Bytes>> {
-    let mut response = Response::new(Full::new(Bytes::from(body)));
-    *response.status_mut() = status;
-    response
-        .headers_mut()
-        .insert(hyper::header::CONTENT_TYPE, content_type);
-    response
-}
-
 /// Serves `GET /metrics` until the process ends.
 ///
 /// Errors from here never reach the routing loop's error handling, and the loop keeps reconciling
 /// if this task dies outright - the scrape failing is then the signal, which is the whole point of
 /// serving rather than writing a file.
+///
+/// The mesh loopback belongs to `ext-router`, which Talos may start after this one: the listener
+/// binds before the address exists and answers once it appears, Prometheus reading `up=0` until
+/// then.
 pub async fn run(
     listen: SocketAddr,
     cfg: Arc<AwgConfig>,
     verdict: watch::Receiver<ReconcileSnapshot>,
 ) -> Result<()> {
-    let listener = bind(listen)?;
+    let listener = sliplib_runtime::metrics::bind(listen)
+        .with_context(|| format!("failed to bind the metrics socket to {listen}"))?;
     tracing::info!(%listen, "metrics endpoint listening");
-    serve(listener, cfg, verdict).await
-}
-
-/// The accept loop, split from `run` so it can be driven over an already-bound listener - which is
-/// what keeps the HTTP surface testable with no kernel in the room.
-async fn serve(
-    listener: TcpListener,
-    cfg: Arc<AwgConfig>,
-    verdict: watch::Receiver<ReconcileSnapshot>,
-) -> Result<()> {
     // Connected lazily, in `collect`: at startup this would race `ext-router` for nothing, and a
     // client that has to be rebuilt after a timeout needs the same path anyway.
     let client: Arc<Mutex<Option<AwgClient>>> = Arc::new(Mutex::new(None));
-
-    loop {
-        let (stream, _peer) = match listener.accept().await {
-            Ok(accepted) => accepted,
-            Err(e) => {
-                // A single failed accept says nothing about the next one; tearing the listener
-                // down here would take `up` to 0 for a node whose routing is perfectly healthy.
-                tracing::warn!(error = %e, "metrics: accept failed");
-                continue;
-            }
-        };
-
-        let cfg = Arc::clone(&cfg);
-        let client = Arc::clone(&client);
-        let verdict = verdict.clone();
-        tokio::spawn(async move {
-            let service = service_fn(move |req: Request<Incoming>| {
-                let cfg = Arc::clone(&cfg);
-                let client = Arc::clone(&client);
-                let verdict = verdict.clone();
-                async move {
-                    if req.method() != Method::GET || req.uri().path() != "/metrics" {
-                        // Answered without touching the kernel: nothing else here is a route, and
-                        // a wrong path must not cost a netlink round trip.
-                        return Ok::<_, Infallible>(respond(
-                            StatusCode::NOT_FOUND,
-                            TEXT,
-                            "not found\n".to_owned(),
-                        ));
-                    }
-                    let dumps = collect(&client, &cfg).await;
-                    let snapshot = verdict.borrow().clone();
-                    Ok(match render(&cfg, &dumps, &snapshot, now_unix()) {
-                        Ok(body) => respond(StatusCode::OK, CONTENT_TYPE, body),
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %format_args!("{e:#}"),
-                                "metrics: encoding failed"
-                            );
-                            respond(StatusCode::INTERNAL_SERVER_ERROR, TEXT, String::new())
-                        }
-                    })
-                }
-            });
-
-            let served = timeout(
-                CONNECTION_TIMEOUT,
-                http1::Builder::new().serve_connection(TokioIo::new(stream), service),
-            )
-            .await;
-            match served {
-                Ok(Err(e)) => tracing::debug!(error = %e, "metrics: connection ended in error"),
-                Err(_) => tracing::debug!("metrics: connection timed out"),
-                Ok(Ok(())) => {}
-            }
+    sliplib_runtime::metrics::serve(listener, CONNECTIONS, move |path| {
+        if path != "/metrics" {
+            return None;
+        }
+        let (cfg, client, verdict) = (Arc::clone(&cfg), Arc::clone(&client), verdict.clone());
+        let page: Rendering<anyhow::Error> = Box::pin(async move {
+            let dumps = collect(&client, &cfg).await;
+            let snapshot = verdict.borrow().clone();
+            let body = render(&cfg, &dumps, &snapshot, now_unix())?;
+            Ok(Page {
+                content_type: OPENMETRICS,
+                body,
+            })
         });
-    }
+        Some(page)
+    })
+    .await;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -662,59 +567,5 @@ mod tests {
             );
             assert!(fresh || freshness.is_empty(), "{out}");
         }
-    }
-
-    /// One real request over a real socket, so the HTTP surface is exercised rather than assumed.
-    /// A config with no interfaces never reaches netlink - `collect` iterates nothing - which is
-    /// what makes this runnable anywhere.
-    async fn request(path: &str) -> String {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let cfg = Arc::new(AwgConfig { interfaces: vec![] });
-        let (_tx, rx) = watch::channel(ReconcileSnapshot::default());
-        tokio::spawn(serve(listener, cfg, rx));
-
-        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        stream
-            .write_all(
-                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-                    .as_bytes(),
-            )
-            .await
-            .unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).await.unwrap();
-        response
-    }
-
-    #[tokio::test]
-    async fn a_scrape_is_answered_as_openmetrics() {
-        let response = request("/metrics").await;
-        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
-        assert!(
-            response.contains("content-type: application/openmetrics-text; version=1.0.0"),
-            "{response}"
-        );
-        assert!(response.contains("slipmesh_build_info"), "{response}");
-        assert!(response.trim_end().ends_with("# EOF"), "{response}");
-    }
-
-    #[tokio::test]
-    async fn anything_that_is_not_the_metrics_path_is_a_404() {
-        let response = request("/").await;
-        assert!(response.starts_with("HTTP/1.1 404 Not Found"), "{response}");
-        assert!(!response.contains("slipmesh_"), "{response}");
-    }
-
-    #[tokio::test]
-    async fn binds_an_address_that_does_not_exist_on_any_interface() {
-        // The whole reason the socket is built through socket2: ext-router has not created
-        // router-lo yet, so this address is on no interface, and a plain bind would get
-        // EADDRNOTAVAIL. Port 0 keeps the test from colliding with anything real.
-        let listen: SocketAddr = "198.51.100.126:0".parse().unwrap();
-        let listener = bind(listen).expect("IP_FREEBIND should permit binding an absent address");
-        assert_eq!(listener.local_addr().unwrap().ip(), listen.ip());
     }
 }

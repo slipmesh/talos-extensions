@@ -97,18 +97,13 @@ name = "awg"
 version = "1.15.0-beta.0+sm.7"
 dependencies = [
  "anyhow",
- "bytes",
  "common",
- "http-body-util",
- "hyper",
- "hyper-util",
  "netlink-packet-amneziawg",
  "prometheus-client",
  "sliplib-config",
  "sliplib-net",
  "sliplib-runtime",
  "sliplib-secrets",
- "socket2",
  "tokio",
  "tracing",
 ]
@@ -316,7 +311,6 @@ dependencies = [
  "netlink-packet-amneziawg",
  "netlink-packet-core",
  "netlink-packet-generic",
- "nix 0.32.0",
  "rtnetlink",
  "serde",
  "sliplib-config",
@@ -675,9 +669,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.12.0"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c3e324da4c95177d6291d4c8730197c0d1822f8a9766814a4a44fa5ab797c9c"
+checksum = "229c6ff5584df4c6becbfe00567128bac768c8cd32ebc8a8366bd81ed072e8f3"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -1132,6 +1126,7 @@ dependencies = [
  "futures",
  "nix 0.32.0",
  "serde",
+ "sliplib-net",
  "sliplib-runtime",
  "sliplib-yaml",
  "tempfile",
@@ -1777,8 +1772,8 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "sliplib-config"
-version = "0.27.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.27.0#4628b2ba3e9bf99043166353205996a95a9db799"
+version = "0.28.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.28.0#d4297695cd438b78c7f20b2477607229f3f10470"
 dependencies = [
  "indexmap",
  "serde",
@@ -1790,8 +1785,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-fs"
-version = "0.27.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.27.0#4628b2ba3e9bf99043166353205996a95a9db799"
+version = "0.28.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.28.0#d4297695cd438b78c7f20b2477607229f3f10470"
 dependencies = [
  "atomic-write-file",
  "thiserror",
@@ -1799,8 +1794,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-mesh"
-version = "0.27.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.27.0#4628b2ba3e9bf99043166353205996a95a9db799"
+version = "0.28.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.28.0#d4297695cd438b78c7f20b2477607229f3f10470"
 dependencies = [
  "sliplib-config",
  "sliplib-net",
@@ -1810,27 +1805,39 @@ dependencies = [
 
 [[package]]
 name = "sliplib-net"
-version = "0.27.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.27.0#4628b2ba3e9bf99043166353205996a95a9db799"
+version = "0.28.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.28.0#d4297695cd438b78c7f20b2477607229f3f10470"
 dependencies = [
+ "futures",
  "ipnet",
+ "rtnetlink",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
 name = "sliplib-runtime"
-version = "0.27.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.27.0#4628b2ba3e9bf99043166353205996a95a9db799"
+version = "0.28.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.28.0#d4297695cd438b78c7f20b2477607229f3f10470"
 dependencies = [
  "anyhow",
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "prometheus-client",
+ "socket2",
+ "tokio",
  "tokio-graceful-shutdown",
  "tokio-util",
+ "tracing",
  "tracing-subscriber",
 ]
 
 [[package]]
 name = "sliplib-secrets"
-version = "0.27.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.27.0#4628b2ba3e9bf99043166353205996a95a9db799"
+version = "0.28.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.28.0#d4297695cd438b78c7f20b2477607229f3f10470"
 dependencies = [
  "base64",
  "curve25519-dalek",
@@ -1841,8 +1848,8 @@ dependencies = [
 
 [[package]]
 name = "sliplib-yaml"
-version = "0.27.0"
-source = "git+https://github.com/slipmesh/sliplib?tag=v0.27.0#4628b2ba3e9bf99043166353205996a95a9db799"
+version = "0.28.0"
+source = "git+https://github.com/slipmesh/sliplib?tag=v0.28.0#d4297695cd438b78c7f20b2477607229f3f10470"
 dependencies = [
  "serde",
  "serde_path_to_error",
