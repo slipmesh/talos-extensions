@@ -106,6 +106,11 @@ struct FwMark {
     fw_mask: u32,
 }
 
+/// A routing table as Talos and the annotations write it: its number, `main` for none.
+pub fn table_name(table: Option<u8>) -> String {
+    table.map_or_else(|| "main".to_owned(), |table| table.to_string())
+}
+
 /// Every rule of the route classes of `network`, in the order written, with its class.
 pub fn rules(network: &Network) -> impl Iterator<Item = (&ClassName, &Class, &Name, &Rule)> {
     network
@@ -134,7 +139,7 @@ impl RoutingRuleConfig {
                 fw_mark: mark.value.get(),
                 fw_mask: mark.mask.get(),
             }),
-            table: table.map_or_else(|| "main".to_owned(), |table| table.to_string()),
+            table: table_name(table),
         }
     }
 }
