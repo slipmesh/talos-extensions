@@ -583,6 +583,7 @@ specification lists:
 | --- | --- | --- |
 | `mesh.interface_prefix` | `slipmesh.net/interface_prefix.mesh` | what every mesh interface's name starts with |
 | `routing.classes.<name>.protocol` | `slipmesh.net/route_proto_id.<name>` | one for each route class |
+| `routing.classes.<name>.table` | `slipmesh.net/route_table.<name>` | one for each route class; `main` without a `table` |
 | the node's `endpoint` | `slipmesh.net/endpoint` | as written; none for a node without one |
 | the mesh MTU | `slipmesh.net/mesh_mtu` | see [Mesh MTU](#mesh-mtu); none without links |
 

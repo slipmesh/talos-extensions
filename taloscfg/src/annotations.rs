@@ -5,7 +5,10 @@
 //! Talos keeps the annotations it sets in step with the config: a changed value is rewritten, a
 //! value no longer given is taken off the Node.
 
-use sliplib_config::annotations::{ENDPOINT, INTERFACE_PREFIX_MESH, MESH_MTU, route_proto_id};
+use crate::talos::table_name;
+use sliplib_config::annotations::{
+    ENDPOINT, INTERFACE_PREFIX_MESH, MESH_MTU, route_proto_id, route_table,
+};
 use sliplib_config::v2::{ClassName, Map, network::Class};
 use sliplib_yaml::Mapping;
 use std::borrow::Borrow;
@@ -16,7 +19,7 @@ pub use sliplib_config::annotations::NAMESPACE;
 pub struct Values<'a> {
     /// What the name of every interface of a link starts with.
     pub interface_prefix: &'a str,
-    /// Each route class by its name, with its protocol number, in the order written.
+    /// Each route class by its name, with its protocol number and table, in the order written.
     pub classes: &'a Map<ClassName, Class>,
     /// The node's endpoint as the files give it: an address or a name.
     pub endpoint: Option<&'a str>,
@@ -31,11 +34,14 @@ pub fn for_node(values: &Values) -> Mapping {
         INTERFACE_PREFIX_MESH.to_owned(),
         Some(values.interface_prefix.to_owned()),
     );
-    let classes = values.classes.iter().map(|(name, class)| {
-        (
-            route_proto_id(name.borrow()),
-            Some(class.protocol.to_string()),
-        )
+    let classes = values.classes.iter().flat_map(|(name, class)| {
+        [
+            (
+                route_proto_id(name.borrow()),
+                Some(class.protocol.to_string()),
+            ),
+            (route_table(name.borrow()), Some(table_name(class.table))),
+        ]
     });
     let rest = [
         (ENDPOINT.to_owned(), values.endpoint.map(str::to_owned)),
@@ -65,8 +71,10 @@ mod tests {
     #[test]
     fn a_node_publishes_each_value_it_has_under_the_namespace_in_order() {
         // Neither sorted by name nor by number: the order they are given in.
-        let classes =
-            sliplib_yaml::from_str("{transit: {protocol: 153}, egress: {protocol: 152}}").unwrap();
+        let classes = sliplib_yaml::from_str(
+            "{transit: {protocol: 153}, egress: {protocol: 152, table: 152}}",
+        )
+        .unwrap();
         let none = Map::new();
         for (values, published) in [
             (
@@ -79,7 +87,9 @@ mod tests {
                 vec![
                     ("slipmesh.net/interface_prefix.mesh", "wg-"),
                     ("slipmesh.net/route_proto_id.transit", "153"),
+                    ("slipmesh.net/route_table.transit", "main"),
                     ("slipmesh.net/route_proto_id.egress", "152"),
+                    ("slipmesh.net/route_table.egress", "152"),
                     ("slipmesh.net/endpoint", "node-a.example.com"),
                     ("slipmesh.net/mesh_mtu", "1420"),
                 ],
