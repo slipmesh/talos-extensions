@@ -1951,7 +1951,6 @@ dependencies = [
  "sliplib-config",
  "sliplib-fs",
  "sliplib-mesh",
- "sliplib-net",
  "sliplib-secrets",
  "sliplib-yaml",
  "tempfile",

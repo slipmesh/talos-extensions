@@ -86,12 +86,12 @@ async fn run() -> Result<()> {
     }
 }
 
-/// The interface of the `family` default route, which `lookup` finds.
 /// The interface of `family`'s default route.
 async fn interface_of(rt: &RtClient, family: Family) -> Result<Option<String>> {
     Ok(rt.uplink(family).await?.map(|(interface, _)| interface))
 }
 
+/// The interface of the `family` default route, which `lookup` finds.
 async fn default_iface<Fut>(family: &str, lookup: impl Fn() -> Fut) -> Result<String>
 where
     Fut: Future<Output = Result<Option<String>>>,

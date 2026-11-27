@@ -25,7 +25,6 @@ serde.workspace = true
 sliplib-config.workspace = true
 sliplib-fs.workspace = true
 sliplib-mesh.workspace = true
-sliplib-net.workspace = true
 sliplib-yaml.workspace = true
 sha2 = "0.11.1"
 similar = "3.2.1"
