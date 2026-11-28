@@ -1,7 +1,8 @@
 {#- bird_exporter reads a protocol's "Since" field to compute uptime; it only parses this
      format, not BIRD's default. -#}
 timeformat protocol iso long;
-log stderr { info, remote, warning, error, auth, fatal, bug };
+{#- `trace` carries what `birdc debug` turns on at runtime; it is silent until then. #}
+log stderr { info, remote, warning, error, auth, trace, fatal, bug };
 router id {{ loopback }};
 {%- set egress_table = classes.egress.table if classes.egress is defined else none %}
 {%- set egress_community = "(" ~ as_number ~ ", " ~ egress_table ~ ", 0)" %}
